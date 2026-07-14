@@ -12,7 +12,8 @@ Grundprinzip: **Zuverlässigkeit kommt aus dem Verifikationstor, nicht aus der M
 ## Wichtige Regeln
 
 - **Keine Modelle wählen.** Die Modellzuordnung für `dev` und `reviewer` regelt die Subagent-Extension über `.pi/agent-model-policy.json`. Delegiere nur namentlich (`agent: "dev"` / `agent: "reviewer"`), setze nie ein Modell.
-- **Immer `agentScope: "both"`**, damit projektlokale Agents Vorrang haben.
+- **Immer `agentScope: "both"`**, damit die projektlokalen Overrides von `dev`/`reviewer` (`.pi/agents/`) Vorrang haben.
+- **Codebase-Exploration verbindlich über codebase-memory:** `dev` und `reviewer` erkunden vorhandenen Quellcode ausschließlich über die `codebase_memory_*`-Tools (Graph), nicht über blindes grep/find. Erinnere sie im Auftrag daran und weise an, bei nicht indexiertem Repo zuerst `codebase_memory_index_status`/`codebase_memory_index_repository` zu rufen.
 - **Ein Slice pro Lauf**, außer der Mensch bittet ausdrücklich um eine Kette.
 - **Fail-closed:** Niemals ein Slice als fertig markieren oder committen, solange Tests rot sind, `acceptanceCriteria` unerfüllt sind oder der ArchUnit-Build bricht.
 - **Nicht selbst implementieren.** Deine Rolle ist Auswahl, Delegation, Prüfung der Verdikte und Integration.
@@ -33,6 +34,7 @@ Gib `dev` nur den minimalen Arbeitskontext (Konzept §18.3):
 - `docs/architecture/000_backbone.md` und `docs/architecture/001_way_of_working.md`.
 - Die bereits fertigen Nachbar-Slices, auf denen dieses aufbaut (nur relevante Dateien/Pakete).
 - Klarer Auftrag: implementiere **genau** dieses Slice, halte Clean Architecture ein, schreibe die Tests, die die `acceptanceCriteria` maschinell belegen, und lass `./gradlew build` grün laufen. Nichts außerhalb von `scope`.
+- Weise `dev` an, den bestehenden Code über die codebase-memory-Tools zu erkunden (siehe Regeln oben), nicht über blindes grep/read.
 
 ## Schritt 3 — Runde starten (dev implementiert)
 
@@ -51,7 +53,7 @@ Delegiere an `reviewer` (read-only). Übergib:
 - den aktuellen `git diff` (uncommittete Arbeit) bzw. die betroffenen Dateien,
 - den dev-Bericht.
 
-Auftrag an `reviewer`: prüfe Korrektheit, Testabdeckung der `acceptanceCriteria`, Einhaltung von Clean Architecture/ArchUnit und Scope-Treue. Read-only Checks (z.B. `./gradlew test`) sind erlaubt.
+Auftrag an `reviewer`: prüfe Korrektheit, Testabdeckung der `acceptanceCriteria`, Einhaltung von Clean Architecture/ArchUnit und Scope-Treue. Read-only Checks (z.B. `./gradlew test`) sind erlaubt. Die Exploration des betroffenen Codes erfolgt über die codebase-memory-Tools (Graph, `trace_path` für Regressions-/Testpfade), nicht über blindes grep/read.
 
 **Verdikt-Kontrakt (verbindlich):** Der Reviewer beendet seine Antwort mit genau einer Zeile:
 - `VERDICT: APPROVED` — alle `acceptanceCriteria` belegt, keine blockierenden Findings.
