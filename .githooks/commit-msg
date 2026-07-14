@@ -1,0 +1,18 @@
+#!/bin/sh
+# Enforces Conventional Commits: https://www.conventionalcommits.org/en/v1.0.0/
+MSG=$(cat "$1")
+
+PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+'
+
+if ! echo "$MSG" | grep -qE "$PATTERN"; then
+  echo "ERROR: commit message does not follow Conventional Commits."
+  echo ""
+  echo "  Expected: <type>[optional scope]: <description>"
+  echo "  Example:  feat(auth): add login endpoint"
+  echo ""
+  echo "  Types: feat fix docs style refactor perf test build ci chore revert"
+  echo ""
+  echo "  Your message:"
+  echo "$MSG" | sed 's/^/  /'
+  exit 1
+fi
