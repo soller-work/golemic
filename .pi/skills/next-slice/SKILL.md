@@ -20,11 +20,22 @@ Grundprinzip: **Zuverlässigkeit kommt aus dem Verifikationstor, nicht aus der M
 
 ## Schritt 1 — Nächstes Slice auswählen
 
-1. Bestimme den aktiven Epic: das niedrigst-nummerierte Verzeichnis unter `docs/backlog/NNN_*` mit noch offenen Issues.
-2. Lies dessen `epic.json` und alle referenzierten `issues/*.json`.
-3. Wähle das Issue mit dem kleinsten `order`, dessen `status` **nicht** `done` ist und dessen sämtliche `dependencies` bereits `status: done` haben.
-4. Gibt es kein solches Issue: melde, dass der Epic fertig ist (oder durch offene Abhängigkeiten blockiert), und stoppe.
-5. Nenne dem Menschen kurz, welches Slice du jetzt baust (id + title).
+**Nutze immer das Script**, um das nächste Issue zu bestimmen — nicht manuell:
+
+```bash
+# Kurzübersicht (epic, issue-id, title, progress)
+python3 .pi/scripts/next-issue
+
+# Vollständiges Issue-JSON für dev/reviewer
+python3 .pi/scripts/next-issue --json
+```
+
+Das Script findet automatisch den niedrigst-nummerierten Epic mit offenen Issues, wählt das Issue mit kleinstem `order`, dessen alle `dependencies` `status: done` haben, und gibt es aus.
+
+- Exit 0 + Ausgabe → Issue gefunden, weitermachen.
+- Exit 1 + Fehlermeldung → Epic fertig oder alle Issues durch Abhängigkeiten blockiert → melde dem Menschen und stoppe.
+
+Nenne dem Menschen kurz das gewählte Slice (id + title), bevor du weitergehst.
 
 ## Schritt 2 — Kontext für dev schnüren
 

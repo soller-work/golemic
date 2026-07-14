@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""
+next-issue — selects the next actionable backlog issue.
+
+Usage:
+  next-issue [--backlog-dir <path>] [--json]
+
+Options:
+  --backlog-dir <path>   Path to backlog directory (default: docs/backlog, relative to repo root)
+  --json                 Output full issue JSON instead of summary
+  --help                 Show this help
+
+Exit codes:
+  0  Issue found and printed
+  1  No actionable issue found (all done or blocked by dependencies)
+  2  Usage / path error
+"""
+
+import json
+import sys
+import os
+from pathlib import Path
+
+
+def find_repo_root():
+    p = Path(__file__).resolve()
+    while p != p.parent:
+        if (p / ".git").exists():
+            return p
+        p = p.parent
+    return Path.cwd()
+
+
+def load_issue(path: Path) -> dict:
+    with open(path) as f:
+        return json.load(f)
+
+
+def main():
+    args = sys.argv[1:]
+    output_json = "--json" in args
+    if "--help" in args:
+        print(__doc__)
+        sys.exit(0)
+
+    backlog_dir = None
+    for i, a in enumerate(args):
+        if a == "--backlog-dir" and i + 1 < len(args):
+            backlog_dir = Path(args[i + 1])
+
+    if backlog_dir is None:
+        backlog_dir = find_repo_root() / "docs" / "backlog"
+
+    if not backlog_dir.exists():
+        print(f"ERROR: backlog directory not found: {backlog_dir}", file=sys.stderr)
+        sys.exit(2)
+
+    # Find lowest-numbered epic with open issues
+    epic_dirs = sorted(
+        [d for d in backlog_dir.iterdir() if d.is_dir() and d.name[0].isdigit()],
+        key=lambda d: d.name,
+    )
+
+    if not epic_dirs:
+        print("No epic directories found.", file=sys.stderr)
+        sys.exit(1)
+
+    for epic_dir in epic_dirs:
+        issues_dir = epic_dir / "issues"
+        if not issues_dir.exists():
+            continue
+
+        issue_files = sorted(issues_dir.glob("*.json"), key=lambda f: f.name)
+        issues = [load_issue(f) for f in issue_files]
+
+        # Build status lookup
+        done_ids = {i["id"] for i in issues if i.get("status") == "done"}
+        open_issues = [i for i in issues if i.get("status") != "done"]
+
+        if not open_issues:
+            continue  # Epic done, try next
+
+        # Find candidate: lowest order, all dependencies done
+        candidates = [
+            i for i in open_issues
+            if all(dep in done_ids for dep in i.get("dependencies", []))
+        ]
+
+        if not candidates:
+            # Open issues exist but all are blocked
+            blocked = [i["id"] for i in open_issues]
+            print(
+                f"Epic {epic_dir.name}: all open issues are blocked by unresolved dependencies.\n"
+                f"Blocked: {', '.join(blocked)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        # Pick lowest order
+        next_issue = min(candidates, key=lambda i: i.get("order", 9999))
+
+        if output_json:
+            print(json.dumps(next_issue, indent=2, ensure_ascii=False))
+        else:
+            epic_id = epic_dir.name
+            issue_id = next_issue["id"]
+            title = next_issue.get("title", "(no title)")
+            status = next_issue.get("status", "?")
+            order = next_issue.get("order", "?")
+            deps = next_issue.get("dependencies", [])
+            done_count = sum(1 for i in issues if i.get("status") == "done")
+            total = len(issues)
+
+            print(f"epic:    {epic_id}")
+            print(f"issue:   {issue_id}")
+            print(f"title:   {title}")
+            print(f"order:   {order}  |  status: {status}")
+            print(f"deps:    {', '.join(deps) if deps else '(none)'}")
+            print(f"progress: {done_count}/{total} issues done in this epic")
+            print(f"file:    {issues_dir / (issue_id + '.json')}")
+
+        sys.exit(0)
+
+    print("All epics are complete or have no open issues.", file=sys.stderr)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
