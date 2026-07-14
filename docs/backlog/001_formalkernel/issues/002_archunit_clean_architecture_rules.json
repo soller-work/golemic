@@ -1,0 +1,34 @@
+{
+  "id": "002_archunit_clean_architecture_rules",
+  "title": "ArchUnit-Regeln: Clean-Architecture-Abhängigkeitsrichtung erzwingen",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 2,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Die Clean-Architecture-Grenzen des Kernels maschinell erzwingen, sodass Abhängigkeiten nur nach innen zeigen und Spring aus dem Kernel ferngehalten wird.",
+  "visibleOutcome": "Ein Entwickler sieht grüne ArchUnit-Tests, die die erlaubte Abhängigkeitsrichtung dokumentieren; ein absichtlicher Regelbruch würde den Test rot färben.",
+  "scope": [
+    "ArchUnit-Testklasse mit Schichtregeln: domain darf nichts kennen; application darf nur domain; adapter darf application und domain; framework/app darf alles.",
+    "Regel: kein Typ in kernel.domain, kernel.application oder kernel.adapter importiert org.springframework.*.",
+    "Regel: kernel.application hängt nicht von kernel.adapter ab.",
+    "Regel: keine zyklischen Paketabhängigkeiten innerhalb des Kernels."
+  ],
+  "acceptanceCriteria": [
+    "Eine ArchUnit-Testklasse existiert und ist grün gegen die aktuelle Paketstruktur.",
+    "Eine Regel verbietet Spring-Importe in kernel.domain, kernel.application und kernel.adapter.",
+    "Eine Regel erzwingt die Schichtreihenfolge domain ← application ← adapter ← framework.",
+    "Eine Regel verbietet zyklische Abhängigkeiten zwischen Kernel-Paketen.",
+    "Ein zu Demonstrationszwecken eingefügter Verstoß (temporär, danach entfernt) lässt mindestens einen ArchUnit-Test fehlschlagen — als Nachweis, dass die Regeln greifen, im Issue-Ergebnis dokumentiert."
+  ],
+  "outOfScope": [
+    "Fachliche Regeln oder Kernel-Logik.",
+    "Durchsetzung von Regeln für spätere Feature-Vertical-Slices."
+  ],
+  "dependencies": [
+    "issues/001_project_scaffold.json"
+  ],
+  "notes": [
+    "Diese Regeln laufen ab jetzt in jedem Build mit und schützen alle folgenden Slices vor Architektur-Erosion."
+  ]
+}

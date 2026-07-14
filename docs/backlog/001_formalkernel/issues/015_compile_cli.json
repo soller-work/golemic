@@ -1,0 +1,34 @@
+{
+  "id": "015_compile_cli",
+  "title": "CLI: compile <model-dir>",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 15,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Die Kompilierungs-Pipeline über einen Spring-CommandLineRunner nutzbar machen: ein Modellverzeichnis kompilieren, Status und Diagnostics ausgeben und den Exit-Code am Status ausrichten.",
+  "visibleOutcome": "Ein Entwickler führt `compile <model-dir>` aus und sieht den Modellstatus sowie die Diagnostics; der Exit-Code ist 0 bei VALID und ungleich 0 bei BLOCKED/INVALID.",
+  "scope": [
+    "CommandLineRunner in com.golemic.factory.app.cli, der ein Verzeichnisargument entgegennimmt.",
+    "Verdrahtung der Pipeline (Laden → … → Statusberechnung) über die Adapter-Implementierungen.",
+    "Lesbare Ausgabe von Gesamtstatus und Diagnostics (mit Objekt-/Dateibezug).",
+    "Exit-Code 0 bei VALID, ungleich 0 bei BLOCKED und INVALID."
+  ],
+  "acceptanceCriteria": [
+    "`compile <dir>` gegen ein gültiges Modell gibt VALID aus und beendet sich mit Exit-Code 0.",
+    "`compile <dir>` gegen ein Modell mit gebrochener Referenz gibt BLOCKED und die Diagnostics aus und beendet sich mit Exit-Code ungleich 0.",
+    "`compile <dir>` gegen ein Modell mit Typfehler gibt INVALID aus und beendet sich mit Exit-Code ungleich 0.",
+    "Fehlendes oder ungültiges Verzeichnisargument erzeugt eine verständliche Fehlermeldung.",
+    "Ein Test ruft den Runner programmatisch auf und prüft Ausgabe und Exit-Code für alle drei Statusfälle (grün)."
+  ],
+  "outOfScope": [
+    "HTTP-API oder UI.",
+    "Persistenz von Ergebnissen oder Evidenzberichte."
+  ],
+  "dependencies": [
+    "issues/013_model_status_computation.json"
+  ],
+  "notes": [
+    "Der CLI-Ring ist die einzige Stelle mit Spring-Abhängigkeit; die ArchUnit-Regeln stellen sicher, dass Spring nicht in den Kernel sickert."
+  ]
+}

@@ -1,0 +1,38 @@
+{
+  "id": "016_reference_flow_proof",
+  "title": "Nachweis: Referenzablauf als JSON-Modell + End-to-End-Akzeptanz",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 16,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Den ersten Referenzablauf (organization.create → project.create → task.create) von Hand als JSON-Modell schreiben und per End-to-End-Test nachweisen, dass der Kernel ihn als VALID kompiliert und die Fail-closed-Fälle korrekt blockiert.",
+  "visibleOutcome": "Ein Entwickler sieht unter /examples/reference-flow ein vollständiges JSON-Modell des Referenzablaufs, das der Kernel als VALID kompiliert; drei Fehlervarianten ergeben nachweislich BLOCKED bzw. INVALID.",
+  "scope": [
+    "JSON-Modell unter /examples/reference-flow: Module identity/organization/project/task mit Actors, Entities, ValueTypes und den Behaviors organization.create, project.create, task.create.",
+    "End-to-End-Test, der dieses Modell über die Pipeline (oder CLI) kompiliert und VALID erwartet.",
+    "Fehlervariante A: eine Referenz zeigt auf eine nicht existierende Id → BLOCKED.",
+    "Fehlervariante B: eine Referenz hat einen falschen expectedKind → INVALID.",
+    "Fehlervariante C: ein Änderungssatz, der eine Referenz bricht, wird von der atomaren Transaktion vollständig abgelehnt."
+  ],
+  "acceptanceCriteria": [
+    "Das Referenzmodell unter /examples/reference-flow kompiliert zu Gesamtstatus VALID.",
+    "Das Modell deckt die drei Behaviors organization.create, project.create und task.create ab, jeweils mit Actor und den nötigen Entities/ValueTypes.",
+    "Fehlervariante A (gebrochene Referenz) ergibt reproduzierbar BLOCKED mit passendem Diagnostic.",
+    "Fehlervariante B (falscher Zieltyp) ergibt reproduzierbar INVALID mit passendem Diagnostic.",
+    "Fehlervariante C (atomare Transaktion mit gebrochener Referenz) wird vollständig abgelehnt, der Basisstand bleibt VALID.",
+    "Der End-to-End-Test ist grün und läuft im normalen `./gradlew build` mit."
+  ],
+  "outOfScope": [
+    "Frontend-, Backend- oder Persistenzcode für den Ablauf (spätere Stufen).",
+    "Codegenerierung aus dem Modell.",
+    "Weitere Referenzabläufe über die drei Behaviors hinaus."
+  ],
+  "dependencies": [
+    "issues/014_atomic_model_transaction.json",
+    "issues/015_compile_cli.json"
+  ],
+  "notes": [
+    "Dies ist der Tragfähigkeitsbeweis des gesamten Epics: das Konzept-Modell lässt sich referenziell-integer ausdrücken und deterministisch prüfen (Konzept §26.5)."
+  ]
+}

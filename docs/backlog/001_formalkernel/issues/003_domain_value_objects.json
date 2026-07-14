@@ -1,0 +1,36 @@
+{
+  "id": "003_domain_value_objects",
+  "title": "Domänen-Wertobjekte: Id (UUIDv7), QualifiedName, Diagnostic, ModelStatus",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 3,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Die fundamentalen, reinen Wertobjekte des Kernels bereitstellen, auf denen alle Modellobjekte und Phasen aufbauen.",
+  "visibleOutcome": "Ein Entwickler kann Id, QualifiedName, Diagnostic und ModelStatus konstruieren; ungültige Werte werden abgewiesen; UUIDv7-Ids sind zeitlich sortierbar.",
+  "scope": [
+    "Id als Wertobjekt über UUIDv7 (Generierung + Parsing aus String).",
+    "QualifiedName als validiertes Wertobjekt (z.B. punktgetrennte Segmente, nicht leer).",
+    "Diagnostic als Record mit Schweregrad (blocking/invalid/info), Code, Nachricht und optionalem Objektbezug.",
+    "ModelStatus als Enum/sealed Typ: VALID, BLOCKED, INVALID.",
+    "Alle Typen in com.golemic.factory.kernel.domain.value, reines Java ohne Spring."
+  ],
+  "acceptanceCriteria": [
+    "Id erzeugt gültige UUIDv7-Werte und parst sie verlustfrei aus String zurück.",
+    "Zwei kurz nacheinander erzeugte Ids sind lexikografisch aufsteigend (Zeit-Sortierbarkeit von UUIDv7).",
+    "QualifiedName weist leere oder strukturell ungültige Namen mit einer Ausnahme ab.",
+    "Diagnostic trägt Schweregrad, Code, Nachricht und optionalen Objektbezug und ist wertgleich vergleichbar.",
+    "ModelStatus stellt genau die Werte VALID, BLOCKED, INVALID bereit.",
+    "Unit-Tests für alle vier Typen sind grün; die ArchUnit-Regeln bleiben grün."
+  ],
+  "outOfScope": [
+    "Modellobjekte (Entity, Actor, ...).",
+    "Aggregation von Diagnostics zu einem Gesamtstatus (eigener Slice)."
+  ],
+  "dependencies": [
+    "issues/002_archunit_clean_architecture_rules.json"
+  ],
+  "notes": [
+    "UUIDv7-Generierung entweder über eine schlanke Bibliothek oder eine kleine eigene Implementierung; entscheidend ist die Zeit-Sortierbarkeit."
+  ]
+}

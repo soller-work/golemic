@@ -1,0 +1,64 @@
+{
+  "id": "001_formalkernel",
+  "title": "Stufe 1 — Formalkernel",
+  "sourceVisionItem": "software-fabrik-konzept.md §31 Stufe 1",
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "status": "draft",
+  "problem": "Das Konzept der Software-Fabrik ist vollständig, aber unbewiesen. Die riskante Kernwette ist, ob sich Produktabsicht überhaupt als referenziell-integres, versioniertes JSON-Modell ausdrücken lässt, das ein deterministischer Compiler prüfen und in einen Modellstatus überführen kann. Ohne diesen Kernel hat keine spätere Stufe (Gespräch, Codegenerierung, Preview, Release) ein tragfähiges Fundament.",
+  "desiredOutcome": "Ein deterministischer Formalkernel als zusammenhängendes Spring-Boot/Java-Modul (Clean Architecture, per ArchUnit erzwungen) liest ein Produktmodell aus versionierten JSON-Dateien, durchläuft die acht Kompilierungsphasen, prüft referenzielle Integrität und Typkorrektheit und berechnet einen Modellstatus (valid/blocked/invalid). Der erste Referenzablauf (organization.create → project.create → task.create) ist von Hand als JSON modelliert und kompiliert als valid; die Fail-closed-Fälle (gebrochene Referenz → blocked, falscher Zieltyp → invalid, atomare Transaktion → kein kaputter Zwischenzustand) sind maschinell nachgewiesen. Kein LLM, keine UI, keine HTTP-API, keine Codegenerierung.",
+  "keyDecisions": [
+    "Java 25, Gradle, Spring Boot 3.5.x (Java-25-Kompatibilität beim Setup verifizieren).",
+    "Kernel (domain/application/adapter) ist reines Java ohne Spring; Spring nur im äußeren CLI/App-Ring.",
+    "Clean Architecture, Abhängigkeit nur nach innen, erzwungen durch ArchUnit-Tests.",
+    "Kernel bleibt ein zusammenhängendes Modul; Vertical-Slice-Schnitt erst auf Feature-Ebene späterer Stufen.",
+    "Einstieg als CLI (compile <model-dir>), keine HTTP-API in Stufe 1.",
+    "IDs als UUIDv7; kanonisches JSON via eigenem Kanonisierer; semantische Hashes als SHA-256.",
+    "Stufe-1-Umfang auf sechs Modellobjekttypen begrenzt: Entity, Actor, Behavior, ValueType, Module, Reference.",
+    "Akzeptanzkriterien sind maschinell prüfbar (grüne Tests: JUnit 5 + AssertJ + Mockito)."
+  ],
+  "nonGoals": [
+    "Kein LLM, keine Gesprächsverarbeitung (Stufe 3).",
+    "Keine Codegenerierung, keine Technologiebindings (Stufe 5).",
+    "Keine HTTP-API und keine UI.",
+    "Nicht die vollständigen 60+ Modellobjekttypen des Webprofils.",
+    "Keine Persistenzdatenbank; Wahrheit sind JSON-Dateien und git.",
+    "Keine spätere Stufe vorab atomar zerlegen."
+  ],
+  "dependenciesAndOrdering": [
+    "Projekt-Setup und ArchUnit-Regeln vor jedem Domänencode.",
+    "Domäne (Wertobjekte, Modellobjekte) vor Anwendungslogik.",
+    "Kanonisches JSON und Laden vor Schema-Prüfung und Bindung.",
+    "Die acht Kompilierungsphasen in Reihenfolge: laden → Schema → Symbole → Referenzen → Typen/Module → Constraints/Graph → Status.",
+    "CLI und der End-to-End-Nachweis am Referenzablauf zuletzt."
+  ],
+  "risks": [
+    "Das Modell könnte den Referenzablauf nicht tragfähig ausdrücken — genau das soll dieser Epic früh aufdecken.",
+    "Zu feine Modellobjekt-Teilmenge könnte den Referenzablauf nicht abbilden; zu breite würde Stufe 1 aufblähen.",
+    "Kanonisierung/Hashing nicht deterministisch würde inkrementelle Builds späterer Stufen untergraben.",
+    "Clean-Architecture-Grenzen ohne ArchUnit-Durchsetzung erodieren unbemerkt."
+  ],
+  "humanDecisionsRecorded": [
+    "Backend der Fabrik in Spring Boot/Java, weil der Nutzer den Code beherrscht (Verständlichkeit über technischen Best-Fit).",
+    "Kernel bleibt zusammenhängend statt in Vertical Slices zerlegt.",
+    "Build-Tool Gradle, IDs UUIDv7, Tests zusätzlich mit Mockito, Architektur per ArchUnit erzwungen.",
+    "Stufe 2–10 werden erst geplant, wenn Stufe 1 real ist."
+  ],
+  "issues": [
+    "issues/001_project_scaffold.json",
+    "issues/002_archunit_clean_architecture_rules.json",
+    "issues/003_domain_value_objects.json",
+    "issues/004_domain_model_objects.json",
+    "issues/005_canonical_json_and_hash.json",
+    "issues/006_json_schemas_for_kinds.json",
+    "issues/007_model_load_and_bind.json",
+    "issues/008_schema_validation_phase.json",
+    "issues/009_symbol_table_registration.json",
+    "issues/010_reference_resolution.json",
+    "issues/011_type_relation_and_module_check.json",
+    "issues/012_dependency_graph_and_cycles.json",
+    "issues/013_model_status_computation.json",
+    "issues/014_atomic_model_transaction.json",
+    "issues/015_compile_cli.json",
+    "issues/016_reference_flow_proof.json"
+  ]
+}

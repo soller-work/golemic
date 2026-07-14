@@ -1,0 +1,37 @@
+{
+  "id": "004_domain_model_objects",
+  "title": "Domänen-Modellobjekte: sealed Hierarchie der sechs Kinds",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 4,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Die sechs Modellobjekttypen der Stufe-1-Teilmenge als sealed Domänenmodell abbilden, inklusive typisierter Referenzen.",
+  "visibleOutcome": "Ein Entwickler kann Entity, Actor, Behavior, ValueType, Module und Reference als Domänenobjekte konstruieren; jede Reference trägt Zielobjekt-Id und erwarteten Kind.",
+  "scope": [
+    "Ein sealed interface ModelObject mit gemeinsamen Feldern (id, qualifiedName, displayName, kind).",
+    "Records für Entity, Actor, Behavior, ValueType, Module als Implementierungen von ModelObject.",
+    "Reference als typisiertes Wertobjekt mit Ziel-Id und expectedKind.",
+    "Module trägt exports (Symbol-Ids) und imports (Modul + Symbol-Ids), passend zu Konzept §7.3.",
+    "Ein Kind-Enum/sealed Typ, der die sechs Objektarten benennt.",
+    "Alle Typen in com.golemic.factory.kernel.domain.model, reines Java ohne Spring."
+  ],
+  "acceptanceCriteria": [
+    "Ein sealed interface ModelObject existiert; genau Entity, Actor, Behavior, ValueType, Module sind erlaubte Implementierungen.",
+    "Jedes Modellobjekt trägt id (Id), qualifiedName (QualifiedName), displayName und ein Kind.",
+    "Reference trägt eine Ziel-Id und einen expectedKind und ist wertgleich vergleichbar.",
+    "Module modelliert exports und imports als typisierte Sammlungen.",
+    "Unit-Tests konstruieren je ein Objekt jeder Art und eine Reference; alle grün.",
+    "ArchUnit-Regeln bleiben grün (keine Spring-/Adapter-Abhängigkeit in der Domäne)."
+  ],
+  "outOfScope": [
+    "Deserialisierung aus JSON (eigener Slice).",
+    "Prüfung, ob Referenzen auflösbar sind (eigener Slice)."
+  ],
+  "dependencies": [
+    "issues/003_domain_value_objects.json"
+  ],
+  "notes": [
+    "Behavior bleibt hier strukturell schlank; die reiche Vertragsform aus Anhang B wird erst benötigt, wenn der Referenzablauf sie erfordert."
+  ]
+}

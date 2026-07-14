@@ -1,0 +1,37 @@
+{
+  "noCooldown": true,
+  "fallbackOn": [
+    "rate_limit",
+    "quota_exhausted",
+    "overloaded",
+    "timeout",
+    "server_error"
+  ],
+  "agents": {
+    "po": [
+      "openai-codex/gpt-5.5",
+      "openrouter/google/gemini-2.5-pro",
+      "claude-bridge/claude-opus-4-7"
+    ],
+    "dev": [
+      "claude-bridge/claude-opus-4-8",
+      "openrouter/deepseek/deepseek-v4-pro",
+      "openai-codex/gpt-5.5"
+    ],
+    "architect": [
+      "claude-bridge/claude-opus-4-8",
+      "openai-codex/gpt-5.5",
+      "openrouter/google/gemini-2.5-pro"
+    ],
+    "planner": [
+      "claude-bridge/claude-opus-4-8",
+      "openai-codex/gpt-5.5",
+      "openrouter/google/gemini-2.5-pro"
+    ],
+    "reviewer": [
+      "openai-codex/gpt-5.5",
+      "claude-bridge/claude-opus-4-8",
+      "openrouter/google/gemini-2.5-pro"
+    ]
+  }
+}

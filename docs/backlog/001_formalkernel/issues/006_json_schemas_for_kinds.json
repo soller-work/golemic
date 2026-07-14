@@ -1,0 +1,34 @@
+{
+  "id": "006_json_schemas_for_kinds",
+  "title": "JSON-Schemas für die sechs Modellobjekttypen",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 6,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Die verbindliche JSON-Struktur der sechs Stufe-1-Modellobjekttypen als versionierte JSON-Schemas festlegen.",
+  "visibleOutcome": "Ein Entwickler kann unter /schemas je ein JSON-Schema für Entity, Actor, Behavior, ValueType, Module und Reference einsehen; jedes verlangt die gemeinsamen Identitätsfelder und die kind-spezifischen Felder.",
+  "scope": [
+    "Je ein JSON-Schema (Draft 2020-12) pro Kind unter /schemas.",
+    "Gemeinsame Pflichtfelder: $schema, kind, id, qualifiedName, displayName, modelVersion, profile.",
+    "Typisierte Referenz-Darstellung ($ref-Ziel-Id + expectedKind), passend zu Konzept §7.1.",
+    "kind-spezifische Felder minimal für den Referenzablauf (z.B. Module: exports/imports)."
+  ],
+  "acceptanceCriteria": [
+    "Für jeden der sechs Kinds existiert ein valides, parsebares JSON-Schema unter /schemas.",
+    "Jedes Objekt-Schema verlangt die gemeinsamen Identitätsfelder id, qualifiedName, displayName, kind, modelVersion, profile.",
+    "Das Schema für Referenzen verlangt Ziel-Id und expectedKind.",
+    "Das Module-Schema modelliert exports und imports.",
+    "Ein Test lädt alle Schemas und bestätigt, dass sie gültige Draft-2020-12-Schemas sind (grün)."
+  ],
+  "outOfScope": [
+    "Die Ausführung der Schema-Prüfung gegen Modelldateien (eigener Slice).",
+    "Schemas für Objekttypen außerhalb der sechs Kinds."
+  ],
+  "dependencies": [
+    "issues/004_domain_model_objects.json"
+  ],
+  "notes": [
+    "Die Schemas sind reine Datenartefakte und binden keine Java-Klassen; sie definieren die Wahrheit über die Dateiform."
+  ]
+}

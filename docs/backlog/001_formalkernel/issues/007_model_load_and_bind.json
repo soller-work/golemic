@@ -1,0 +1,35 @@
+{
+  "id": "007_model_load_and_bind",
+  "title": "Phase 1: Modelldateien laden und in Rohform einlesen",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 7,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Ein Modellverzeichnis rekursiv einlesen und jede JSON-Datei syntaktisch laden; Syntaxfehler werden als Diagnostics gesammelt statt den Lauf abzubrechen.",
+  "visibleOutcome": "Ein Entwickler kann ein Verzeichnis mit Modell-JSON-Dateien laden und erhält eine Sammlung geladener Rohobjekte plus Diagnostics für fehlerhafte Dateien.",
+  "scope": [
+    "Dateisystem-Adapter (kernel.adapter.fs), der ein Modellverzeichnis rekursiv nach .json durchläuft.",
+    "JSON-Loader (kernel.adapter.json), der jede Datei parst und dabei Herkunft (Dateipfad) festhält.",
+    "Ein Loader-Port in kernel.application.parse; die Anwendungslogik kennt nur den Port, nicht Jackson.",
+    "Syntaxfehler erzeugen ein Diagnostic mit Dateibezug; der Ladevorgang läuft für die übrigen Dateien weiter."
+  ],
+  "acceptanceCriteria": [
+    "Ein Verzeichnis mit gültigen JSON-Dateien wird vollständig in Rohobjekte geladen, jedes mit Herkunftspfad.",
+    "Eine syntaktisch fehlerhafte Datei erzeugt genau ein Diagnostic und bricht den Lauf nicht ab.",
+    "Verschachtelte Unterverzeichnisse (z.B. modules/task/behaviors) werden erfasst.",
+    "Die Anwendungslogik hängt nur vom Loader-Port ab, nicht von Jackson (durch ArchUnit belegt).",
+    "Unit-Tests mit Mockito für den Port und ein Integrationstest gegen ein Testverzeichnis sind grün."
+  ],
+  "outOfScope": [
+    "Schema-Prüfung (eigener Slice).",
+    "Bindung an Domänen-Modellobjekte (folgt nach der Schema-Prüfung im Bindungsschritt)."
+  ],
+  "dependencies": [
+    "issues/003_domain_value_objects.json",
+    "issues/005_canonical_json_and_hash.json"
+  ],
+  "notes": [
+    "Phase 1 liefert nur strukturierte Rohdaten plus Herkunft; die Umwandlung in Domänenobjekte geschieht erst, wenn die Schema-Prüfung bestanden ist."
+  ]
+}

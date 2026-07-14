@@ -1,0 +1,34 @@
+{
+  "id": "012_dependency_graph_and_cycles",
+  "title": "Phase 6/7: Abhängigkeitsgraph, Reverse-Index und Zyklenprüfung",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 12,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Aus den aufgelösten Referenzen einen Abhängigkeitsgraphen mit Reverse-Index aufbauen und unzulässige Zyklen erkennen.",
+  "visibleOutcome": "Ein Entwickler kann für ein Objekt sowohl ausgehende Abhängigkeiten als auch eingehende Referenzen (Reverse-Index) abfragen; ein unzulässiger Zyklus erzeugt ein Diagnostic.",
+  "scope": [
+    "Abhängigkeitsgraph in kernel.application.graph aus den aufgelösten Referenzen.",
+    "Reverse-Dependency-Index: für jedes Objekt die eingehenden Referenzen (Konzept §7, §17.3).",
+    "Erkennung unzulässiger Zyklen mit Diagnostic (invalid)."
+  ],
+  "acceptanceCriteria": [
+    "Der Graph enthält für jede aufgelöste Referenz eine gerichtete Kante von Quelle zu Ziel.",
+    "Der Reverse-Index liefert zu einem Zielobjekt alle eingehenden Referenzquellen.",
+    "Ein unzulässiger Zyklus wird erkannt und erzeugt ein Diagnostic.",
+    "Ein azyklisches Modell erzeugt kein Zyklus-Diagnostic.",
+    "Graph und Index sind rein (kernel.application), ArchUnit bleibt grün.",
+    "Unit-Tests für Kantenaufbau, Reverse-Lookup, Zyklus und azyklischen Fall sind grün."
+  ],
+  "outOfScope": [
+    "Nutzung des Reverse-Index für Impact-Analyse (spätere Stufe).",
+    "Semantische Änderungsklassifikation (spätere Stufe)."
+  ],
+  "dependencies": [
+    "issues/010_reference_resolution.json"
+  ],
+  "notes": [
+    "Der Reverse-Index ist die Grundlage für die spätere Auswirkungsanalyse; hier wird nur die Struktur aufgebaut."
+  ]
+}

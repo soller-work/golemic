@@ -1,0 +1,35 @@
+{
+  "id": "008_schema_validation_phase",
+  "title": "Phase 2: JSON-Schema-Prüfung und Bindung an Domänenobjekte",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 8,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Jedes geladene Rohobjekt gegen das Schema seines Kinds prüfen und bei Erfolg in ein typisiertes Domänen-Modellobjekt binden.",
+  "visibleOutcome": "Ein Entwickler erhält aus schema-konformen Rohobjekten typisierte Domänenobjekte; schema-verletzende Objekte erzeugen Diagnostics und werden nicht gebunden.",
+  "scope": [
+    "Schema-Prüf-Port in kernel.application.schema; Adapter-Implementierung über networknt (kernel.adapter.schema).",
+    "Zuordnung Rohobjekt → Schema anhand des kind-Feldes.",
+    "Bindung schema-konformer Rohobjekte in Entity/Actor/Behavior/ValueType/Module inklusive typisierter References.",
+    "Schema-Verletzungen erzeugen Diagnostics (invalid) mit Objekt-/Feldbezug; das Objekt wird nicht gebunden."
+  ],
+  "acceptanceCriteria": [
+    "Ein schema-konformes Objekt jedes Kinds wird korrekt in das passende Domänenobjekt gebunden.",
+    "Ein fehlendes Pflichtfeld erzeugt ein Diagnostic und verhindert die Bindung genau dieses Objekts.",
+    "Ein unbekanntes oder fehlendes kind-Feld erzeugt ein Diagnostic.",
+    "Die Anwendungslogik hängt nur vom Schema-Port ab, nicht von networknt (durch ArchUnit belegt).",
+    "Unit-Tests (Mockito für den Port) und ein Integrationstest mit echten Schemas sind grün."
+  ],
+  "outOfScope": [
+    "Referenzauflösung und Typprüfung zwischen Objekten (spätere Slices).",
+    "Registrierung in der Symboltabelle (eigener Slice)."
+  ],
+  "dependencies": [
+    "issues/006_json_schemas_for_kinds.json",
+    "issues/007_model_load_and_bind.json"
+  ],
+  "notes": [
+    "Bindung heißt hier nur strukturelle Umwandlung; ob Referenzen auf existierende Objekte zeigen, prüft Phase 4."
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "id": "011_type_relation_and_module_check",
+  "title": "Phase 5: Typ-, Beziehungs- und Modulgrenzenprüfung",
+  "type": "feature",
+  "status": "draft",
+  "epic": "001_formalkernel",
+  "order": 11,
+  "targetRepo": "/Users/sergej/Dev/golemic_v2",
+  "goal": "Prüfen, dass jedes Referenzziel den erwarteten Typ hat und dass Modulgrenzen (imports/exports) eingehalten werden.",
+  "visibleOutcome": "Ein Entwickler sieht Typfehler und Modulgrenzverletzungen als Diagnostics; ein Ziel mit falschem Kind macht das Modell invalid, ein Zugriff auf ein nicht exportiertes Symbol erzeugt ein Diagnostic.",
+  "scope": [
+    "Typprüfung: der Kind des aufgelösten Ziels muss dem expectedKind der Referenz entsprechen.",
+    "Modulgrenzen: eine Referenz über Modulgrenzen ist nur auf exportierte und importierte Symbole erlaubt (Konzept §7.3).",
+    "Verletzungen erzeugen Diagnostics (invalid) mit Quell- und Zielbezug."
+  ],
+  "acceptanceCriteria": [
+    "Eine Referenz, deren Ziel-Kind vom expectedKind abweicht, erzeugt ein Diagnostic (invalid).",
+    "Eine Referenz auf ein internes, nicht exportiertes Symbol eines fremden Moduls erzeugt ein Diagnostic.",
+    "Eine Referenz auf ein exportiertes und ordnungsgemäß importiertes Symbol wird akzeptiert.",
+    "Referenzen innerhalb desselben Moduls sind ohne Export/Import zulässig.",
+    "Die Prüfung ist rein (kernel.application), ArchUnit bleibt grün.",
+    "Unit-Tests für Typkonflikt, Modulverletzung und den erlaubten Fall sind grün."
+  ],
+  "outOfScope": [
+    "Zyklenprüfung und Abhängigkeitsgraph (nächster Slice).",
+    "Aggregation zum Gesamtstatus (eigener Slice)."
+  ],
+  "dependencies": [
+    "issues/010_reference_resolution.json"
+  ],
+  "notes": [
+    "Falscher Zieltyp ist der zweite Fail-closed-Nachweis des Epics (Modell wird invalid)."
+  ]
+}
