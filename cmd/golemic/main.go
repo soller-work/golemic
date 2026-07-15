@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -74,6 +75,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if command == "emit" {
 		return runEmit(args, stdout, stderr, os.Getenv)
+	}
+
+	if command == "open-pr" {
+		return runOpenPR(args, stdout, stderr, os.Getenv, osExecutor{})
 	}
 
 	for _, c := range knownCommands {
@@ -185,6 +190,138 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 		return 1
 	}
 
+	return 0
+}
+
+// runOpenPR executes the open-pr subcommand: golemic open-pr --title <t> --body <b>
+// It validates env var context, resolves the current branch, creates a PR via gh,
+// parses the PR number and URL, and writes a pr_opened event atomically.
+func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int {
+	fs := flag.NewFlagSet("open-pr", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var titleFlag string
+	var bodyFlag string
+	fs.StringVar(&titleFlag, "title", "", "PR title (required)")
+	fs.StringVar(&bodyFlag, "body", "", "PR body (required)")
+
+	if err := fs.Parse(args[2:]); err != nil {
+		return 1
+	}
+
+	// BR-004: Check env vars before any gh/git call.
+	runID := getenv("GOLEMIC_RUN_ID")
+	eventLogPath := getenv("GOLEMIC_EVENT_LOG")
+
+	if runID == "" || eventLogPath == "" {
+		var missing []string
+		if runID == "" {
+			missing = append(missing, "GOLEMIC_RUN_ID")
+		}
+		if eventLogPath == "" {
+			missing = append(missing, "GOLEMIC_EVENT_LOG")
+		}
+		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		return 1
+	}
+
+	// Validate --title and --body must be non-empty (IF-001 constraints).
+	if titleFlag == "" {
+		fmt.Fprintln(stderr, "--title must not be empty")
+		return 1
+	}
+	if bodyFlag == "" {
+		fmt.Fprintln(stderr, "--body must not be empty")
+		return 1
+	}
+
+	// BR-001: Get current branch via git branch --show-current.
+	branchOut, err := executor.Run("git", "branch", "--show-current")
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to determine current branch: %v\n", err)
+		return 1
+	}
+	branch := strings.TrimSpace(branchOut)
+	if branch == "" {
+		fmt.Fprintln(stderr, "Failed to determine current branch: detached HEAD or not on a branch")
+		return 1
+	}
+
+	// BR-002, IC-001: Create PR via gh pr create.
+	// GH_TOKEN is inherited from the process environment (BR-005).
+	prOut, err := executor.RunWithEnv(
+		nil, // no additional env vars; GH_TOKEN comes from process
+		"gh", "pr", "create",
+		"--title", titleFlag,
+		"--body", bodyFlag,
+		"--base", "main",
+		"--head", branch,
+	)
+	if err != nil {
+		var ee *preflight.ErrExit
+		if errors.As(err, &ee) {
+			fmt.Fprintf(stderr, "Failed to create PR: %s\n", strings.TrimSpace(ee.Stderr))
+		} else {
+			fmt.Fprintf(stderr, "Failed to create PR: %v\n", err)
+		}
+		return 1
+	}
+
+	// Parse PR number and URL from gh output.
+	// gh pr create outputs the PR URL on stdout, e.g.:
+	//   https://github.com/owner/repo/pull/123
+	prURL := strings.TrimSpace(prOut)
+	if prURL == "" {
+		fmt.Fprintln(stderr, "Failed to parse PR number/URL from gh output: empty output")
+		return 1
+	}
+
+	// Extract PR number from the last path segment of the URL.
+	prNumber := ""
+	if idx := strings.LastIndex(prURL, "/"); idx >= 0 {
+		candidate := prURL[idx+1:]
+		if _, err := strconv.Atoi(candidate); err == nil {
+			prNumber = candidate
+		}
+	}
+	if prNumber == "" {
+		fmt.Fprintf(stderr, "Failed to parse PR number/URL from gh output: %s\n", prURL)
+		return 1
+	}
+
+	// Write pr_opened event (SC-002). Event is written only after gh succeeds.
+	writer, err := eventlog.NewWriter(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+	defer writer.Close()
+
+	payload := map[string]string{
+		"prNumber": prNumber,
+		"url":      prURL,
+		"branch":   branch,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+
+	event := eventlog.Event{
+		Type:    eventlog.EventPROpened,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   runID,
+		Payload: payloadJSON,
+	}
+
+	if err := writer.Write(event); err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+
+	// Print PR URL to stdout for the caller.
+	fmt.Fprintln(stdout, prURL)
 	return 0
 }
 
