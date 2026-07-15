@@ -13,6 +13,7 @@ import (
 
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
+	"golemic/internal/runner"
 )
 
 var knownCommands = []struct {
@@ -20,7 +21,7 @@ var knownCommands = []struct {
 	desc string
 }{
 	{"preflight", "Check prerequisites"},
-	{"run", "Run the main process (not implemented)"},
+	{"run", "Run the main process (golemic run --issue N)"},
 	{"emit", "Emit an event to the run log"},
 	{"open-pr", "Open a pull request (not implemented)"},
 	{"submit-review", "Submit a review (not implemented)"},
@@ -44,7 +45,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	command := args[1]
 
-	// Special cases: preflight and emit are implemented
 	if command == "preflight" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -66,6 +66,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		return runPreflight(osExecutor{}, homeDir, repoRoot, stdout, stderr)
+	}
+
+	if command == "run" {
+		return runRun(args, stdout, stderr)
 	}
 
 	if command == "emit" {
@@ -182,6 +186,44 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 	}
 
 	return 0
+}
+
+// runRun executes the run subcommand: golemic run --issue <N>
+// It parses the --issue flag, resolves the host repo, loads config and credentials,
+// generates a runId, creates the event log, writes run_started, loads the issue,
+// and performs collision checks.
+func runRun(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var issueNum int
+	fs.IntVar(&issueNum, "issue", 0, "GitHub issue number (required)")
+
+	if err := fs.Parse(args[2:]); err != nil {
+		return 1
+	}
+
+	if issueNum <= 0 {
+		fmt.Fprintln(stderr, "--issue must be a positive integer")
+		return 1
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "failed to get home directory: %v\n", err)
+		return 1
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "failed to get current directory: %v\n", err)
+		return 1
+	}
+
+	r := runner.New(osExecutor{}, homeDir, cwd, issueNum)
+	r.SetStdout(stdout)
+	r.SetStderr(stderr)
+	return r.Run()
 }
 
 // osExecutor is the production executor that runs real commands.

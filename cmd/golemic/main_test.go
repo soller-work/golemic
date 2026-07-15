@@ -58,10 +58,10 @@ func TestRun(t *testing.T) {
 		},
 
 		{
-			name:           "run not implemented",
+			name:           "run without --issue prints usage error",
 			args:           []string{"golemic", "run"},
 			wantExit:       1,
-			wantStderrSubs: []string{"not implemented"},
+			wantStderrSubs: []string{"--issue must be a positive integer"},
 		},
 		{
 			name:           "emit dispatches to runEmit",
