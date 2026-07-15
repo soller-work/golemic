@@ -1,0 +1,139 @@
+package config
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+)
+
+// Config represents the structure of .golemic/config.json
+type Config struct {
+	Project       string `json:"project"`
+	VerifyCommand string `json:"verify_command"`
+	Label         string `json:"label"`
+	Models        Models `json:"models"`
+	TimeoutMinutes int   `json:"timeout_minutes"`
+}
+
+// configRaw is used for parsing to detect missing vs zero values
+type configRaw struct {
+	Project       *string `json:"project"`
+	VerifyCommand *string `json:"verify_command"`
+	Label         *string `json:"label"`
+	Models        *modelsRaw `json:"models"`
+	TimeoutMinutes *int   `json:"timeout_minutes"`
+}
+
+// modelsRaw is used for parsing models to detect missing vs zero values
+type modelsRaw struct {
+	Dev      *string `json:"dev"`
+	Reviewer *string `json:"reviewer"`
+}
+
+// Models contains the model configurations for different roles
+type Models struct {
+	Dev      string `json:"dev"`
+	Reviewer string `json:"reviewer"`
+}
+
+// Load loads and validates the config file from the given repository root
+func Load(repoRoot string) (*Config, error) {
+	configPath := filepath.Join(repoRoot, ".golemic", "config.json")
+	
+	// Check if file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("config file not found: %s", configPath)
+	}
+	
+	// Read file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file %s: %w", configPath, err)
+	}
+	
+	// Parse with strict field checking into raw struct (with pointers for missing detection)
+	var raw configRaw
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&raw); err != nil {
+		if syntaxErr, ok := err.(*json.SyntaxError); ok {
+			return nil, fmt.Errorf("invalid JSON in config file %s at offset %d: %w", 
+				configPath, syntaxErr.Offset, err)
+		}
+		if unmarshalErr, ok := err.(*json.UnmarshalTypeError); ok {
+			return nil, fmt.Errorf("invalid type in config file %s at field %s: %w", 
+				configPath, unmarshalErr.Field, err)
+		}
+		return nil, fmt.Errorf("invalid JSON in config file %s: %w", configPath, err)
+	}
+	
+	// Build final config
+	config := &Config{}
+	
+	// Extract project (required)
+	if raw.Project != nil {
+		config.Project = *raw.Project
+	}
+	
+	// Extract verify_command (required)
+	if raw.VerifyCommand != nil {
+		config.VerifyCommand = *raw.VerifyCommand
+	}
+	
+	// Extract label (optional)
+	if raw.Label != nil {
+		config.Label = *raw.Label
+	}
+	
+	// Extract models (optional)
+	if raw.Models != nil {
+		if raw.Models.Dev != nil {
+			config.Models.Dev = *raw.Models.Dev
+		}
+		if raw.Models.Reviewer != nil {
+			config.Models.Reviewer = *raw.Models.Reviewer
+		}
+	}
+	
+	// Extract timeout_minutes (optional)
+	if raw.TimeoutMinutes != nil {
+		config.TimeoutMinutes = *raw.TimeoutMinutes
+	}
+	
+	// Validate required fields
+	if config.Project == "" {
+		return nil, fmt.Errorf("required field 'project' is missing or empty in config file %s", configPath)
+	}
+	
+	if config.VerifyCommand == "" {
+		return nil, fmt.Errorf("required field 'verify_command' is missing or empty in config file %s", configPath)
+	}
+	
+	// Apply defaults for missing/empty optional fields
+	if config.Label == "" {
+		config.Label = "ready-for-agent"
+	}
+	
+	if config.Models.Dev == "" {
+		config.Models.Dev = "z-ai/glm-4.6"
+	}
+	
+	if config.Models.Reviewer == "" {
+		config.Models.Reviewer = "deepseek/deepseek-v4-pro"
+	}
+	
+	// Validate timeout_minutes if set (distinguish missing vs explicitly set to 0)
+	if raw.TimeoutMinutes != nil {
+		if config.TimeoutMinutes <= 0 {
+			return nil, fmt.Errorf("field 'timeout_minutes' must be > 0, got %d in config file %s", 
+				config.TimeoutMinutes, configPath)
+		}
+	} else {
+		// Field not present, apply default
+		config.TimeoutMinutes = 30
+	}
+	
+	return config, nil
+}

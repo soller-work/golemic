@@ -1,0 +1,297 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoad(t *testing.T) {
+	tests := []struct {
+		name          string
+		configContent  string
+		wantErr       bool
+		errContains   string
+		validate      func(*testing.T, *Config)
+	}{
+		{
+			name: "valid minimal config - only required fields",
+			configContent: `{
+				"project": "test-project",
+				"verify_command": "go test ./..."
+			}`,
+			wantErr:     false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Project != "test-project" {
+					t.Errorf("Project = %v, want test-project", cfg.Project)
+				}
+				if cfg.VerifyCommand != "go test ./..." {
+					t.Errorf("VerifyCommand = %v, want go test ./...", cfg.VerifyCommand)
+				}
+				// Check defaults
+				if cfg.Label != "ready-for-agent" {
+					t.Errorf("Label = %v, want ready-for-agent", cfg.Label)
+				}
+				if cfg.Models.Dev != "z-ai/glm-4.6" {
+					t.Errorf("Models.Dev = %v, want z-ai/glm-4.6", cfg.Models.Dev)
+				}
+				if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
+					t.Errorf("Models.Reviewer = %v, want deepseek/deepseek-v4-pro", cfg.Models.Reviewer)
+				}
+				if cfg.TimeoutMinutes != 30 {
+					t.Errorf("TimeoutMinutes = %v, want 30", cfg.TimeoutMinutes)
+				}
+			},
+		},
+		{
+			name: "valid full config - all fields set",
+			configContent: `{
+				"project": "my-project",
+				"verify_command": "npm test",
+				"label": "custom-label",
+				"models": {
+					"dev": "custom/dev-model",
+					"reviewer": "custom/reviewer-model"
+				},
+				"timeout_minutes": 45
+			}`,
+			wantErr:     false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Project != "my-project" {
+					t.Errorf("Project = %v, want my-project", cfg.Project)
+				}
+				if cfg.VerifyCommand != "npm test" {
+					t.Errorf("VerifyCommand = %v, want npm test", cfg.VerifyCommand)
+				}
+				if cfg.Label != "custom-label" {
+					t.Errorf("Label = %v, want custom-label", cfg.Label)
+				}
+				if cfg.Models.Dev != "custom/dev-model" {
+					t.Errorf("Models.Dev = %v, want custom/dev-model", cfg.Models.Dev)
+				}
+				if cfg.Models.Reviewer != "custom/reviewer-model" {
+					t.Errorf("Models.Reviewer = %v, want custom/reviewer-model", cfg.Models.Reviewer)
+				}
+				if cfg.TimeoutMinutes != 45 {
+					t.Errorf("TimeoutMinutes = %v, want 45", cfg.TimeoutMinutes)
+				}
+			},
+		},
+		{
+			name:        "missing config file",
+			configContent: "",
+			wantErr:     true,
+			errContains: "config file not found",
+		},
+		{
+			name: "broken JSON - missing closing brace",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test"
+			`,
+			wantErr:     true,
+			errContains: "invalid JSON",
+		},
+		{
+			name: "broken JSON - invalid syntax",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"extra": unclosed string
+			}`,
+			wantErr:     true,
+			errContains: "invalid JSON",
+		},
+		{
+			name: "unknown top-level field",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"unknown_field": "value"
+			}`,
+			wantErr:     true,
+			errContains: "unknown_field",
+		},
+		{
+			name: "missing project field",
+			configContent: `{
+				"verify_command": "go test"
+			}`,
+			wantErr:     true,
+			errContains: "project",
+		},
+		{
+			name: "empty project field",
+			configContent: `{
+				"project": "",
+				"verify_command": "go test"
+			}`,
+			wantErr:     true,
+			errContains: "project",
+		},
+		{
+			name: "missing verify_command field",
+			configContent: `{
+				"project": "test"
+			}`,
+			wantErr:     true,
+			errContains: "verify_command",
+		},
+		{
+			name: "empty verify_command field",
+			configContent: `{
+				"project": "test",
+				"verify_command": ""
+			}`,
+			wantErr:     true,
+			errContains: "verify_command",
+		},
+		{
+			name: "timeout_minutes explicitly set to 0",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"timeout_minutes": 0
+			}`,
+			wantErr:     true,
+			errContains: "timeout_minutes",
+		},
+		{
+			name: "timeout_minutes negative value",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"timeout_minutes": -5
+			}`,
+			wantErr:     true,
+			errContains: "timeout_minutes",
+		},
+		{
+			name: "timeout_minutes explicitly set to valid value",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"timeout_minutes": 60
+			}`,
+			wantErr:     false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.TimeoutMinutes != 60 {
+					t.Errorf("TimeoutMinutes = %v, want 60", cfg.TimeoutMinutes)
+				}
+			},
+		},
+		{
+			name: "empty label gets default",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"label": ""
+			}`,
+			wantErr:     false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Label != "ready-for-agent" {
+					t.Errorf("Label = %v, want ready-for-agent (default)", cfg.Label)
+				}
+			},
+		},
+		{
+			name: "empty models.dev gets default",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"models": {
+					"dev": "",
+					"reviewer": "custom/reviewer"
+				}
+			}`,
+			wantErr:     false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Models.Dev != "z-ai/glm-4.6" {
+					t.Errorf("Models.Dev = %v, want z-ai/glm-4.6 (default)", cfg.Models.Dev)
+				}
+				if cfg.Models.Reviewer != "custom/reviewer" {
+					t.Errorf("Models.Reviewer = %v, want custom/reviewer", cfg.Models.Reviewer)
+				}
+			},
+		},
+		{
+			name: "empty models.reviewer gets default",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"models": {
+					"dev": "custom/dev",
+					"reviewer": ""
+				}
+			}`,
+			wantErr:     false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Models.Dev != "custom/dev" {
+					t.Errorf("Models.Dev = %v, want custom/dev", cfg.Models.Dev)
+				}
+				if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
+					t.Errorf("Models.Reviewer = %v, want deepseek/deepseek-v4-pro (default)", cfg.Models.Reviewer)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create temp directory for test
+			tmpDir := t.TempDir()
+			
+			// Create .golemic subdirectory
+			golemicDir := filepath.Join(tmpDir, ".golemic")
+			if err := os.MkdirAll(golemicDir, 0755); err != nil {
+				t.Fatalf("failed to create .golemic directory: %v", err)
+			}
+			
+			// Write config file if content is provided
+			if tt.configContent != "" {
+				configPath := filepath.Join(golemicDir, "config.json")
+				if err := os.WriteFile(configPath, []byte(tt.configContent), 0644); err != nil {
+					t.Fatalf("failed to write config file: %v", err)
+				}
+			}
+			
+			// Load config
+			cfg, err := Load(tmpDir)
+			
+			// Check error expectations
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("Load() expected error, got nil")
+					return
+				}
+				if tt.errContains != "" {
+					// Check that the error message contains the expected substring
+					// We need to handle absolute paths in error messages
+					errMsg := err.Error()
+					found := false
+					// Check if errContains is in the error message
+					for i := 0; i <= len(errMsg)-len(tt.errContains); i++ {
+						if errMsg[i:i+len(tt.errContains)] == tt.errContains {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("Load() error = %v, expected to contain %q", err, tt.errContains)
+					}
+				}
+				return
+			}
+			
+			if err != nil {
+				t.Errorf("Load() unexpected error: %v", err)
+				return
+			}
+			
+			// Run validation function if provided
+			if tt.validate != nil {
+				tt.validate(t, cfg)
+			}
+		})
+	}
+}
