@@ -1,0 +1,334 @@
+{
+  "schema_version": "1.1.0",
+  "slice_id": "cancel-paid-order",
+  "title": "Cancel a paid order before shipment",
+  "summary": "Allow an authenticated customer to cancel an owned paid order before shipment and request one refund.",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Authenticated customer who owns the order",
+    "goal": "Cancel a paid order before it is shipped",
+    "business_value": "Avoid unwanted fulfillment while preserving a deterministic refund process",
+    "trigger": "The customer selects Cancel order on an eligible order",
+    "success_outcome": "The order is cancelled and one refund request is recorded"
+  },
+  "scope": {
+    "in_scope": [
+      "Cancel an owned order in PAID state",
+      "Create one refund request",
+      "Return the updated order state"
+    ],
+    "out_of_scope": [
+      "Cancelling shipped orders",
+      "Executing the external refund settlement"
+    ]
+  },
+  "preconditions": [
+    "The requester is authenticated",
+    "The order exists and belongs to the requester",
+    "The order is in PAID state"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Only the owning customer may cancel the order",
+      "applies_when": "A cancellation is requested",
+      "outcome": "Reject non-owners with ORDER_NOT_OWNED"
+    },
+    {
+      "id": "BR-002",
+      "rule": "A paid order may be cancelled only before shipment",
+      "applies_when": "The owned order is loaded",
+      "outcome": "Cancel PAID orders and reject SHIPPED orders"
+    },
+    {
+      "id": "BR-003",
+      "rule": "At most one refund request may exist for the payment",
+      "applies_when": "The cancellation is committed",
+      "outcome": "Reuse the cancellation id as the refund idempotency key"
+    }
+  ],
+  "decision_tables": [
+    {
+      "id": "DT-001",
+      "name": "Cancellation eligibility",
+      "inputs": [
+        "ownership",
+        "order_state"
+      ],
+      "rows": [
+        {
+          "when": {
+            "ownership": "owner",
+            "order_state": "PAID"
+          },
+          "then": {
+            "result": "cancel and request refund"
+          },
+          "rule_ids": [
+            "BR-002",
+            "BR-003"
+          ]
+        },
+        {
+          "when": {
+            "ownership": "non-owner",
+            "order_state": "any"
+          },
+          "then": {
+            "result": "reject with ORDER_NOT_OWNED"
+          },
+          "rule_ids": [
+            "BR-001"
+          ]
+        },
+        {
+          "when": {
+            "ownership": "owner",
+            "order_state": "SHIPPED"
+          },
+          "then": {
+            "result": "reject with ORDER_ALREADY_SHIPPED"
+          },
+          "rule_ids": [
+            "BR-002"
+          ]
+        }
+      ],
+      "default_outcome": "Reject with ORDER_NOT_CANCELLABLE"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "http_api",
+      "name": "Cancel order endpoint",
+      "operation": "POST /orders/{orderId}/cancel",
+      "inputs": [
+        {
+          "name": "orderId",
+          "type": "UUID",
+          "required": true,
+          "constraints": [
+            "Must identify an existing order"
+          ],
+          "source": "Path parameter"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Cancellation succeeds",
+          "status": "200",
+          "body": "Order representation with status CANCELLED and refundStatus REQUESTED"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Order does not exist",
+          "code": "ORDER_NOT_FOUND",
+          "status": "404",
+          "message": "Order was not found"
+        },
+        {
+          "condition": "Requester does not own the order",
+          "code": "ORDER_NOT_OWNED",
+          "status": "403",
+          "message": "Order is not owned by the requester"
+        },
+        {
+          "condition": "Order has already shipped",
+          "code": "ORDER_ALREADY_SHIPPED",
+          "status": "409",
+          "message": "Shipped orders cannot be cancelled"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "Order aggregate",
+      "precondition": "Order status is PAID",
+      "changes": [
+        {
+          "field": "status",
+          "operation": "set",
+          "value_source": "Constant CANCELLED"
+        },
+        {
+          "field": "cancelledAt",
+          "operation": "set",
+          "value_source": "Application clock"
+        }
+      ]
+    }
+  ],
+  "side_effects": [
+    {
+      "id": "SE-001",
+      "type": "integration_event",
+      "description": "Publish RefundRequested after the order cancellation commits",
+      "delivery": "asynchronous",
+      "idempotency": "Use the cancellation id as the event and consumer idempotency key",
+      "failure_policy": "Persist through the existing transactional outbox and retry with the standard policy"
+    }
+  ],
+  "security": {
+    "authentication": "Use the existing customer session middleware",
+    "authorization_rules": [
+      "The authenticated customer id must equal order.customerId"
+    ],
+    "data_classification": "Customer order data",
+    "audit_requirements": [
+      "Record actor id, order id, timestamp, and cancellation outcome"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "src/orders/application",
+      "src/orders/http"
+    ],
+    "integration_points": [
+      "OrderRepository",
+      "TransactionalOutbox",
+      "CustomerSession"
+    ],
+    "architecture_constraints": [
+      "HTTP handlers call application use cases and never repositories directly"
+    ],
+    "allowed_changes": [
+      "Add the cancellation use case, endpoint, tests, and refund event contract"
+    ],
+    "forbidden_changes": [
+      "Do not change payment settlement behavior"
+    ],
+    "dependencies": [
+      "Reuse the existing application clock and transaction manager"
+    ],
+    "migration_strategy": "No schema migration is required because cancellation fields already exist",
+    "consistency_and_concurrency": "Lock or version-check the order inside the existing transaction and reject a concurrent shipment transition"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Owner cancels a paid order",
+      "given": [
+        "An authenticated customer owns an order in PAID state"
+      ],
+      "when": [
+        "The customer calls the cancellation endpoint"
+      ],
+      "then": [
+        "The order status becomes CANCELLED",
+        "One RefundRequested event is stored",
+        "The endpoint returns 200"
+      ],
+      "traces_to": [
+        "BR-002",
+        "BR-003",
+        "DT-001",
+        "IF-001",
+        "SC-001",
+        "SE-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Non-owner cannot cancel the order",
+      "given": [
+        "An authenticated customer does not own the order"
+      ],
+      "when": [
+        "The customer calls the cancellation endpoint"
+      ],
+      "then": [
+        "The endpoint returns 403 with ORDER_NOT_OWNED",
+        "No state or side effect is produced"
+      ],
+      "traces_to": [
+        "BR-001",
+        "DT-001",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit",
+      "integration",
+      "contract"
+    ],
+    "test_cases": [
+      "Unit-test each decision-table row",
+      "Integration-test atomic order cancellation and outbox insertion",
+      "Contract-test success and documented errors"
+    ],
+    "quality_commands": [
+      "npm test",
+      "npm run lint",
+      "npm run typecheck"
+    ],
+    "non_functional_requirements": [
+      "A repeated cancellation request must not create another refund request"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "All quality commands exit successfully",
+      "No forbidden module dependency is introduced"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Application boundary",
+      "decision": "Implement cancellation as an application use case called by the HTTP handler",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "This follows the existing order-module dependency direction"
+    },
+    {
+      "id": "D-002",
+      "topic": "Refund delivery",
+      "decision": "Publish RefundRequested through the transactional outbox",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "This preserves the existing transaction and retry model"
+    },
+    {
+      "id": "D-003",
+      "topic": "Stakeholder behavior",
+      "decision": "Only paid, unshipped orders can be cancelled by their owner",
+      "source": "user",
+      "evidence_ids": [],
+      "rationale": "This is the confirmed product rule for the slice"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "src/orders/http/create-order-handler.ts",
+      "symbol": "createOrderHandler",
+      "location": "lines 18-42",
+      "finding": "Existing handlers delegate to application use cases and do not access repositories directly",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "src/platform/outbox/transactional-outbox.ts",
+      "symbol": "TransactionalOutbox",
+      "location": "lines 9-67",
+      "finding": "The outbox is written inside the application transaction and retried asynchronously",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": [],
+  "slice_type": "command"
+}

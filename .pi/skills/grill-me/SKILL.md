@@ -1,16 +1,139 @@
 ---
 name: grill-me
-description: Interview the user relentlessly about a plan or design. Use when the user wants to stress-test a plan before building, or uses any 'grill' trigger phrases.
+description: Stress-test a software plan, feature, workflow, or design through a one-question-at-a-time interview and turn the resolved decisions into one validated, autonomously implementable vertical slice. Support command, query, process, and integration slices. Use when the user asks to be grilled, wants a plan challenged before implementation, wants stakeholder requirements converted into an implementation-ready use case, or needs a standardized implementation-slice.json that validates against schema.json. Inspect an available codebase instead of asking questions that the code can answer.
 ---
 
-Interview me relentlessly about every aspect of this plan until we reach a shared understanding. Walk down each branch of the design tree, resolving dependencies between decisions one-by-one. For each question, provide your recommended answer.
+# Grill Me
 
-Ask the questions one at a time, waiting for feedback on each question before continuing. Asking multiple questions at once is bewildering.
+## Goal
 
-At the start of the interview, give a rough expected question count or range based on the apparent scope, e.g. "Ich schätze aktuell ca. 8–12 Fragen." Make clear that this estimate may change as new dependencies or risks appear.
+Interrogate one software plan or feature until its product and implementation decisions are complete enough for an autonomous coding agent. Classify the slice as `command`, `query`, `process`, or `integration`. Produce exactly one machine-readable `implementation-slice.json` and validate it against the bundled `schema.json` plus semantic checks in `scripts/validate_slice.py`.
 
-With every question, show visible progress in the question header, including the current question number and the current rough total estimate, e.g. "Frage 3 von ca. 10–14". If the estimate changes during the interview, update it explicitly and briefly explain why, e.g. "Neue Schätzung: ca. 12–16 Fragen, weil Deployment-Risiken aufgetaucht sind." The goal is to give the user a sense of progress even though the interview remains adaptive.
+Do not implement production code. The validated JSON file is the handoff artifact.
 
-If a question can be answered by exploring the codebase, explore the codebase instead.
+## Required resources
 
-Do not implement the plan yourself after the interview. The goal of this skill is to reach shared understanding and then hand off to the `to-issue` skill/workflow. After the user confirms the direction, write down the resulting issues explicitly and stop; do not edit production code as part of `grill-me`.
+- Use `schema.json` as the canonical output contract.
+- Read `references/slice-types.md` when classifying the primary slice type or resolving type-specific requirements.
+- Use `references/example-slice.json` only as a command-slice structural example. Never copy its domain content.
+- Run `scripts/validate_slice.py` before presenting the final artifact.
+
+## Workflow
+
+### 1. Establish the subject
+
+Identify the single stakeholder-visible capability being modeled. Classify it by its primary stakeholder-visible outcome using `references/slice-types.md`: state mutation (`command`), information retrieval (`query`), ordered progression (`process`), or external boundary behavior (`integration`). If the request contains multiple independently deployable outcomes, choose the smallest coherent vertical slice and put the others in `scope.out_of_scope`.
+
+Inspect an available repository before interviewing. Discover and record:
+
+- relevant modules, files, symbols, routes, schemas, and tests;
+- existing architectural and infrastructure conventions;
+- reusable interfaces and forbidden dependency directions;
+- test, lint, build, migration, and validation commands.
+
+Do not ask the user for facts that can be verified in the codebase. Do not invent file paths, symbols, commands, or conventions.
+
+### 2. Start the interview
+
+State a rough adaptive question range based on the apparent scope, for example:
+
+`Estimated interview size: about 8-12 questions. This may change as dependencies or risks appear.`
+
+Ask exactly one question per turn. Use this header:
+
+`Question <current> of about <low>-<high> - <decision topic>`
+
+For every question include:
+
+1. the decision that must be made;
+2. a concise explanation of why it affects implementation;
+3. one recommended answer;
+4. the main consequence of accepting that recommendation.
+
+Wait for the user's answer before continuing. Never bundle independent decisions into one question.
+
+If the estimate changes, state the new range and one concrete reason before the next question.
+
+### 3. Resolve the decision tree
+
+Walk dependencies in this order unless the feature requires a different dependency order:
+
+1. stakeholder, goal, value, and trigger;
+2. in-scope outcome and explicit non-goals;
+3. actors, authorization, and ownership;
+4. preconditions and relevant existing state;
+5. happy-path behavior;
+6. alternate, error, retry, and cancellation behavior;
+7. business rules and decision tables;
+8. inputs, outputs, validation, and error contracts;
+9. type-specific contract: state mutation, read model, ordered process, or external integration;
+10. state changes, events, and external side effects where relevant;
+11. idempotency, concurrency, freshness, consistency, retry, timeout, compensation, and failure handling where relevant;
+12. codebase integration points and change boundaries;
+13. acceptance scenarios, required tests, and quality commands.
+
+Normalize every resolved answer into the draft decision log. Use only these decision sources:
+
+- `user`: explicitly decided by the user;
+- `codebase`: verified from repository evidence;
+- `confirmed_recommendation`: recommended by the interviewer and explicitly accepted by the user.
+
+A recommendation is not a decision until the user accepts it. Record contradictions and resolve them before continuing.
+
+### 4. Apply the readiness gate
+
+Set `readiness` to `ready` only when all of the following are true:
+
+- the artifact describes exactly one vertical slice;
+- stakeholder intent, trigger, success outcome, and scope boundaries are explicit;
+- all material behavior branches and business rules are resolved;
+- inputs, outputs, errors, permissions, and applicable state transitions are specified;
+- the selected `slice_type` satisfies its type-specific contract: commands define mutations, queries define complete read models without domain state changes, processes define ordered steps and terminal behavior, and integrations define reliability and compatibility contracts;
+- side effects and failure behavior are specified where relevant;
+- implementation locations and architecture constraints are verified in the codebase;
+- acceptance scenarios cover success, authorization, validation, and material failure paths;
+- test levels, quality commands, and definition of done are explicit;
+- `open_questions`, `assumptions_requiring_confirmation`, and `blockers` are empty;
+- every codebase evidence entry has `verified: true`;
+- structural and semantic validation passes.
+
+Do not use `ready` merely because the user wants to stop. If required information is unavailable or the environment cannot be inspected, set `readiness` to `blocked` and describe the missing evidence precisely.
+
+### 5. Produce the artifact
+
+Create exactly one JSON document named `implementation-slice.json`. Follow `schema.json` exactly. Use JSON values, not Markdown, Gherkin text blocks, comments, or prose outside defined fields.
+
+Requirements:
+
+- Keep identifiers stable and unique.
+- Use `BR-*` for business rules, `DT-*` for decision tables, `IF-*` for interfaces, `RM-*` for read models, `PS-*` for process steps, `IC-*` for integration contracts, `SC-*` for state changes, `SE-*` for side effects, `AC-*` for acceptance scenarios, `EV-*` for codebase evidence, and `D-*` for decisions.
+- Trace acceptance scenarios to every relevant rule, interface, read model, process step, integration contract, state change, and side effect.
+- Use empty arrays instead of omitting required collections.
+- Do not use placeholders such as `TBD`, `TODO`, `unknown`, `later`, or equivalent unresolved language in a `ready` artifact.
+- Do not include implementation choices that conflict with verified architecture constraints.
+
+### 6. Validate and repair
+
+Run from the skill directory or use equivalent absolute paths:
+
+```bash
+python scripts/validate_slice.py schema.json implementation-slice.json
+```
+
+If validation fails, repair the JSON and rerun the validator. Do not present an invalid artifact as complete.
+
+The validator performs:
+
+- JSON Schema Draft 2020-12 validation;
+- identifier uniqueness checks;
+- trace-reference integrity checks;
+- readiness invariants;
+- unresolved-placeholder detection;
+- codebase evidence checks;
+- type-specific command, query, process, and integration invariants.
+
+### 7. Finish
+
+Present the validated `implementation-slice.json` as the sole source of truth and report whether validation passed.
+
+Do not edit production code. Do not silently convert the result into loose issues. If an issue workflow is requested, derive issues from the validated JSON without changing its decisions.
