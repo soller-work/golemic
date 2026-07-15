@@ -1,50 +1,51 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	"io"
 	"os"
 )
 
+var knownCommands = []struct {
+	name string
+	desc string
+}{
+	{"preflight", "Check prerequisites (not implemented)"},
+	{"run", "Run the main process (not implemented)"},
+	{"emit", "Emit output (not implemented)"},
+	{"open-pr", "Open a pull request (not implemented)"},
+	{"submit-review", "Submit a review (not implemented)"},
+}
+
+func usage(w io.Writer) {
+	fmt.Fprintf(w, "Usage: golemic <command>\n\n")
+	fmt.Fprintf(w, "Available commands:\n")
+	for _, c := range knownCommands {
+		fmt.Fprintf(w, "  %-13s %s\n", c.name, c.desc)
+	}
+}
+
+// run dispatches subcommands. All error and usage output goes to stderr.
+// stdout is left untouched for error states. Returns the process exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 {
+		usage(stderr)
+		return 1
+	}
+
+	command := args[1]
+	for _, c := range knownCommands {
+		if c.name == command {
+			fmt.Fprintln(stderr, "not implemented")
+			return 1
+		}
+	}
+
+	fmt.Fprintf(stderr, "Unknown command: %s\n", command)
+	usage(stderr)
+	return 1
+}
+
 func main() {
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: golemic <command>\n\n")
-		fmt.Fprintf(os.Stderr, "Available commands:\n")
-		fmt.Fprintf(os.Stderr, "  preflight     Check prerequisites (not implemented)\n")
-		fmt.Fprintf(os.Stderr, "  run           Run the main process (not implemented)\n")
-		fmt.Fprintf(os.Stderr, "  emit          Emit output (not implemented)\n")
-		fmt.Fprintf(os.Stderr, "  open-pr       Open a pull request (not implemented)\n")
-		fmt.Fprintf(os.Stderr, "  submit-review Submit a review (not implemented)\n")
-	}
-
-	flag.Parse()
-
-	if len(os.Args) < 2 {
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	command := os.Args[1]
-
-	switch command {
-	case "preflight":
-		fmt.Println("not implemented")
-		os.Exit(1)
-	case "run":
-		fmt.Println("not implemented")
-		os.Exit(1)
-	case "emit":
-		fmt.Println("not implemented")
-		os.Exit(1)
-	case "open-pr":
-		fmt.Println("not implemented")
-		os.Exit(1)
-	case "submit-review":
-		fmt.Println("not implemented")
-		os.Exit(1)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		flag.Usage()
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args, os.Stdout, os.Stderr))
 }

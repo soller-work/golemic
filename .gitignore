@@ -37,10 +37,5 @@ go.work
 .env
 .env.local
 
-# Gradle (legacy - to be removed)
-.gradle/
-gradle/
-build.gradle.kts
-settings.gradle.kts
-gradlew*
-target/
+# Local build output
+/golemic
