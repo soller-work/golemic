@@ -46,6 +46,16 @@ type credentialsFile struct {
 	ReviewerToken string `json:"reviewer_token"`
 }
 
+// ValidateProjectName checks whether name is a valid project name (alphanumeric,
+// dots, hyphens, underscores; no path traversal). Use this to validate user input
+// before passing it to Loader.Load.
+func ValidateProjectName(name string) error {
+	if !projectNameRe.MatchString(name) {
+		return fmt.Errorf("invalid project name %q: must match %s", name, projectNameRe.String())
+	}
+	return nil
+}
+
 // Loader loads credentials with an injectable home directory.
 type Loader struct {
 	homeDir string

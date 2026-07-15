@@ -480,3 +480,38 @@ func TestSymlinkToSecureFile(t *testing.T) {
 		t.Errorf("ReviewerToken() = %q, want %q", creds.ReviewerToken(), "ghp_sym_rev")
 	}
 }
+
+func TestValidateProjectName(t *testing.T) {
+	tests := []struct {
+		name    string
+		project string
+		wantOK  bool
+	}{
+		{"valid simple", "my-project", true},
+		{"valid with dots", "my.project_v1", true},
+		{"valid alphanumeric", "Project42", true},
+		{"with underscore", "test_proj", true},
+		{"path traversal ../", "../etc", false},
+		{"absolute path", "/etc/passwd", false},
+		{"empty string", "", false},
+		{"with slash", "foo/bar", false},
+		{"leading dot", ".hidden", false},
+		{"double dot", "..", false},
+		{"single dot", ".", false},
+		{"special chars", `my"repo`, false},
+		{"backslash", `my\repo`, false},
+		{"newline", "my\nrepo", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateProjectName(tt.project)
+			if tt.wantOK && err != nil {
+				t.Errorf("ValidateProjectName(%q) = %v, want nil", tt.project, err)
+			}
+			if !tt.wantOK && err == nil {
+				t.Errorf("ValidateProjectName(%q) = nil, want error", tt.project)
+			}
+		})
+	}
+}

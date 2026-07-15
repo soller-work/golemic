@@ -39,13 +39,29 @@ type Models struct {
 	Reviewer string `json:"reviewer"`
 }
 
+// DefaultConfig returns a Config with default values, using the given project name.
+// This is the single source of truth for default values, used both by the Loader
+// and by preflight scaffolding.
+func DefaultConfig(project string) *Config {
+	return &Config{
+		Project:        project,
+		VerifyCommand:  "",
+		Label:          "ready-for-agent",
+		Models: Models{
+			Dev:      "z-ai/glm-4.6",
+			Reviewer: "deepseek/deepseek-v4-pro",
+		},
+		TimeoutMinutes: 30,
+	}
+}
+
 // Load loads and validates the config file from the given repository root
 func Load(repoRoot string) (*Config, error) {
 	configPath := filepath.Join(repoRoot, ".golemic", "config.json")
 
 	// Check if file exists
 	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("config file not found: %s", configPath)
+		return nil, fmt.Errorf("config file not found: %s: %w", configPath, os.ErrNotExist)
 	}
 
 	// Read file

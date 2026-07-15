@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,5 +286,39 @@ func TestLoad(t *testing.T) {
 				tt.validate(t, cfg)
 			}
 		})
+	}
+}
+
+func TestDefaultConfig(t *testing.T) {
+	cfg := DefaultConfig("my-project")
+	if cfg.Project != "my-project" {
+		t.Errorf("Project = %q, want %q", cfg.Project, "my-project")
+	}
+	if cfg.VerifyCommand != "" {
+		t.Errorf("VerifyCommand = %q, want empty", cfg.VerifyCommand)
+	}
+	if cfg.Label != "ready-for-agent" {
+		t.Errorf("Label = %q, want %q", cfg.Label, "ready-for-agent")
+	}
+	if cfg.Models.Dev != "z-ai/glm-4.6" {
+		t.Errorf("Models.Dev = %q, want %q", cfg.Models.Dev, "z-ai/glm-4.6")
+	}
+	if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
+		t.Errorf("Models.Reviewer = %q, want %q", cfg.Models.Reviewer, "deepseek/deepseek-v4-pro")
+	}
+	if cfg.TimeoutMinutes != 30 {
+		t.Errorf("TimeoutMinutes = %d, want %d", cfg.TimeoutMinutes, 30)
+	}
+}
+
+func TestLoadErrorsIsNotExist(t *testing.T) {
+	// Verify that Load returns an error that wraps os.ErrNotExist
+	tmpDir := t.TempDir()
+	_, err := Load(tmpDir)
+	if err == nil {
+		t.Fatal("Load() expected error for missing config, got nil")
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("errors.Is(err, os.ErrNotExist) = false for missing config file; err: %v", err)
 	}
 }

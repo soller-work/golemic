@@ -1,0 +1,390 @@
+// Package preflight checks all prerequisites for running golemic.
+// All external commands (gh, pi, git) are behind the injectable Executor interface.
+package preflight
+
+import (
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"golemic/internal/config"
+	"golemic/internal/credentials"
+)
+
+//go:embed templates/guidelines/dev.md templates/guidelines/reviewer.md
+var templateFS embed.FS
+
+// Result holds the outcome of a single check.
+type Result struct {
+	Name    string
+	Ok      bool
+	Details string // human-readable detail when !Ok
+}
+
+// Results is a slice of check results.
+type Results []Result
+
+// AllOK returns true if every check passed.
+func (r Results) AllOK() bool {
+	for _, res := range r {
+		if !res.Ok {
+			return false
+		}
+	}
+	return true
+}
+
+// ErrExit is returned by the Executor when a command exits with a non-zero code.
+type ErrExit struct {
+	ExitCode int
+	Stderr   string
+}
+
+func (e *ErrExit) Error() string {
+	msg := fmt.Sprintf("exit code %d", e.ExitCode)
+	if e.Stderr != "" {
+		msg += ": " + strings.TrimSpace(e.Stderr)
+	}
+	return msg
+}
+
+// Executor runs external commands. The current implementation (osExecutor) is
+// single-threaded; callers that need concurrency must add their own synchronisation.
+type Executor interface {
+	// Run executes a command and returns stdout on success, or an error on failure.
+	Run(name string, args ...string) (string, error)
+	// RunWithEnv executes a command with additional environment variables set.
+	RunWithEnv(env map[string]string, name string, args ...string) (string, error)
+}
+
+// Preflight runs all prerequisite checks in fixed order.
+type Preflight struct {
+	executor   Executor
+	homeDir    string
+	repoRoot   string
+	stdout     io.Writer
+	cachedCfg  *config.Config // cached config loaded by checkConfig, reused by checkCredentials
+	configDone bool           // true once checkConfig has attempted to load
+}
+
+// New creates a new Preflight checker.
+// executor is used for all external commands, homeDir is the user's home directory
+// (~/.golemic is resolved relative to it), repoRoot is the git repository root.
+func New(executor Executor, homeDir, repoRoot string) *Preflight {
+	return &Preflight{
+		executor: executor,
+		homeDir:  homeDir,
+		repoRoot: repoRoot,
+		stdout:   io.Discard,
+	}
+}
+
+// SetStdout sets the writer for check result lines. Defaults to io.Discard.
+func (p *Preflight) SetStdout(w io.Writer) {
+	p.stdout = w
+}
+
+// ghUserLogin holds the login field from `gh api user`.
+type ghUserLogin struct {
+	Login string `json:"login"`
+}
+
+// RunAll runs all six checks in order, prints results to stdout, and returns them.
+func (p *Preflight) RunAll() Results {
+	results := Results{
+		p.checkGhVersion(),
+		p.checkPiVersion(),
+		p.checkGit(),
+		p.checkScaffolding(),
+		p.checkConfig(),
+		p.checkCredentials(),
+	}
+
+	for _, r := range results {
+		if r.Ok {
+			fmt.Fprintf(p.stdout, "OK: %s\n", r.Name)
+		} else {
+			fmt.Fprintf(p.stdout, "FEHLT: %s — %s\n", r.Name, r.Details)
+		}
+	}
+
+	return results
+}
+
+// checkGhVersion checks that `gh --version` succeeds.
+func (p *Preflight) checkGhVersion() Result {
+	_, err := p.executor.Run("gh", "--version")
+	if err != nil {
+		var ee *ErrExit
+		if errors.As(err, &ee) {
+			return Result{Name: "gh installiert", Ok: false, Details: "gh --version exited with code " + fmt.Sprint(ee.ExitCode)}
+		}
+		return Result{Name: "gh installiert", Ok: false, Details: "gh not found: " + err.Error()}
+	}
+	return Result{Name: "gh installiert", Ok: true}
+}
+
+// checkPiVersion checks that `pi --version` succeeds.
+func (p *Preflight) checkPiVersion() Result {
+	_, err := p.executor.Run("pi", "--version")
+	if err != nil {
+		var ee *ErrExit
+		if errors.As(err, &ee) {
+			return Result{Name: "pi installiert", Ok: false, Details: "pi --version exited with code " + fmt.Sprint(ee.ExitCode)}
+		}
+		return Result{Name: "pi installiert", Ok: false, Details: "pi not found: " + err.Error()}
+	}
+	return Result{Name: "pi installiert", Ok: true}
+}
+
+// checkGit performs git-related checks: version, worktree support, repo context,
+// remote origin with HTTPS URL.
+func (p *Preflight) checkGit() Result {
+	// 1. git --version
+	_, err := p.executor.Run("git", "--version")
+	if err != nil {
+		var ee *ErrExit
+		if errors.As(err, &ee) {
+			return Result{Name: "git", Ok: false, Details: "git --version exited with code " + fmt.Sprint(ee.ExitCode)}
+		}
+		return Result{Name: "git", Ok: false, Details: "git not found: " + err.Error()}
+	}
+
+	// 2. git worktree list (also verifies we are inside a git repo)
+	_, err = p.executor.Run("git", "worktree", "list")
+	if err != nil {
+		return Result{Name: "git", Ok: false, Details: "git worktree list failed: " + err.Error()}
+	}
+
+	// 3. Check remote origin exists
+	remoteOut, err := p.executor.Run("git", "config", "--get", "remote.origin.url")
+	if err != nil {
+		return Result{Name: "git", Ok: false, Details: "no remote 'origin' configured: " + err.Error()}
+	}
+	remoteURL := strings.TrimSpace(remoteOut)
+	if remoteURL == "" {
+		return Result{Name: "git", Ok: false, Details: "remote 'origin' has empty URL"}
+	}
+
+	// 4. Check that remote URL is HTTPS (not SSH)
+	if isSSHURL(remoteURL) {
+		return Result{Name: "git", Ok: false, Details: "remote 'origin' URL must be HTTPS, got SSH-style URL: " + maskURL(remoteURL)}
+	}
+	if !strings.HasPrefix(remoteURL, "https://") {
+		return Result{Name: "git", Ok: false, Details: "remote 'origin' URL must be HTTPS, got: " + maskURL(remoteURL)}
+	}
+
+	return Result{Name: "git", Ok: true}
+}
+
+// isSSHURL returns true if the URL looks like an SSH remote URL.
+func isSSHURL(url string) bool {
+	return strings.HasPrefix(url, "git@") ||
+		strings.HasPrefix(url, "ssh://") ||
+		strings.HasPrefix(url, "git://") ||
+		strings.HasPrefix(url, "git+ssh://")
+}
+
+// maskURL replaces the credential part of a URL (if any) with *** for safe display.
+func maskURL(url string) string {
+	// Only mask if it looks like https://user:pass@host/path
+	if !strings.HasPrefix(url, "https://") {
+		return url
+	}
+	rest := strings.TrimPrefix(url, "https://")
+	atIdx := strings.Index(rest, "@")
+	if atIdx < 0 {
+		return url
+	}
+	return "https://***@" + rest[atIdx+1:]
+}
+
+// checkScaffolding checks if .golemic/ exists; if missing, creates it from templates.
+// Creating the scaffolding counts as FEHLT so the human fills in the templates.
+// Existing files are never overwritten (idempotency).
+func (p *Preflight) checkScaffolding() Result {
+	golemicDir := filepath.Join(p.repoRoot, ".golemic")
+	configPath := filepath.Join(golemicDir, "config.json")
+
+	// Check if config.json already exists
+	if _, err := os.Stat(configPath); err == nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: true}
+	}
+
+	// Validate project name before creating anything
+	projectName := filepath.Base(p.repoRoot)
+	if projectName == "" || projectName == "." {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false,
+			Details: "cannot determine project name from repo root"}
+	}
+	if err := credentials.ValidateProjectName(projectName); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false,
+			Details: "invalid project name: " + err.Error()}
+	}
+
+	// config.json via encoding/json (JSON-safe, no template injection)
+	if err := p.createConfig(golemicDir, configPath, projectName); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create config.json: " + err.Error()}
+	}
+
+	// guidelines directory
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create guidelines directory: " + err.Error()}
+	}
+
+	// dev.md
+	if err := p.copyFromTemplate(guidelinesDir, "templates/guidelines/dev.md", "dev.md"); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create guidelines/dev.md: " + err.Error()}
+	}
+
+	// reviewer.md
+	if err := p.copyFromTemplate(guidelinesDir, "templates/guidelines/reviewer.md", "reviewer.md"); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create guidelines/reviewer.md: " + err.Error()}
+	}
+
+	return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "wurde angelegt — bitte config.json und Guidelines ausfüllen"}
+}
+
+// createConfig marshals a config.Config with defaults and writes it to configPath.
+// It does not overwrite an existing file (checked by caller).
+func (p *Preflight) createConfig(golemicDir, configPath, projectName string) error {
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		return err
+	}
+
+	// Second stat after MkdirAll — test-visibility only, not race-safe.
+	if _, err := os.Stat(configPath); err == nil {
+		return nil // already exists, idempotent
+	}
+
+	cfg := config.DefaultConfig(projectName)
+	data, err := json.MarshalIndent(cfg, "", "    ")
+	if err != nil {
+		return fmt.Errorf("marshal config: %w", err)
+	}
+
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// copyFromTemplate copies an embedded template file to the target directory.
+// It does not overwrite an existing file.
+func (p *Preflight) copyFromTemplate(targetDir, embeddedPath, targetName string) error {
+	targetPath := filepath.Join(targetDir, targetName)
+
+	// Check if file already exists (idempotency)
+	if _, err := os.Stat(targetPath); err == nil {
+		return nil
+	}
+
+	content, err := templateFS.ReadFile(embeddedPath)
+	if err != nil {
+		return fmt.Errorf("read template %s: %w", embeddedPath, err)
+	}
+
+	if err := os.WriteFile(targetPath, content, 0644); err != nil {
+		return fmt.Errorf("write file: %w", err)
+	}
+
+	return nil
+}
+
+// checkConfig validates the .golemic/config.json using the config loader.
+// The result is cached for reuse by checkCredentials.
+func (p *Preflight) checkConfig() Result {
+	cfg, err := config.Load(p.repoRoot)
+	p.cachedCfg = cfg
+	p.configDone = true
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
+			return Result{Name: "config.json valide", Ok: false, Details: ".golemic/config.json fehlt"}
+		}
+		return Result{Name: "config.json valide", Ok: false, Details: err.Error()}
+	}
+	return Result{Name: "config.json valide", Ok: true}
+}
+
+// checkCredentials loads credentials and validates both tokens via gh api user.
+// It checks that the two tokens resolve to different GitHub logins.
+// Reuses the cached config from checkConfig if available.
+func (p *Preflight) checkCredentials() Result {
+	// Use cached config from checkConfig if available, otherwise load fresh
+	var cfg *config.Config
+	var err error
+	if p.configDone && p.cachedCfg != nil {
+		cfg = p.cachedCfg
+	} else {
+		cfg, err = config.Load(p.repoRoot)
+	}
+	if err != nil {
+		return Result{Name: "Credentials", Ok: false, Details: "cannot load config: " + err.Error()}
+	}
+
+	// Load credentials
+	loader := credentials.NewLoader(p.homeDir)
+	creds, err := loader.Load(cfg.Project)
+	if err != nil {
+		// Never leak token values in error messages
+		return Result{Name: "Credentials", Ok: false, Details: err.Error()}
+	}
+
+	// Validate dev token
+	devLogin, err := p.ghWhoami(creds.DevToken())
+	if err != nil {
+		return Result{Name: "Credentials", Ok: false, Details: "dev token ungültig: " + sanitizeErr(err)}
+	}
+
+	// Validate reviewer token
+	revLogin, err := p.ghWhoami(creds.ReviewerToken())
+	if err != nil {
+		return Result{Name: "Credentials", Ok: false, Details: "reviewer token ungültig: " + sanitizeErr(err)}
+	}
+
+	// Check that logins are different (§2.8)
+	if devLogin == revLogin {
+		return Result{Name: "Credentials", Ok: false,
+			Details: fmt.Sprintf("dev und reviewer token verwenden denselben Account (%s); sie müssen verschieden sein", devLogin)}
+	}
+
+	return Result{Name: "Credentials", Ok: true}
+}
+
+// ghWhoami runs `gh api user` with the given GH_TOKEN and returns the login name.
+func (p *Preflight) ghWhoami(token string) (string, error) {
+	out, err := p.executor.RunWithEnv(
+		map[string]string{"GH_TOKEN": token},
+		"gh", "api", "user",
+	)
+	if err != nil {
+		var ee *ErrExit
+		if errors.As(err, &ee) {
+			return "", fmt.Errorf("gh api user: exit code %d", ee.ExitCode)
+		}
+		return "", fmt.Errorf("gh api user: %s", err.Error())
+	}
+
+	var user ghUserLogin
+	if err := json.Unmarshal([]byte(out), &user); err != nil {
+		return "", fmt.Errorf("gh api user: ungültige Antwort")
+	}
+	if user.Login == "" {
+		return "", fmt.Errorf("gh api user: leerer login")
+	}
+
+	return user.Login, nil
+}
+
+// sanitizeErr returns a safe, prefix-only error message — never raw stderr payload.
+func sanitizeErr(err error) string {
+	var ee *ErrExit
+	if errors.As(err, &ee) {
+		return fmt.Sprintf("exit code %d", ee.ExitCode)
+	}
+	return err.Error()
+}
