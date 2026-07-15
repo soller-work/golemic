@@ -1,0 +1,453 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "command",
+  "slice_id": "i1-2",
+  "title": "golemic emit Subcommand",
+  "summary": "Generic event emission tool for the agent roles. golemic emit --type <t> --payload '<json>' reads run context from environment variables (I1.1), validates --payload as a JSON object, and appends the event to the JSONL event log. Event types not in the predefined constant list are allowed (progress markers), but type must not be empty.",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Agent role (dev or reviewer) running inside a worktree",
+    "goal": "Write a structured event to the run's event log without needing Go code",
+    "business_value": "Gives the LLM agents a simple CLI tool to emit progress markers and status events into the deterministic event log, keeping the agent-agnostic design",
+    "trigger": "Agent calls golemic emit --type dev_started --payload '{}' in its shell",
+    "success_outcome": "Exactly one valid JSONL line is appended to the run's events.jsonl"
+  },
+  "scope": {
+    "in_scope": [
+      "golemic emit --type <t> --payload '<json>' CLI subcommand",
+      "Reads GOLEMIC_RUN_ID and GOLEMIC_EVENT_LOG from environment (I1.1)",
+      "Validates --payload is a valid JSON object (decoded and re-encoded to normalise)",
+      "Allows any non-empty type string (types not in the predefined constant list are valid progress markers)",
+      "Rejects empty --type with a clear error",
+      "Appends the event using the internal/eventlog Writer",
+      "Exit code 0 on success, non-zero with clear message on failure"
+    ],
+    "out_of_scope": [
+      "open-pr or submit-review functionality (separate subcommands)",
+      "Event type validation beyond non-empty",
+      "Interactive mode or stdin input"
+    ]
+  },
+  "preconditions": [
+    "Event log package (I1.1) is implemented",
+    "GOLEMIC_RUN_ID and GOLEMIC_EVENT_LOG are set in the environment by the runner"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "The --type flag must be a non-empty string",
+      "applies_when": "golemic emit is invoked",
+      "outcome": "Empty type \u2192 error message '--type must not be empty', exit code != 0"
+    },
+    {
+      "id": "BR-002",
+      "rule": "The --payload flag must be valid JSON that decodes to a JSON object (not array, string, number, or null)",
+      "applies_when": "golemic emit is invoked with --payload",
+      "outcome": "Invalid JSON or non-object \u2192 error message naming the parse failure, exit code != 0"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Event types not in the predefined constant list are allowed (the agent may emit arbitrary progress markers)",
+      "applies_when": "golemic emit is invoked with a type that is not in the known event type constants",
+      "outcome": "The event is written to the log without error; the runner may ignore event types it does not recognize"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Missing GOLEMIC_RUN_ID or GOLEMIC_EVENT_LOG \u2192 fail before any I/O",
+      "applies_when": "golemic emit starts",
+      "outcome": "Clear error listing the missing variable(s), exit code != 0, no event written"
+    }
+  ],
+  "decision_tables": [
+    {
+      "id": "DT-001",
+      "name": "Emit invocation outcomes",
+      "inputs": [
+        "--type non-empty",
+        "--payload valid JSON object",
+        "Env vars present"
+      ],
+      "rows": [
+        {
+          "when": {
+            "--type non-empty": "yes",
+            "--payload valid JSON object": "yes",
+            "Env vars present": "yes"
+          },
+          "then": {
+            "result": "Event written to log, exit 0"
+          },
+          "rule_ids": [
+            "BR-001",
+            "BR-002",
+            "BR-004"
+          ]
+        },
+        {
+          "when": {
+            "--type non-empty": "no",
+            "--payload valid JSON object": "any",
+            "Env vars present": "any"
+          },
+          "then": {
+            "result": "Error: --type must not be empty, exit != 0"
+          },
+          "rule_ids": [
+            "BR-001"
+          ]
+        },
+        {
+          "when": {
+            "--type non-empty": "yes",
+            "--payload valid JSON object": "no",
+            "Env vars present": "any"
+          },
+          "then": {
+            "result": "Error: payload parse failure, exit != 0"
+          },
+          "rule_ids": [
+            "BR-002"
+          ]
+        },
+        {
+          "when": {
+            "--type non-empty": "yes",
+            "--payload valid JSON object": "yes",
+            "Env vars present": "no"
+          },
+          "then": {
+            "result": "Error: missing env var(s), exit != 0"
+          },
+          "rule_ids": [
+            "BR-004"
+          ]
+        }
+      ],
+      "default_outcome": "Error: invalid invocation, exit != 0"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "cli",
+      "name": "golemic emit",
+      "operation": "golemic emit --type <t> --payload '<json>'",
+      "inputs": [
+        {
+          "name": "--type",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be non-empty"
+          ],
+          "source": "CLI flag"
+        },
+        {
+          "name": "--payload",
+          "type": "string (JSON)",
+          "required": true,
+          "constraints": [
+            "Must be valid JSON that decodes to a JSON object"
+          ],
+          "source": "CLI flag"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Success",
+          "status": "exit 0",
+          "body": "No stdout output; event appended to log"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Missing GOLEMIC_RUN_ID or GOLEMIC_EVENT_LOG",
+          "code": "MISSING_ENV_CONTEXT",
+          "status": "exit != 0",
+          "message": "Missing required environment variable: GOLEMIC_RUN_ID (or GOLEMIC_EVENT_LOG)"
+        },
+        {
+          "condition": "--type is empty",
+          "code": "EMPTY_TYPE",
+          "status": "exit != 0",
+          "message": "--type must not be empty"
+        },
+        {
+          "condition": "--payload is not valid JSON or not a JSON object",
+          "code": "INVALID_PAYLOAD",
+          "status": "exit != 0",
+          "message": "Invalid --payload: <parse error>"
+        },
+        {
+          "condition": "Event log write fails",
+          "code": "WRITE_FAILED",
+          "status": "exit != 0",
+          "message": "Failed to write event: <error>"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [
+    {
+      "id": "IC-001",
+      "external_system": "Event log file system (via internal/eventlog)",
+      "direction": "outbound",
+      "transport": "internal/eventlog Writer.Write",
+      "operation": "Append one event to the run's events.jsonl",
+      "request_contract": "Event with type, ts (auto-generated), runId (from env), payload",
+      "response_contract": "nil error on success",
+      "idempotency": "No built-in idempotency; each call appends one event",
+      "timeout": "N/A; file system write",
+      "retry_policy": "No retry; failure is fatal",
+      "failure_mapping": "Write error \u2192 INVALID_PAYLOAD or WRITE_FAILED",
+      "compatibility": "Event struct from I1.1"
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "Event log (events.jsonl)",
+      "precondition": "Event log file is open and writable",
+      "changes": [
+        {
+          "field": "content",
+          "operation": "append",
+          "value_source": "Event{type: --type, ts: now, runId: env, payload: --payload}"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "N/A; subcommand runs inside an already-authenticated agent process",
+    "authorization_rules": [
+      "Subcommand is only callable from within an agent worktree with the correct env vars set"
+    ],
+    "data_classification": "Run metadata (no secrets)",
+    "audit_requirements": [
+      "Every emit call is recorded in the append-only event log"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "cmd/golemic/main.go",
+      "internal/eventlog"
+    ],
+    "integration_points": [
+      "internal/eventlog Writer",
+      "flag package or manual CLI arg parsing"
+    ],
+    "architecture_constraints": [
+      "Must use the existing subcommand dispatch in cmd/golemic/main.go",
+      "Must use internal/eventlog for writing events",
+      "Must validate --payload before any I/O (fail-fast)"
+    ],
+    "allowed_changes": [
+      "Add emit subcommand handler to main.go",
+      "Add flag parsing for --type and --payload"
+    ],
+    "forbidden_changes": [
+      "Do not allow --type to be empty",
+      "Do not skip env var validation",
+      "Do not parse or interpret stdout of the event log"
+    ],
+    "dependencies": [
+      "internal/eventlog (I1.1)",
+      "Standard library: flag, encoding/json, os, fmt"
+    ],
+    "migration_strategy": "New subcommand; no migration needed",
+    "consistency_and_concurrency": "Single-threaded CLI subcommand; no concurrency concerns"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Successful emit writes exactly one event",
+      "given": [
+        "GOLEMIC_RUN_ID and GOLEMIC_EVENT_LOG are set to valid values",
+        "The event log directory exists"
+      ],
+      "when": [
+        "golemic emit --type dev_started --payload '{}' is invoked"
+      ],
+      "then": [
+        "Exit code is 0",
+        "Exactly one JSONL line is appended to the event log",
+        "The event has type dev_started, a valid RFC3339 ts, the correct runId, and payload {}"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "BR-004",
+        "DT-001",
+        "IF-001",
+        "SC-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Broken --payload causes non-zero exit and no event written",
+      "given": [
+        "Env vars are set",
+        "--payload is 'not-json'"
+      ],
+      "when": [
+        "golemic emit --type dev_started --payload 'not-json' is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message mentions parse failure",
+        "No event is appended to the log"
+      ],
+      "traces_to": [
+        "BR-002",
+        "DT-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Missing env var causes non-zero exit before any I/O",
+      "given": [
+        "GOLEMIC_RUN_ID is not set"
+      ],
+      "when": [
+        "golemic emit --type dev_started --payload '{}' is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message mentions GOLEMIC_RUN_ID",
+        "No event is appended to the log"
+      ],
+      "traces_to": [
+        "BR-004",
+        "DT-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "Emitter writes event via eventlog Writer",
+      "given": [
+        "All inputs are valid"
+      ],
+      "when": [
+        "golemic emit is invoked"
+      ],
+      "then": [
+        "The event is appended using the internal/eventlog Writer",
+        "The Writer interface is used correctly"
+      ],
+      "traces_to": [
+        "BR-003",
+        "IC-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Successful emit writes event with correct fields",
+      "Empty --type returns error",
+      "Invalid --payload JSON returns error",
+      "--payload is valid JSON but not an object (e.g. array) returns error",
+      "Missing GOLEMIC_RUN_ID returns error",
+      "Missing GOLEMIC_EVENT_LOG returns error",
+      "Event log write failure returns error"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./cmd/golemic/... ./internal/eventlog/..."
+    ],
+    "non_functional_requirements": [
+      "--payload is re-encoded to normalise formatting",
+      "Error messages are written to stderr"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "go build ./... && go vet ./... && go test -count=1 ./... is green",
+      "Emit subcommand is wired into the main.go dispatch table"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Subcommand interface",
+      "decision": "golemic emit --type <t> --payload '<json>' is the CLI signature",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'golemic emit --type <t> --payload \\'<json>\\''"
+    },
+    {
+      "id": "D-002",
+      "topic": "Unrecognized event types allowed",
+      "decision": "Any non-empty type string is accepted; types not in the predefined constant list are valid progress markers",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Unbekannte Typen erlaubt (Fortschrittsmarker), aber type nicht leer'"
+    },
+    {
+      "id": "D-003",
+      "topic": "Existing subcommand dispatch",
+      "decision": "Emit subcommand uses the existing dispatch in cmd/golemic/main.go",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "main.go already lists emit in knownCommands and dispatches by name"
+    },
+    {
+      "id": "D-004",
+      "topic": "Subcommand dispatch pattern",
+      "decision": "The emit subcommand follows the same dispatch pattern as preflight, using the existing run() switch",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "The run function in main.go dispatches by command name; emit will get a dedicated branch like preflight does"
+    },
+    {
+      "id": "D-005",
+      "topic": "Event log package dependency",
+      "decision": "Emit subcommand depends on internal/eventlog Writer for writing events",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-003"
+      ],
+      "rationale": "internal/eventlog package is the designated event writing mechanism; emit delegates to it"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "cmd/golemic/main.go",
+      "symbol": "knownCommands",
+      "location": "lines 15-22",
+      "finding": "emit is already listed as a known command with description 'Emit output (not implemented)' and dispatches to 'not implemented' path",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "cmd/golemic/main.go",
+      "symbol": "run function",
+      "location": "lines 30-76",
+      "finding": "Subcommand dispatch pattern: preflight has a dedicated handler, all other commands get 'not implemented' with exit code 1",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "internal/preflight/preflight.go",
+      "symbol": "Executor interface",
+      "location": "lines 48-56",
+      "finding": "Executor interface with Run and RunWithEnv exists; the emit subcommand does not need it (it only writes to the event log)",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

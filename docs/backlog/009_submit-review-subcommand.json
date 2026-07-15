@@ -1,0 +1,434 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "command",
+  "slice_id": "i1-9",
+  "title": "golemic submit-review Subcommand",
+  "summary": "Review submission atomically coupled with event logging. golemic submit-review --verdict approved|changes_requested --body <text> --pr <n> reads context from environment, validates the verdict, submits the review via gh pr review, and writes a review_submitted event. If gh fails, no event is written and exit != 0.",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Reviewer agent (LLM) running inside the reviewer worktree",
+    "goal": "Submit a formal GitHub review and atomically record the verdict in the event log",
+    "business_value": "Single atomic action that couples the GitHub review submission with the event log entry, ensuring the verdict is always recorded. The only authoritative channel for verdicts.",
+    "trigger": "Reviewer agent finishes analysis and calls golemic submit-review --verdict approved --body 'LGTM' --pr 123",
+    "success_outcome": "A GitHub review is submitted (approve or request changes) and a review_submitted event is written to the event log"
+  },
+  "scope": {
+    "in_scope": [
+      "golemic submit-review --verdict approved|changes_requested --body <text> --pr <n> CLI subcommand",
+      "Reads GOLEMIC_RUN_ID and GOLEMIC_EVENT_LOG from environment (I1.1)",
+      "Verdict validation: only 'approved' and 'changes_requested' are accepted",
+      "gh pr review <n> --approve for approved verdict",
+      "gh pr review <n> --request-changes --body <text> for changes_requested verdict",
+      "Writes review_submitted event with verdict, body, prNumber",
+      "If gh fails \u2192 no event written, exit != 0",
+      "Invalid verdict \u2192 exit != 0 without gh call"
+    ],
+    "out_of_scope": [
+      "PR creation (I1.7)",
+      "Loop outcome decisions based on verdict",
+      "Human review bridging"
+    ]
+  },
+  "preconditions": [
+    "Event log package (I1.1) is implemented",
+    "GOLEMIC_RUN_ID, GOLEMIC_EVENT_LOG, and GH_TOKEN (reviewer token) are set in the environment by the runner",
+    "A PR exists for the current run"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "The --verdict flag accepts only exactly 'approved' or 'changes_requested' (case-sensitive)",
+      "applies_when": "golemic submit-review is invoked",
+      "outcome": "Invalid verdict \u2192 error message listing valid values, exit != 0, no gh call"
+    },
+    {
+      "id": "BR-002",
+      "rule": "For verdict approved, gh pr review <n> --approve is called",
+      "applies_when": "--verdict is 'approved'",
+      "outcome": "gh pr review <n> --approve"
+    },
+    {
+      "id": "BR-003",
+      "rule": "For verdict changes_requested, gh pr review <n> --request-changes --body <text> is called",
+      "applies_when": "--verdict is 'changes_requested'",
+      "outcome": "gh pr review <n> --request-changes --body <text>"
+    },
+    {
+      "id": "BR-004",
+      "rule": "If gh pr review fails (non-zero exit), no review_submitted event is written",
+      "applies_when": "gh pr review exits with non-zero code",
+      "outcome": "Error message includes gh stderr, exit code != 0, no event written"
+    },
+    {
+      "id": "BR-005",
+      "rule": "Invalid verdict results in exit != 0 without any gh call",
+      "applies_when": "--verdict is not 'approved' or 'changes_requested'",
+      "outcome": "Error message, exit != 0, no gh call, no event"
+    }
+  ],
+  "decision_tables": [
+    {
+      "id": "DT-001",
+      "name": "submit-review invocation outcomes",
+      "inputs": [
+        "Verdict valid",
+        "Env context present",
+        "gh pr review succeeds"
+      ],
+      "rows": [
+        {
+          "when": {
+            "Verdict valid": "yes",
+            "Env context present": "yes",
+            "gh pr review succeeds": "yes"
+          },
+          "then": {
+            "result": "review_submitted event written, exit 0"
+          },
+          "rule_ids": [
+            "BR-001",
+            "BR-002",
+            "BR-003",
+            "BR-004"
+          ]
+        },
+        {
+          "when": {
+            "Verdict valid": "no",
+            "Env context present": "any",
+            "gh pr review succeeds": "any"
+          },
+          "then": {
+            "result": "Error: invalid verdict, exit != 0, no gh call"
+          },
+          "rule_ids": [
+            "BR-001",
+            "BR-005"
+          ]
+        },
+        {
+          "when": {
+            "Verdict valid": "yes",
+            "Env context present": "yes",
+            "gh pr review succeeds": "no"
+          },
+          "then": {
+            "result": "Error: gh failure, exit != 0, no event"
+          },
+          "rule_ids": [
+            "BR-004"
+          ]
+        }
+      ],
+      "default_outcome": "Error: unexpected failure, exit != 0"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "cli",
+      "name": "golemic submit-review",
+      "operation": "golemic submit-review --verdict <v> --body <text> --pr <n>",
+      "inputs": [
+        {
+          "name": "--verdict",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be exactly 'approved' or 'changes_requested'"
+          ],
+          "source": "CLI flag"
+        },
+        {
+          "name": "--body",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be non-empty"
+          ],
+          "source": "CLI flag"
+        },
+        {
+          "name": "--pr",
+          "type": "int",
+          "required": true,
+          "constraints": [
+            "Must be a positive integer"
+          ],
+          "source": "CLI flag"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Review submitted and event written",
+          "status": "exit 0",
+          "body": "review_submitted event written to log"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Invalid verdict value",
+          "code": "INVALID_VERDICT",
+          "status": "exit != 0",
+          "message": "Invalid verdict: must be 'approved' or 'changes_requested', got: <value>"
+        },
+        {
+          "condition": "Missing env vars",
+          "code": "MISSING_ENV_CONTEXT",
+          "status": "exit != 0",
+          "message": "Missing required environment variable: <var>"
+        },
+        {
+          "condition": "gh pr review fails",
+          "code": "GH_REVIEW_FAILED",
+          "status": "exit != 0",
+          "message": "Failed to submit review: <gh error>"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [
+    {
+      "id": "IC-001",
+      "external_system": "GitHub (via gh CLI)",
+      "direction": "outbound",
+      "transport": "gh pr review via os/exec (inherits GH_TOKEN from environment)",
+      "operation": "gh pr review <n> --approve or gh pr review <n> --request-changes --body <text>",
+      "request_contract": "Full command with all arguments",
+      "response_contract": "stdout confirming review submission",
+      "idempotency": "Not fully idempotent; repeated calls with same verdict may be accepted by GitHub but only the first counts as a new review",
+      "timeout": "30 seconds",
+      "retry_policy": "No retry; failure is fatal",
+      "failure_mapping": "Non-zero exit \u2192 GH_REVIEW_FAILED with gh stderr",
+      "compatibility": "gh CLI v2+"
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "GitHub (PR review submitted)",
+      "precondition": "PR <n> exists and is open",
+      "changes": [
+        {
+          "field": "PR review state",
+          "operation": "create",
+          "value_source": "gh pr review command (approve or request-changes)"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "Event log",
+      "precondition": "Event log is writable",
+      "changes": [
+        {
+          "field": "content",
+          "operation": "append",
+          "value_source": "review_submitted event with verdict, body, prNumber"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "GH_TOKEN from environment (reviewer token); inherited from parent process",
+    "authorization_rules": [
+      "The reviewer token must have write access to submit reviews on the host repo"
+    ],
+    "data_classification": "Review body (may contain project-specific feedback)",
+    "audit_requirements": [
+      "review_submitted event records verdict, body, and PR number"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "cmd/golemic/main.go"
+    ],
+    "integration_points": [
+      "os/exec for gh command",
+      "internal/eventlog for writing events",
+      "os.Getenv for env context"
+    ],
+    "architecture_constraints": [
+      "Must validate verdict before any gh call (fail-fast)",
+      "Must NOT write event if gh fails",
+      "Must use the existing subcommand dispatch in main.go"
+    ],
+    "allowed_changes": [
+      "Add submit-review subcommand handler to main.go"
+    ],
+    "forbidden_changes": [
+      "Do not accept verdict values other than approved and changes_requested",
+      "Do not write event on gh failure"
+    ],
+    "dependencies": [
+      "internal/eventlog (I1.1)",
+      "Standard library: os/exec, os, flag, fmt, strings"
+    ],
+    "migration_strategy": "New subcommand; no migration needed",
+    "consistency_and_concurrency": "Single-threaded CLI subcommand; no concurrency concerns"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Approved verdict calls gh with --approve and writes event",
+      "given": [
+        "Env vars are set",
+        "A fake gh that returns success"
+      ],
+      "when": [
+        "golemic submit-review --verdict approved --body 'LGTM' --pr 123 is invoked"
+      ],
+      "then": [
+        "gh pr review 123 --approve is called",
+        "review_submitted event is written with verdict=approved, body='LGTM', prNumber=123",
+        "Exit code is 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "DT-001",
+        "IF-001",
+        "SC-001",
+        "SC-002",
+        "IC-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Changes_requested verdict calls gh with --request-changes and writes event",
+      "given": [
+        "Env vars are set",
+        "A fake gh that returns success"
+      ],
+      "when": [
+        "golemic submit-review --verdict changes_requested --body 'Fix NPE' --pr 123 is invoked"
+      ],
+      "then": [
+        "gh pr review 123 --request-changes --body 'Fix NPE' is called",
+        "review_submitted event is written with verdict=changes_requested",
+        "Exit code is 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-003",
+        "DT-001",
+        "IF-001",
+        "SC-001",
+        "SC-002",
+        "IC-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Invalid verdict returns error without gh call",
+      "given": [
+        "Env vars are set"
+      ],
+      "when": [
+        "golemic submit-review --verdict invalid --body 'text' --pr 123 is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message mentions valid verdict values",
+        "No gh command was executed",
+        "No event was written"
+      ],
+      "traces_to": [
+        "BR-005",
+        "DT-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "gh failure results in no event and non-zero exit",
+      "given": [
+        "Env vars are set",
+        "A fake gh that returns non-zero exit"
+      ],
+      "when": [
+        "golemic submit-review --verdict approved --body 'LGTM' --pr 123 is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message mentions gh failure",
+        "No event is written"
+      ],
+      "traces_to": [
+        "BR-004",
+        "DT-001",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Approved verdict maps to gh --approve",
+      "Changes_requested verdict maps to gh --request-changes --body",
+      "Invalid verdict returns error without gh call",
+      "gh failure returns error without event",
+      "Missing env vars return error before gh call",
+      "Event contains correct verdict, body, prNumber"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./cmd/golemic/..."
+    ],
+    "non_functional_requirements": [
+      "Verdict validation is case-sensitive (only lowercase approved/changes_requested)"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "go build ./... && go vet ./... && go test -count=1 ./... is green",
+      "submit-review subcommand is wired into main.go dispatch"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Verdict values",
+      "decision": "Verdict accepts only exactly 'approved' and 'changes_requested' (matching GitHub API terminology)",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Verdikt-Validierung (nur die zwei Werte)' and \u00a72.6: 'verdict \u2208 {approved, changes_requested}'"
+    },
+    {
+      "id": "D-002",
+      "topic": "gh flags per verdict",
+      "decision": "approved \u2192 gh pr review --approve; changes_requested \u2192 gh pr review --request-changes --body",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'gh pr review <n> --approve bzw. --request-changes --body \u2026'"
+    },
+    {
+      "id": "D-003",
+      "topic": "Existing subcommand dispatch",
+      "decision": "submit-review subcommand uses the existing dispatch in cmd/golemic/main.go",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "main.go already lists submit-review in knownCommands"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "cmd/golemic/main.go",
+      "symbol": "knownCommands",
+      "location": "lines 15-22",
+      "finding": "submit-review is already listed as a known command with description 'Submit a review (not implemented)' and dispatches to 'not implemented' path",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

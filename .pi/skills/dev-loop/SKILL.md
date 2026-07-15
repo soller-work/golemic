@@ -1,15 +1,31 @@
 ---
 name: dev-loop
-description: Manual dev+review loop for golemic backlog items. Use when the user says "start dev loop", asks to work on a backlog item (I0.x, I1.x, ...), or wants the dev/reviewer subagents driven through implement→review→iterate until approved.
+description: Manual dev+review loop for golemic backlog issues. Use when the user says "start dev loop", asks to work on a backlog issue (docs/backlog/*.json, slice IDs like I1.x), or wants the dev/reviewer subagents driven through implement→review→iterate until approved.
 ---
 
 # Golemic Dev Loop (manual)
 
 ## Purpose
 
-Interim substitute for the Iteration-1 runner. Drives one backlog item from
-`docs/backlog.md` through implement → review → iterate until the reviewer
+Interim substitute for the Iteration-1 runner. Drives one backlog issue from
+`docs/backlog/` through implement → review → iterate until the reviewer
 approves. Once golemic self-hosts (post-I1.11), this skill becomes redundant.
+
+## Selecting the issue
+
+Open issues are implementation-slice JSON files (grill-me schema) at
+`docs/backlog/NNN_<slug>.json`. The numeric prefix is the processing order.
+
+Unless the user names a specific issue, pick the next one:
+
+```bash
+python3 .pi/skills/dev-loop/scripts/next_issue.py
+```
+
+It prints the file path, `slice_id`, `title`, and `readiness`. If `readiness`
+is not `ready`, stop and escalate to the maintainer instead of starting the
+loop. Read the full JSON before briefing the dev — it is the authoritative
+spec (scope, business rules, interfaces, acceptance scenarios, quality gates).
 
 ## Language
 
@@ -33,23 +49,25 @@ the maintainer with the reviewer's outstanding findings.
 ### Round 1 — brief the dev
 
 Task must contain, in this order:
-1. **Backlog ID + one-line goal** (e.g. `I0.4 — golemic preflight: checks + scaffolding`).
-2. **Spec pointers**: exact §§ in `docs/architecture.md` and the section in `docs/backlog.md`. Instruct the agent to read them before starting.
-3. **What already exists**: previously completed items the new work builds on, with file paths.
-4. **Scope**: numbered list, verbatim from the backlog item, augmented with any concrete decisions already agreed with the maintainer (e.g. "use `embed.FS` for templates").
-5. **Definition of Done**: `go build ./... && go vet ./... && go test -count=1 ./...` green; external commands only behind injectable interfaces (§2.12); no overwriting of human-edited files; whatever else the backlog item names.
-6. **Out of scope**: verbatim from the backlog item.
-7. **Report format**: what changed, how verified, remaining risks.
+1. **Slice ID + one-line goal** (e.g. `I1.1 — event log: JSONL writer/reader + env-var contract`), taken from `slice_id` and `title`.
+2. **Spec pointers**: the issue file path (`docs/backlog/NNN_<slug>.json`) and the architecture §§ it references (see `implementation_context` / `decision_log`). Instruct the agent to read the full JSON and those §§ before starting.
+3. **What already exists**: previously completed items the new work builds on, with file paths (cross-check `codebase_evidence` in the JSON).
+4. **Scope**: from the JSON — `scope`, `business_rules`, `interfaces`/`process_steps`/`integration_contracts`, `state_changes`, augmented with any concrete decisions already agreed with the maintainer.
+5. **AC→test mapping**: every `AC-*` in `acceptance_scenarios` must be covered by at least one named automated test. The dev's report must include the mapping (AC ID → test function).
+6. **Definition of Done**: everything in `quality.definition_of_done` and `quality.quality_commands`; at minimum `go build ./... && go vet ./... && go test -count=1 ./...` green; external commands only behind injectable interfaces (§2.12); no overwriting of human-edited files.
+7. **Out of scope**: verbatim from `scope.out_of_scope`.
+8. **Report format**: what changed, how verified, AC→test mapping, remaining risks.
 
 Save the returned `sessionId` — you will need it for round 2.
 
 ### Between rounds — brief the reviewer
 
 Task must contain:
-1. **Backlog ID + spec pointers** (same as dev brief).
+1. **Slice ID + spec pointers** (same as dev brief, including the issue JSON path).
 2. **File list**: new and modified files (from `git status`).
-3. **Review focus**: acceptance-criteria checklist from the backlog item, plus explicit edge cases and any claims from the dev's report that deserve scrutiny (e.g. "the claimed bugfix in X — verify it is not scope creep").
-4. **Verdict contract**: severity-tagged findings (`blocker`/`major`/`minor`/`nit` or `P1`–`P4`) with `file:line` refs and concrete fix suggestions. Final line must be `VERDICT: APPROVED` or `VERDICT: CHANGES_REQUESTED`.
+3. **Review focus**: the `acceptance_scenarios` from the issue JSON as a checklist, plus explicit edge cases and any claims from the dev's report that deserve scrutiny (e.g. "the claimed bugfix in X — verify it is not scope creep").
+4. **AC coverage check (blocker-level)**: verify the dev's AC→test mapping — every `AC-*` must trace to a real, meaningful automated test. A missing or hollow test for any AC is a P1/P2 finding.
+5. **Verdict contract**: severity-tagged findings (`blocker`/`major`/`minor`/`nit` or `P1`–`P4`) with `file:line` refs and concrete fix suggestions. Final line must be `VERDICT: APPROVED` or `VERDICT: CHANGES_REQUESTED`.
 
 Reviewer sessions can be reused across rounds — save the `sessionId`.
 
@@ -75,6 +93,9 @@ Then re-run the reviewer in the same session with a short delta brief:
 ## Handling artifacts
 
 After approval, before reporting done:
+- **Delete the issue file** (`docs/backlog/NNN_<slug>.json`). The deletion goes
+  into the **same commit** as the implementation — issue implemented = issue
+  gone, no in-between state.
 - `git status` — check for stray files (manual test runs, `.golemic/` created during preflight testing, etc.). Remove or `.gitignore` them.
 - Do NOT commit without maintainer approval, and do NOT push without explicit maintainer approval (per global orchestrator rules — pushes are shared-state actions).
 

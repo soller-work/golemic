@@ -1,0 +1,697 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "process",
+  "slice_id": "i1-10",
+  "title": "Loop Orchestration: Outcome Determination + run_finished",
+  "summary": "Full run orchestration in golemic run --issue. Executes the sequence: collision check (I1.3) \u2192 dev worktree (I1.4) \u2192 dev prompt+agent (I1.5/I1.6) \u2192 read event log for pr_opened \u2192 reviewer worktree (I1.8) \u2192 reviewer prompt+agent (I1.5/I1.6) \u2192 dirty check (I1.8) \u2192 read event log for review_submitted \u2192 determine outcome (success, dev_failed, review_failed, timeout, aborted) \u2192 write run_finished \u2192 cleanup on success. Runner exit 0 only on success; otherwise != 0 with run directory path.",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Human maintainer (or polling loop)",
+    "goal": "Run one complete round of dev\u2192PR\u2192review and get a deterministic outcome",
+    "business_value": "Fully automated one-round loop: the runner drives the entire dev\u2192review pipeline, records every step in the event log, and exits with a clear outcome. The maintainer (or future loop) knows exactly what happened.",
+    "trigger": "golemic run --issue N after collision check passes (I1.3)",
+    "success_outcome": "A dev commits, pushes, opens a PR; a reviewer reviews it; the outcome is success; worktrees are cleaned up; exit code 0"
+  },
+  "scope": {
+    "in_scope": [
+      "Full orchestration in run --issue: I1.3 \u2192 I1.4 \u2192 I1.5/I1.6 (Dev) \u2192 read pr_opened \u2192 I1.8 \u2192 I1.5/I1.6 (Reviewer) \u2192 dirty check \u2192 read review_submitted \u2192 outcome determination",
+      "Outcome enum: success, dev_failed, review_failed, timeout, aborted",
+      "run_finished event with outcome as last event in all paths",
+      "Cleanup (worktree remove) only on success",
+      "Runner exit 0 only on success; exit != 0 with message and runs/<runId>/ path otherwise",
+      "Outcome rules: missing pr_opened \u2192 dev_failed; missing review_submitted or dirty \u2192 review_failed; role timeout \u2192 timeout; collision \u2192 aborted; otherwise success"
+    ],
+    "out_of_scope": [
+      "Pingpong (multiple rounds) \u2014 planned in Iteration 2",
+      "Escalation via PR comment \u2014 planned in Iteration 2",
+      "Recovery from event log \u2014 planned in a subsequent iteration"
+    ]
+  },
+  "preconditions": [
+    "All I1 items (1-9) are implemented",
+    "Event log (I1.1) is available for reading and writing",
+    "Worktree package (I1.4, I1.8) is available",
+    "Prompt rendering (I1.5) is available",
+    "Agent executor (I1.6) is available"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "run_finished is always the last event in the log, even in error paths",
+      "applies_when": "The run terminates (success or failure)",
+      "outcome": "run_finished event is written after all other events, with the outcome field set to the final outcome"
+    },
+    {
+      "id": "BR-002",
+      "rule": "If pr_opened event is missing or malformed after the dev run, outcome is dev_failed",
+      "applies_when": "After the dev agent finishes",
+      "outcome": "Read event log for pr_opened; if not found or malformed \u2192 dev_failed, skip reviewer"
+    },
+    {
+      "id": "BR-003",
+      "rule": "If review_submitted event is missing or malformed after the reviewer run, or dirty check fails, outcome is review_failed",
+      "applies_when": "After the reviewer agent finishes",
+      "outcome": "Read event log for review_submitted; if not found or malformed, or dirty check was dirty \u2192 review_failed"
+    },
+    {
+      "id": "BR-004",
+      "rule": "If the dev agent times out, outcome is timeout",
+      "applies_when": "Dev agent execution exceeds Config.TimeoutMinutes",
+      "outcome": "timeout outcome; skip reviewer; write run_finished with timeout"
+    },
+    {
+      "id": "BR-005",
+      "rule": "If the reviewer agent times out, outcome is timeout",
+      "applies_when": "Reviewer agent execution exceeds Config.TimeoutMinutes",
+      "outcome": "timeout outcome; write run_finished with timeout"
+    },
+    {
+      "id": "BR-006",
+      "rule": "Cleanup (worktree removal) is called only for outcome success",
+      "applies_when": "Outcome is determined",
+      "outcome": "If outcome is success, call worktree cleanup for both dev and reviewer worktrees. Otherwise, leave worktrees in place for debugging."
+    },
+    {
+      "id": "BR-007",
+      "rule": "Runner exit code is 0 only for outcome success; all other outcomes exit != 0",
+      "applies_when": "Run terminates",
+      "outcome": "Exit 0 for success; exit != 0 for all other outcomes, with a message and the path to runs/<runId>/"
+    },
+    {
+      "id": "BR-008",
+      "rule": "If the collision check aborts (I1.3), outcome is aborted and run_finished is written",
+      "applies_when": "Before any worktree is created",
+      "outcome": "run_finished with outcome aborted is written to the event log; exit != 0"
+    }
+  ],
+  "decision_tables": [
+    {
+      "id": "DT-001",
+      "name": "Run outcome determination",
+      "inputs": [
+        "Collision detected",
+        "Dev agent outcome",
+        "pr_opened event exists and valid",
+        "Reviewer agent outcome",
+        "review_submitted event exists and valid",
+        "Dirty check passed"
+      ],
+      "rows": [
+        {
+          "when": {
+            "Collision detected": "true",
+            "Dev agent outcome": "N/A",
+            "pr_opened event exists and valid": "N/A",
+            "Reviewer agent outcome": "N/A",
+            "review_submitted event exists and valid": "N/A",
+            "Dirty check passed": "N/A"
+          },
+          "then": {
+            "result": "aborted"
+          },
+          "rule_ids": [
+            "BR-008"
+          ]
+        },
+        {
+          "when": {
+            "Collision detected": "false",
+            "Dev agent outcome": "timeout",
+            "pr_opened event exists and valid": "N/A",
+            "Reviewer agent outcome": "N/A",
+            "review_submitted event exists and valid": "N/A",
+            "Dirty check passed": "N/A"
+          },
+          "then": {
+            "result": "timeout"
+          },
+          "rule_ids": [
+            "BR-004"
+          ]
+        },
+        {
+          "when": {
+            "Collision detected": "false",
+            "Dev agent outcome": "completed",
+            "pr_opened event exists and valid": "false",
+            "Reviewer agent outcome": "N/A",
+            "review_submitted event exists and valid": "N/A",
+            "Dirty check passed": "N/A"
+          },
+          "then": {
+            "result": "dev_failed"
+          },
+          "rule_ids": [
+            "BR-002"
+          ]
+        },
+        {
+          "when": {
+            "Collision detected": "false",
+            "Dev agent outcome": "completed",
+            "pr_opened event exists and valid": "true",
+            "Reviewer agent outcome": "timeout",
+            "review_submitted event exists and valid": "N/A",
+            "Dirty check passed": "N/A"
+          },
+          "then": {
+            "result": "timeout"
+          },
+          "rule_ids": [
+            "BR-005"
+          ]
+        },
+        {
+          "when": {
+            "Collision detected": "false",
+            "Dev agent outcome": "completed",
+            "pr_opened event exists and valid": "true",
+            "Reviewer agent outcome": "completed",
+            "review_submitted event exists and valid": "false",
+            "Dirty check passed": "any"
+          },
+          "then": {
+            "result": "review_failed"
+          },
+          "rule_ids": [
+            "BR-003"
+          ]
+        },
+        {
+          "when": {
+            "Collision detected": "false",
+            "Dev agent outcome": "completed",
+            "pr_opened event exists and valid": "true",
+            "Reviewer agent outcome": "completed",
+            "review_submitted event exists and valid": "true",
+            "Dirty check passed": "false"
+          },
+          "then": {
+            "result": "review_failed"
+          },
+          "rule_ids": [
+            "BR-003"
+          ]
+        },
+        {
+          "when": {
+            "Collision detected": "false",
+            "Dev agent outcome": "completed",
+            "pr_opened event exists and valid": "true",
+            "Reviewer agent outcome": "completed",
+            "review_submitted event exists and valid": "true",
+            "Dirty check passed": "true"
+          },
+          "then": {
+            "result": "success"
+          },
+          "rule_ids": [
+            "BR-006",
+            "BR-007"
+          ]
+        }
+      ],
+      "default_outcome": "dev_failed (unexpected state)"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "cli",
+      "name": "golemic run --issue",
+      "operation": "golemic run --issue N (full orchestration)",
+      "inputs": [
+        {
+          "name": "--issue",
+          "type": "int",
+          "required": true,
+          "constraints": [
+            "Must be a positive integer"
+          ],
+          "source": "CLI flag"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Outcome is success",
+          "status": "exit 0",
+          "body": "run_finished event with outcome success, worktrees cleaned up"
+        },
+        {
+          "condition": "Outcome is not success",
+          "status": "exit != 0",
+          "body": "run_finished event with outcome, runs/<runId>/ path printed, worktrees left in place"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Config load fails",
+          "code": "CONFIG_LOAD_FAILED",
+          "status": "exit != 0",
+          "message": "Failed to load config: <error>"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [
+    {
+      "id": "PS-001",
+      "order": 1,
+      "name": "Collision check and run start",
+      "trigger": "golemic run --issue N is invoked",
+      "action": "Resolve host repo, load config/credentials, create runId, write run_started, load issue, check collisions",
+      "state_before": "No run state",
+      "state_after": "run_started written, no collision, issue loaded",
+      "outcome": "Proceed to PS-002 or abort",
+      "failure_behavior": "On collision: write run_finished with outcome aborted, exit != 0",
+      "terminal": false
+    },
+    {
+      "id": "PS-002",
+      "order": 2,
+      "name": "Create dev worktree",
+      "trigger": "Collision check passed",
+      "action": "Create dev worktree from origin/main, set git config, write worktree_created event",
+      "state_before": "No dev worktree",
+      "state_after": "Dev worktree exists at ~/.golemic/<project>/worktrees/issue-<N>",
+      "outcome": "Proceed to PS-003",
+      "failure_behavior": "Error: dev_failed, write run_finished, skip to cleanup",
+      "terminal": false
+    },
+    {
+      "id": "PS-003",
+      "order": 3,
+      "name": "Run dev agent",
+      "trigger": "Dev worktree created",
+      "action": "Render dev prompt (I1.5), execute dev agent (I1.6) with timeout, capture transcript",
+      "state_before": "Dev worktree exists, no agent output",
+      "state_after": "Dev agent finished (or timed out), transcript files written",
+      "outcome": "Determine next step based on pr_opened event presence",
+      "failure_behavior": "Timeout \u2192 outcome timeout, write run_finished, skip to exit. Event missing \u2192 dev_failed.",
+      "terminal": false
+    },
+    {
+      "id": "PS-004",
+      "order": 4,
+      "name": "Create reviewer worktree",
+      "trigger": "pr_opened event exists and is valid",
+      "action": "Create reviewer worktree from origin/golemic/issue-<N>, set git config, write worktree_created event (role: reviewer)",
+      "state_before": "PR exists, no reviewer worktree",
+      "state_after": "Reviewer worktree exists at ~/.golemic/<project>/worktrees/issue-<N>-review",
+      "outcome": "Proceed to PS-005",
+      "failure_behavior": "Error: review_failed, write run_finished, skip to exit",
+      "terminal": false
+    },
+    {
+      "id": "PS-005",
+      "order": 5,
+      "name": "Run reviewer agent",
+      "trigger": "Reviewer worktree created",
+      "action": "Render reviewer prompt (I1.5), execute reviewer agent (I1.6) with timeout, capture transcript",
+      "state_before": "Reviewer worktree exists, no agent output",
+      "state_after": "Reviewer agent finished (or timed out), transcript files written",
+      "outcome": "Determine outcome based on review_submitted event and dirty check",
+      "failure_behavior": "Timeout \u2192 outcome timeout. Event missing or dirty \u2192 review_failed.",
+      "terminal": false
+    },
+    {
+      "id": "PS-006",
+      "order": 6,
+      "name": "Determine outcome and clean up",
+      "trigger": "All steps completed or any failure occurred",
+      "action": "Write run_finished with final outcome, cleanup worktrees on success, print run path on failure",
+      "state_before": "All events written up to the last step",
+      "state_after": "run_finished written, worktrees cleaned up (if success) or left in place (if failure)",
+      "outcome": "Exit 0 for success, exit != 0 otherwise",
+      "failure_behavior": "N/A (terminal step)",
+      "terminal": true
+    }
+  ],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "Event log",
+      "precondition": "Run is terminating",
+      "changes": [
+        {
+          "field": "content",
+          "operation": "append",
+          "value_source": "run_finished event with outcome field"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "File system (worktree directories)",
+      "precondition": "Outcome is success",
+      "changes": [
+        {
+          "field": "dev worktree directory",
+          "operation": "delete",
+          "value_source": "worktree.Cleanup"
+        },
+        {
+          "field": "reviewer worktree directory",
+          "operation": "delete",
+          "value_source": "worktree.Cleanup"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "N/A (orchestrator uses previously loaded credentials)",
+    "authorization_rules": [
+      "Only the runner process may invoke the full orchestration (internal package, CLI entry point)"
+    ],
+    "data_classification": "Run metadata and outcomes",
+    "audit_requirements": [
+      "run_finished event records the final outcome",
+      "Full event log and transcripts are available under runs/<runId>/"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/runner (I1.3 orchestration)"
+    ],
+    "integration_points": [
+      "internal/eventlog (I1.1)",
+      "internal/worktree (I1.4, I1.8)",
+      "internal/prompt (I1.5)",
+      "internal/agent (I1.6)"
+    ],
+    "architecture_constraints": [
+      "run_finished must always be the last event",
+      "Cleanup only on success",
+      "Exit code 0 only on success"
+    ],
+    "allowed_changes": [
+      "Extend the runner orchestration to include all steps",
+      "Add outcome determination logic"
+    ],
+    "forbidden_changes": [
+      "Do not skip cleanup on success",
+      "Do not write run_finished before the final outcome is determined",
+      "Do not exit 0 on failure outcomes"
+    ],
+    "dependencies": [
+      "internal/eventlog (I1.1)",
+      "internal/worktree (I1.4, I1.8)",
+      "internal/prompt (I1.5)",
+      "internal/agent (I1.6)",
+      "internal/config (I0.2)",
+      "internal/credentials (I0.3)"
+    ],
+    "migration_strategy": "Extension of existing runner package; no migration needed",
+    "consistency_and_concurrency": "Single-threaded; each step runs sequentially. The event log provides the authoritative record of what happened."
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Happy path: dev \u2192 PR \u2192 review \u2192 success",
+      "given": [
+        "All fakes return success",
+        "Dev agent writes pr_opened event",
+        "Reviewer agent writes review_submitted event with valid verdict",
+        "Dirty check returns clean"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "run_finished event is written with outcome success",
+        "Dev and reviewer worktrees are cleaned up",
+        "Exit code is 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-006",
+        "BR-007",
+        "DT-001",
+        "PS-001",
+        "PS-002",
+        "PS-003",
+        "PS-004",
+        "PS-005",
+        "PS-006",
+        "SC-001",
+        "SC-002"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Missing pr_opened \u2192 dev_failed",
+      "given": [
+        "All fakes return success",
+        "Dev agent does NOT write pr_opened event"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "run_finished event is written with outcome dev_failed",
+        "Reviewer worktree is NOT created",
+        "Exit code is != 0",
+        "Error message includes runs/<runId>/ path"
+      ],
+      "traces_to": [
+        "BR-002",
+        "DT-001",
+        "PS-003",
+        "PS-006"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Missing review_submitted \u2192 review_failed",
+      "given": [
+        "Dev agent writes pr_opened",
+        "Reviewer agent does NOT write review_submitted event"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "run_finished event is written with outcome review_failed",
+        "Worktrees are NOT cleaned up",
+        "Exit code is != 0",
+        "Error message includes runs/<runId>/ path"
+      ],
+      "traces_to": [
+        "BR-003",
+        "DT-001",
+        "PS-005",
+        "PS-006"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "Dev agent timeout \u2192 timeout outcome",
+      "given": [
+        "Dev agent is configured with a very short timeout",
+        "Fake agent does not complete in time"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "run_finished event is written with outcome timeout",
+        "Reviewer is NOT started",
+        "Exit code is != 0"
+      ],
+      "traces_to": [
+        "BR-004",
+        "DT-001",
+        "PS-003",
+        "PS-006"
+      ]
+    },
+    {
+      "id": "AC-005",
+      "title": "Collision \u2192 aborted outcome",
+      "given": [
+        "Worktree already exists for the issue"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "run_finished event is written with outcome aborted",
+        "No worktree is created (already existed)",
+        "Exit code is != 0"
+      ],
+      "traces_to": [
+        "BR-008",
+        "DT-001",
+        "PS-001",
+        "PS-006"
+      ]
+    },
+    {
+      "id": "AC-006",
+      "title": "run_finished is always the last event",
+      "given": [
+        "Any outcome path (success, failure, timeout, aborted)"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked and terminates"
+      ],
+      "then": [
+        "The last event in the event log is always run_finished",
+        "No event is written after run_finished"
+      ],
+      "traces_to": [
+        "BR-001",
+        "SC-001"
+      ]
+    },
+    {
+      "id": "AC-007",
+      "title": "Reviewer timeout is handled correctly",
+      "given": [
+        "Dev agent succeeds, pr_opened exists",
+        "Reviewer agent is configured with a very short timeout"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "run_finished event is written with outcome timeout",
+        "Worktrees are NOT cleaned up"
+      ],
+      "traces_to": [
+        "BR-005",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Happy path: success outcome with cleanup",
+      "Missing pr_opened \u2192 dev_failed",
+      "Missing review_submitted \u2192 review_failed",
+      "Dirty check fails \u2192 review_failed",
+      "Dev agent timeout \u2192 timeout",
+      "Reviewer agent timeout \u2192 timeout",
+      "Collision \u2192 aborted",
+      "run_finished is always the last event",
+      "Exit code is 0 only for success",
+      "Worktrees cleaned up only on success",
+      "Error message includes runs/<runId>/ path on failure"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./internal/runner/... ./cmd/golemic/..."
+    ],
+    "non_functional_requirements": [
+      "All external commands go through injectable interfaces (Executor via preflight package)",
+      "Table-driven tests cover all outcome paths"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "go build ./... && go vet ./... && go test -count=1 ./... is green",
+      "All outcomes (success, dev_failed, review_failed, timeout, aborted) are implemented",
+      "run_finished is always the last event in the log",
+      "Cleanup only on success"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Outcome determination rules",
+      "decision": "Outcome is determined by event presence, dirty check, and timeout, not by agent exit code",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Das Event ist die Wahrheit, der Exit-Code nur Log-Information' and \u00a72.11"
+    },
+    {
+      "id": "D-002",
+      "topic": "Cleanup scope",
+      "decision": "Worktrees are cleaned up only on success outcome; left in place for debugging on failure",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in \u00a72.11: 'Worktrees bleiben bei Fehlern stehen (Debugging); Cleanup nur bei success'"
+    },
+    {
+      "id": "D-003",
+      "topic": "Exit code convention",
+      "decision": "Exit 0 only for success; all other outcomes exit != 0 with run directory path",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Runner-Exit 0 nur bei success, sonst \u2260 0 mit Meldung + Pfad zu runs/<runId>/'"
+    },
+    {
+      "id": "D-004",
+      "topic": "Event log as authoritative source",
+      "decision": "Loop decisions are based on events in the log, not on agent exit codes or stdout parsing",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in \u00a72.6: 'Das Event-Log ist die interne Wahrheit' and \u00a72.2: 'nur Exit-Code und Timeout auswerten'"
+    },
+    {
+      "id": "D-005",
+      "topic": "Executor interface for orchestration",
+      "decision": "The orchestration uses the Executor interface for all external commands (gh, git, pi)",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "internal/preflight defines the injectable Executor interface; all external commands in the loop go through it"
+    },
+    {
+      "id": "D-006",
+      "topic": "Subcommand dispatch for run",
+      "decision": "The run subcommand follows the existing dispatch pattern in main.go",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "main.go dispatches subcommands by name; run will get a dedicated handler similar to preflight"
+    },
+    {
+      "id": "D-007",
+      "topic": "Config-driven timeout and model",
+      "decision": "Timeout and model are read from the Config struct",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-003"
+      ],
+      "rationale": "Config.TimeoutMinutes and Config.Models are used for timeout enforcement and model selection in agent execution"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/preflight/preflight.go",
+      "symbol": "Executor interface",
+      "location": "lines 48-56",
+      "finding": "Executor interface with Run and RunWithEnv methods exists; all external commands in the orchestration go through this interface",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "cmd/golemic/main.go",
+      "symbol": "run function",
+      "location": "lines 30-76",
+      "finding": "Subcommand dispatch pattern with preflight as the only implemented subcommand; run is stubbed with 'not implemented'",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "internal/config/config.go",
+      "symbol": "Config struct",
+      "location": "lines 12-20",
+      "finding": "Config struct with TimeoutMinutes (default 30) and Models fields exists; orchestration reads these for timeout and model selection",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

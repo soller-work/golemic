@@ -101,7 +101,17 @@ Do not use `ready` merely because the user wants to stop. If required informatio
 
 ### 5. Produce the artifact
 
-Create exactly one JSON document named `implementation-slice.json`. Follow `schema.json` exactly. Use JSON values, not Markdown, Gherkin text blocks, comments, or prose outside defined fields.
+Create exactly one JSON document. Its target path is the next free backlog
+slot — compute it, do not guess:
+
+```bash
+python3 scripts/next_backlog_slot.py "<slice title>"
+# prints e.g. docs/backlog/012_event-log-writer.json
+```
+
+(Run from the repo root, or pass `--dir <path-to-backlog>`. The numeric prefix
+is the processing order for the dev loop; gaps from completed issues are
+expected.) Follow `schema.json` exactly. Use JSON values, not Markdown, Gherkin text blocks, comments, or prose outside defined fields.
 
 Requirements:
 
@@ -117,7 +127,7 @@ Requirements:
 Run from the skill directory or use equivalent absolute paths:
 
 ```bash
-python scripts/validate_slice.py schema.json implementation-slice.json
+python scripts/validate_slice.py schema.json <target-path-from-step-5>
 ```
 
 If validation fails, repair the JSON and rerun the validator. Do not present an invalid artifact as complete.
@@ -134,6 +144,6 @@ The validator performs:
 
 ### 7. Finish
 
-Present the validated `implementation-slice.json` as the sole source of truth and report whether validation passed.
+Present the validated backlog issue file (`docs/backlog/NNN_<slug>.json`) as the sole source of truth and report whether validation passed. It is now an open issue that the dev-loop skill will pick up in prefix order.
 
-Do not edit production code. Do not silently convert the result into loose issues. If an issue workflow is requested, derive issues from the validated JSON without changing its decisions.
+Do not edit production code. Do not silently convert the result into loose issues.

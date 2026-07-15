@@ -1,0 +1,490 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "command",
+  "slice_id": "i1-5",
+  "title": "Prompt Rendering: Templates + Guidelines Injection",
+  "summary": "Complete, run-specific prompts for dev and reviewer roles. Package internal/prompt provides static role prompts (prompts/dev.md, prompts/reviewer.md) as system prompts, Go templates for user prompts that inject issue context, guidelines, verify_command, and explicit step lists. Missing guidelines files cause a fail-closed error.",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Golemic runner (Go code)",
+    "goal": "Render a complete, self-contained prompt for a role (dev or reviewer) with all run-specific facts injected",
+    "business_value": "Eliminates implicit context: agents never need to discover issue details, branch names, or guidelines on their own. The prompt contains everything they need, reducing agent errors and gh round-trips.",
+    "trigger": "Runner is about to invoke a role headless (I1.6) and needs the prompt text",
+    "success_outcome": "A rendered prompt string containing all run-specific facts (issue, branch, verify_command, guidelines) is returned, ready to be passed to the agent CLI"
+  },
+  "scope": {
+    "in_scope": [
+      "Static role prompts: prompts/dev.md (system prompt for dev), prompts/reviewer.md (system prompt for reviewer)",
+      "Go templates for user prompts: dev and reviewer templates",
+      "Dev template: issue number, title, body inline, branch name, verify_command, guidelines/dev.md content, explicit step list ending with golemic open-pr call (only after verify_command exit 0)",
+      "Reviewer template: PR number, issue inline, verify_command, guidelines/reviewer.md content, step list (diff \u2192 verify_command \u2192 review \u2192 golemic submit-review)",
+      "Missing guidelines file \u2192 error (fail-closed, not empty string)"
+    ],
+    "out_of_scope": [
+      "Headless agent invocation (I1.6)",
+      "Prompt file storage beyond the static prompts"
+    ]
+  },
+  "preconditions": [
+    "prompts/dev.md and prompts/reviewer.md exist in the prompts/ directory",
+    "Guidelines files exist under .golemic/guidelines/ (must be filled by human; missing \u2192 error)"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "The dev user prompt must include the full issue body inline (no gh round-trip needed by the agent)",
+      "applies_when": "Rendering the dev user prompt",
+      "outcome": "Issue number, title, and body are injected verbatim into the template"
+    },
+    {
+      "id": "BR-002",
+      "rule": "The dev step list must end with the literal golemic open-pr command and the rule that it may only be called after verify_command exits 0",
+      "applies_when": "Rendering the dev user prompt",
+      "outcome": "The step list includes 'Run verify_command' and 'Only after verify_command exits 0, call golemic open-pr --title ... --body ...'"
+    },
+    {
+      "id": "BR-003",
+      "rule": "The reviewer user prompt must include the PR number and the full issue body inline",
+      "applies_when": "Rendering the reviewer user prompt",
+      "outcome": "PR number and issue are injected verbatim"
+    },
+    {
+      "id": "BR-004",
+      "rule": "The reviewer step list must end with exactly one golemic submit-review call",
+      "applies_when": "Rendering the reviewer user prompt",
+      "outcome": "The step list includes 'Review and call golemic submit-review --verdict approved|changes_requested --body ... --pr <N>'"
+    },
+    {
+      "id": "BR-005",
+      "rule": "Missing guidelines file (dev.md or reviewer.md under .golemic/guidelines/) is a hard error, not a silent empty string",
+      "applies_when": "Rendering any prompt that requires guidelines injection",
+      "outcome": "Error: 'guidelines file not found: <path>'"
+    },
+    {
+      "id": "BR-006",
+      "rule": "The system prompt (prompts/dev.md or prompts/reviewer.md) is loaded from the embedded prompts/ directory and passed to pi as --append-system-prompt @<file>",
+      "applies_when": "Rendering prompts for a role",
+      "outcome": "System prompt file path is returned alongside the user prompt text"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "Prompt Renderer",
+      "operation": "RenderDev(issue, branch, verifyCommand, guidelinesPath) (systemPromptPath, userPrompt string, error)",
+      "inputs": [
+        {
+          "name": "issue",
+          "type": "Issue{Number, Title, Body}",
+          "required": true,
+          "constraints": [
+            "Number must be positive",
+            "Title and Body must be non-empty"
+          ],
+          "source": "Runner (from gh issue view)"
+        },
+        {
+          "name": "branch",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be the full branch name including remote prefix"
+          ],
+          "source": "Runner (from worktree creation)"
+        },
+        {
+          "name": "verifyCommand",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be non-empty (required by config validation)"
+          ],
+          "source": "Config (I0.2)"
+        },
+        {
+          "name": "guidelinesPath",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be an existing file path"
+          ],
+          "source": "Runner (from .golemic/guidelines/)"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "All templates and guidelines load successfully",
+          "status": "nil error",
+          "body": "systemPromptPath (path to prompts/dev.md) and userPrompt (rendered template string)"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Guidelines file not found",
+          "code": "GUIDELINES_NOT_FOUND",
+          "status": "error",
+          "message": "Guidelines file not found: <path>"
+        },
+        {
+          "condition": "Template file not found",
+          "code": "TEMPLATE_NOT_FOUND",
+          "status": "error",
+          "message": "Prompt template file not found: <path>"
+        },
+        {
+          "condition": "Template execution fails",
+          "code": "TEMPLATE_EXECUTION_FAILED",
+          "status": "error",
+          "message": "Failed to render prompt template: <error>"
+        }
+      ]
+    },
+    {
+      "id": "IF-002",
+      "kind": "internal_api",
+      "name": "Reviewer Prompt Renderer",
+      "operation": "RenderReviewer(prNumber, issue, verifyCommand, guidelinesPath) (systemPromptPath, userPrompt string, error)",
+      "inputs": [
+        {
+          "name": "prNumber",
+          "type": "int",
+          "required": true,
+          "constraints": [
+            "Must be a positive integer"
+          ],
+          "source": "Runner (from pr_opened event)"
+        },
+        {
+          "name": "issue",
+          "type": "Issue{Number, Title, Body}",
+          "required": true,
+          "constraints": [],
+          "source": "Runner (from gh issue view)"
+        },
+        {
+          "name": "verifyCommand",
+          "type": "string",
+          "required": true,
+          "constraints": [],
+          "source": "Config"
+        },
+        {
+          "name": "guidelinesPath",
+          "type": "string",
+          "required": true,
+          "constraints": [],
+          "source": "Runner"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "All templates and guidelines load successfully",
+          "status": "nil error",
+          "body": "systemPromptPath (path to prompts/reviewer.md) and userPrompt (rendered template string)"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Guidelines file not found",
+          "code": "GUIDELINES_NOT_FOUND",
+          "status": "error",
+          "message": "Guidelines file not found: <path>"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [
+    {
+      "id": "IC-001",
+      "external_system": "File system (prompts/ directory, .golemic/guidelines/ directory)",
+      "direction": "inbound",
+      "transport": "os.ReadFile",
+      "operation": "Read static prompt files and guidelines files",
+      "request_contract": "Path to file",
+      "response_contract": "File contents as string",
+      "idempotency": "Idempotent (read-only)",
+      "timeout": "N/A",
+      "retry_policy": "No retry",
+      "failure_mapping": "File not found \u2192 GUIDELINES_NOT_FOUND or TEMPLATE_NOT_FOUND",
+      "compatibility": "UTF-8 text files"
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "Rendered prompt string (in memory)",
+      "precondition": "All template inputs are valid and guidelines file exists",
+      "changes": [
+        {
+          "field": "user prompt string",
+          "operation": "create",
+          "value_source": "Go template execution with issue, branch, verify_command, guidelines content"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "N/A (prompt rendering is local file I/O)",
+    "authorization_rules": [
+      "Only the runner process may call the prompt renderer (internal package, no public API)"
+    ],
+    "data_classification": "Issue content and guidelines (project-specific information)",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/prompt",
+      "prompts/dev.md",
+      "prompts/reviewer.md"
+    ],
+    "integration_points": [
+      "os.ReadFile for guidelines and prompt files",
+      "text/template for Go template rendering"
+    ],
+    "architecture_constraints": [
+      "Static prompts (prompts/dev.md, prompts/reviewer.md) are embedded or loaded from known paths",
+      "Guidelines injection is mandatory; missing guidelines file is a hard error",
+      "Templates are defined in Go code, not in separate files (to avoid another file loading concern)"
+    ],
+    "allowed_changes": [
+      "Create internal/prompt package",
+      "Write prompts/dev.md and prompts/reviewer.md",
+      "Define Go templates for dev and reviewer user prompts"
+    ],
+    "forbidden_changes": [
+      "Do not silently substitute empty string for missing guidelines",
+      "Do not include the diff in the reviewer prompt (agent must fetch it via git/gh)"
+    ],
+    "dependencies": [
+      "Standard library: text/template, os, fmt, path/filepath"
+    ],
+    "migration_strategy": "New package; no migration needed",
+    "consistency_and_concurrency": "Single-threaded; no concurrency concerns"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Dev prompt contains all required facts verbatim",
+      "given": [
+        "A valid guidelines/dev.md file exists",
+        "Issue number 42, title 'Fix bug', body 'Details here'",
+        "Branch golemic/issue-42",
+        "verify_command is 'go test ./...'"
+      ],
+      "when": [
+        "RenderDev is called with the above inputs"
+      ],
+      "then": [
+        "The rendered user prompt contains the issue number 42",
+        "The rendered user prompt contains the title 'Fix bug'",
+        "The rendered user prompt contains the body 'Details here'",
+        "The rendered user prompt contains the branch name golemic/issue-42",
+        "The rendered user prompt contains the verify_command 'go test ./...'",
+        "The rendered user prompt contains the content of guidelines/dev.md",
+        "The rendered user prompt contains 'golemic open-pr' as the final step",
+        "The rendered user prompt states that open-pr is only allowed after verify_command exits 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Reviewer prompt contains all required facts verbatim",
+      "given": [
+        "A valid guidelines/reviewer.md file exists",
+        "PR number 123, issue 42 with title and body",
+        "verify_command is 'go test ./...'"
+      ],
+      "when": [
+        "RenderReviewer is called with the above inputs"
+      ],
+      "then": [
+        "The rendered user prompt contains the PR number 123",
+        "The rendered user prompt contains the issue number 42 and its title/body",
+        "The rendered user prompt contains the verify_command",
+        "The rendered user prompt contains the content of guidelines/reviewer.md",
+        "The rendered user prompt contains 'golemic submit-review' as the final step"
+      ],
+      "traces_to": [
+        "BR-003",
+        "BR-004",
+        "IF-002"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Missing guidelines file returns a named error",
+      "given": [
+        "guidelines/dev.md does not exist at the expected path"
+      ],
+      "when": [
+        "RenderDev is called"
+      ],
+      "then": [
+        "An error is returned",
+        "The error message mentions the missing file path",
+        "No prompt is rendered"
+      ],
+      "traces_to": [
+        "BR-005",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "System prompt file path is returned",
+      "given": [
+        "All template inputs are valid"
+      ],
+      "when": [
+        "RenderDev is called"
+      ],
+      "then": [
+        "The system prompt path (prompts/dev.md) is returned alongside the user prompt"
+      ],
+      "traces_to": [
+        "BR-006",
+        "IC-001"
+      ]
+    },
+    {
+      "id": "AC-005",
+      "title": "Prompt is rendered as a string in memory",
+      "given": [
+        "All template inputs are valid"
+      ],
+      "when": [
+        "The template is executed"
+      ],
+      "then": [
+        "A user prompt string is produced in memory with all injected facts"
+      ],
+      "traces_to": [
+        "SC-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Dev prompt golden file: contains all expected facts",
+      "Reviewer prompt golden file: contains all expected facts",
+      "Missing guidelines/dev.md returns error",
+      "Missing guidelines/reviewer.md returns error",
+      "Guidelines content is injected verbatim (not truncated or modified)",
+      "Step list in dev prompt ends with open-pr",
+      "Step list in reviewer prompt ends with submit-review",
+      "System prompt paths are returned correctly"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./internal/prompt/..."
+    ],
+    "non_functional_requirements": [
+      "Templates use Go text/template (no html/template escaping)",
+      "Guidelines content is injected as-is (raw markdown)"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "go build ./... && go vet ./... && go test -count=1 ./... is green",
+      "prompts/dev.md and prompts/reviewer.md exist",
+      "Golden file tests verify rendered prompt output"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Prompt architecture",
+      "decision": "Static role rules go into prompts/dev.md and prompts/reviewer.md (system prompt); run-specific facts go into Go-templated user prompts",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in \u00a72.10: 'die statischen Rollen-Regeln stehen im System-Prompt (prompts/dev.md / prompts/reviewer.md), alle lauf-spezifischen Fakten im gerenderten User-Prompt'"
+    },
+    {
+      "id": "D-002",
+      "topic": "Template engine",
+      "decision": "Use Go text/template for rendering user prompts",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Go-Templates f\u00fcr die User-Prompts'"
+    },
+    {
+      "id": "D-003",
+      "topic": "Fail-closed on missing guidelines",
+      "decision": "Missing guidelines file is a hard error, not a fallback to empty string",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Fehlende Guideline-Datei \u2192 Fehler (fail-closed), nicht leerer String'"
+    },
+    {
+      "id": "D-004",
+      "topic": "Existing prompts directory",
+      "decision": "System prompt files go into prompts/ directory (already exists with .gitkeep)",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "prompts/ directory exists and is the designated location for prompt files"
+    },
+    {
+      "id": "D-005",
+      "topic": "Guidelines template location",
+      "decision": "Guidelines templates are stored in internal/preflight/templates/guidelines/ and copied to .golemic/guidelines/ during preflight scaffolding",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "The preflight package embeds the guidelines templates; the prompt package reads them from .golemic/guidelines/ after scaffolding"
+    },
+    {
+      "id": "D-006",
+      "topic": "Reviewer guidelines template",
+      "decision": "Reviewer guidelines template exists at the same location as dev guidelines template",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-003"
+      ],
+      "rationale": "Both dev.md and reviewer.md templates are embedded in the preflight package at internal/preflight/templates/guidelines/"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "prompts/.gitkeep",
+      "symbol": "<directory>",
+      "location": "prompts/",
+      "finding": "prompts/ directory exists with a .gitkeep placeholder; ready for prompt files",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "internal/preflight/templates/guidelines/dev.md",
+      "symbol": "<embedded template>",
+      "location": "internal/preflight/templates/guidelines/dev.md",
+      "finding": "Guidelines template with required sections (Stack, Build/Test, Schranken) exists; populated by human after preflight scaffolding",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "internal/preflight/templates/guidelines/reviewer.md",
+      "symbol": "<embedded template>",
+      "location": "internal/preflight/templates/guidelines/reviewer.md",
+      "finding": "Reviewer guidelines template with required sections exists; populated by human after preflight scaffolding",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

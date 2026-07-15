@@ -1,0 +1,569 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "integration",
+  "slice_id": "i1-4",
+  "title": "Dev Worktree Lifecycle + git Identity",
+  "summary": "Isolated, correctly authenticated working directory for the dev role. Package internal/worktree provides git fetch origin, git worktree add from origin/main, local git config (env-based credential helper, user.name/user.email from bot identity), worktree_created event, and cleanup (git worktree remove + branch deletion).",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Golemic runner (Go code)",
+    "goal": "Create an isolated, correctly authenticated worktree for the dev role to implement the issue",
+    "business_value": "Ensures the dev works in a clean branch from main, with proper git identity (bot, not human), and no credentials stored on disk. The worktree is disposable and cleaned up on success.",
+    "trigger": "After collision check passes (I1.3), the runner calls worktree.Create for the dev role",
+    "success_outcome": "A git worktree exists at ~/.golemic/<project>/worktrees/issue-<N> with correct git config, branch golemic/issue-<N> based on origin/main, and a worktree_created event is written"
+  },
+  "scope": {
+    "in_scope": [
+      "Package internal/worktree",
+      "git fetch origin + git worktree add <path> -b golemic/issue-<N> origin/main",
+      "Local git config: env-based credential helper (reads GH_TOKEN, no token on disk)",
+      "Local git config: user.name and user.email from bot identity (via gh api user with the respective token)",
+      "worktree_created event with path, branch, baseSha, role fields",
+      "Cleanup function: git worktree remove + local branch deletion (called only on success)"
+    ],
+    "out_of_scope": [
+      "Reviewer worktree (I1.8)",
+      "Worktree content or file operations",
+      "Remote branch deletion (handled by PR close / cleanup)"
+    ]
+  },
+  "preconditions": [
+    "Collision check passed (I1.3)",
+    "Event log (I1.1) is available",
+    "Executor interface for git commands is injectable",
+    "Bot identity is known (via gh api user with the dev token)"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "The worktree is created from origin/main, not from any local branch",
+      "applies_when": "Creating a dev worktree",
+      "outcome": "git worktree add <path> -b golemic/issue-<N> origin/main; the new branch tracks origin/main"
+    },
+    {
+      "id": "BR-002",
+      "rule": "The credential helper is set to read GH_TOKEN from the environment, not from disk",
+      "applies_when": "Configuring the worktree's local git config",
+      "outcome": "git config credential.helper '!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f' set in the worktree's local config"
+    },
+    {
+      "id": "BR-003",
+      "rule": "user.name and user.email are set to the bot identity determined via gh api user with the dev token",
+      "applies_when": "Configuring the worktree's local git config",
+      "outcome": "git config user.name and user.email set to the login name from gh api user"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Cleanup (git worktree remove + local branch deletion) is called only on success outcome",
+      "applies_when": "I1.10 determines outcome is success",
+      "outcome": "git worktree remove <path> and git branch -D golemic/issue-<N> are executed"
+    },
+    {
+      "id": "BR-005",
+      "rule": "On any error during worktree creation, the worktree is not cleaned up (left for debugging)",
+      "applies_when": "Worktree creation fails mid-way",
+      "outcome": "Partial worktree may exist; left in place for manual cleanup"
+    },
+    {
+      "id": "BR-006",
+      "rule": "baseSha is captured from origin/main before the worktree is created",
+      "applies_when": "Creating a worktree",
+      "outcome": "git rev-parse origin/main is run to capture baseSha; stored in the worktree_created event"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "Worktree Creator",
+      "operation": "Create(repoRoot, golemicDir, runId, issueNumber, botLogin, executor, eventWriter) error",
+      "inputs": [
+        {
+          "name": "repoRoot",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be the git root of the host repo"
+          ],
+          "source": "Runner (I1.3)"
+        },
+        {
+          "name": "golemicDir",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be ~/.golemic/<project>/"
+          ],
+          "source": "Runner from config"
+        },
+        {
+          "name": "runId",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be a valid runId"
+          ],
+          "source": "Runner (I1.3)"
+        },
+        {
+          "name": "issueNumber",
+          "type": "int",
+          "required": true,
+          "constraints": [
+            "Must be a positive integer"
+          ],
+          "source": "CLI --issue flag"
+        },
+        {
+          "name": "botLogin",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Must be the GitHub login of the dev bot"
+          ],
+          "source": "gh api user with dev token"
+        },
+        {
+          "name": "executor",
+          "type": "preflight.Executor",
+          "required": true,
+          "constraints": [
+            "Must be injectable for testing"
+          ],
+          "source": "Runner"
+        },
+        {
+          "name": "eventWriter",
+          "type": "eventlog.Writer",
+          "required": true,
+          "constraints": [
+            "Must be a valid event log writer for this run"
+          ],
+          "source": "Runner"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Worktree created successfully",
+          "status": "nil error",
+          "body": "worktree_created event written to log"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "git fetch origin fails",
+          "code": "GIT_FETCH_FAILED",
+          "status": "error",
+          "message": "Failed to fetch origin: <error>"
+        },
+        {
+          "condition": "git worktree add fails",
+          "code": "GIT_WORKTREE_ADD_FAILED",
+          "status": "error",
+          "message": "Failed to create worktree: <error>"
+        },
+        {
+          "condition": "git config set fails",
+          "code": "GIT_CONFIG_FAILED",
+          "status": "error",
+          "message": "Failed to set git config: <error>"
+        }
+      ]
+    },
+    {
+      "id": "IF-002",
+      "kind": "internal_api",
+      "name": "Worktree Cleanup",
+      "operation": "Cleanup(repoRoot, golemicDir, issueNumber, executor) error",
+      "inputs": [
+        {
+          "name": "repoRoot",
+          "type": "string",
+          "required": true,
+          "constraints": [],
+          "source": "Runner"
+        },
+        {
+          "name": "golemicDir",
+          "type": "string",
+          "required": true,
+          "constraints": [],
+          "source": "Runner"
+        },
+        {
+          "name": "issueNumber",
+          "type": "int",
+          "required": true,
+          "constraints": [],
+          "source": "CLI --issue flag"
+        },
+        {
+          "name": "executor",
+          "type": "preflight.Executor",
+          "required": true,
+          "constraints": [],
+          "source": "Runner"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Cleanup succeeds",
+          "status": "nil error",
+          "body": "Worktree removed, local branch deleted"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "git worktree remove fails",
+          "code": "CLEANUP_REMOVE_FAILED",
+          "status": "error",
+          "message": "Failed to remove worktree: <error>"
+        },
+        {
+          "condition": "git branch -D fails",
+          "code": "CLEANUP_BRANCH_FAILED",
+          "status": "error",
+          "message": "Failed to delete local branch: <error>"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [
+    {
+      "id": "IC-001",
+      "external_system": "git (local repo + remote)",
+      "direction": "outbound",
+      "transport": "git commands via Executor.Run",
+      "operation": "git fetch origin",
+      "request_contract": "git fetch origin",
+      "response_contract": "stdout (empty on success)",
+      "idempotency": "Idempotent",
+      "timeout": "60 seconds",
+      "retry_policy": "No retry",
+      "failure_mapping": "Non-zero exit \u2192 GIT_FETCH_FAILED",
+      "compatibility": "git v2+"
+    },
+    {
+      "id": "IC-002",
+      "external_system": "git (local repo + remote)",
+      "direction": "outbound",
+      "transport": "git commands via Executor.Run",
+      "operation": "git worktree add <path> -b <branch> origin/main",
+      "request_contract": "git worktree add <path> -b golemic/issue-<N> origin/main",
+      "response_contract": "stdout confirming worktree creation",
+      "idempotency": "Not idempotent; fails if worktree already exists",
+      "timeout": "60 seconds",
+      "retry_policy": "No retry",
+      "failure_mapping": "Non-zero exit \u2192 GIT_WORKTREE_ADD_FAILED",
+      "compatibility": "git v2+ with worktree support"
+    },
+    {
+      "id": "IC-003",
+      "external_system": "git (local config)",
+      "direction": "outbound",
+      "transport": "git commands via Executor.Run",
+      "operation": "Set worktree-local git config: credential.helper, user.name, user.email",
+      "request_contract": "git config --local <key> <value> (run inside the worktree directory)",
+      "response_contract": "stdout (empty on success)",
+      "idempotency": "Idempotent (overwrites with same value)",
+      "timeout": "30 seconds",
+      "retry_policy": "No retry",
+      "failure_mapping": "Non-zero exit \u2192 GIT_CONFIG_FAILED",
+      "compatibility": "git v2+"
+    },
+    {
+      "id": "IC-004",
+      "external_system": "GitHub (via gh CLI)",
+      "direction": "outbound",
+      "transport": "gh api user via Executor.RunWithEnv with GH_TOKEN",
+      "operation": "Determine bot identity (login name)",
+      "request_contract": "gh api user",
+      "response_contract": "JSON with login field",
+      "idempotency": "Idempotent (read-only)",
+      "timeout": "30 seconds",
+      "retry_policy": "No retry",
+      "failure_mapping": "Non-zero exit \u2192 'failed to get bot identity'",
+      "compatibility": "gh CLI v2+"
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "File system (worktree directory)",
+      "precondition": "No worktree exists at ~/.golemic/<project>/worktrees/issue-<N>",
+      "changes": [
+        {
+          "field": "worktree directory",
+          "operation": "create",
+          "value_source": "git worktree add command"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "git branch (local)",
+      "precondition": "Branch golemic/issue-<N> does not exist locally",
+      "changes": [
+        {
+          "field": "branch golemic/issue-<N>",
+          "operation": "create",
+          "value_source": "git worktree add -b golemic/issue-<N> origin/main"
+        }
+      ]
+    },
+    {
+      "id": "SC-003",
+      "target": "Event log",
+      "precondition": "Event log is writable",
+      "changes": [
+        {
+          "field": "content",
+          "operation": "append",
+          "value_source": "worktree_created event with path, branch, baseSha, role: dev"
+        }
+      ]
+    },
+    {
+      "id": "SC-004",
+      "target": "File system (worktree directory)",
+      "precondition": "Worktree exists, outcome is success",
+      "changes": [
+        {
+          "field": "worktree directory",
+          "operation": "delete",
+          "value_source": "git worktree remove command"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Dev token (GH_TOKEN) is used for gh api user and for git push via env-based credential helper",
+    "authorization_rules": [
+      "The credential helper reads GH_TOKEN from the environment, never from disk",
+      "user.name/user.email are set to the bot identity, not the human's"
+    ],
+    "data_classification": "Bot identity information (GitHub login name)",
+    "audit_requirements": [
+      "worktree_created event records path, branch, baseSha, and role"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/worktree"
+    ],
+    "integration_points": [
+      "preflight.Executor (for git, gh commands)",
+      "internal/eventlog (for writing events)"
+    ],
+    "architecture_constraints": [
+      "All git commands go through the injectable Executor interface",
+      "Credential helper must be env-based, not file-based (\u00a72.4)",
+      "Cleanup is only called on success outcome (I1.10)"
+    ],
+    "allowed_changes": [
+      "Create internal/worktree package",
+      "Add Create and Cleanup functions"
+    ],
+    "forbidden_changes": [
+      "Do not store tokens on disk",
+      "Do not call cleanup on failure paths",
+      "Do not create worktree from a local branch (must be origin/main)"
+    ],
+    "dependencies": [
+      "internal/preflight (Executor interface)",
+      "internal/eventlog (I1.1)"
+    ],
+    "migration_strategy": "New package; no migration needed",
+    "consistency_and_concurrency": "Single-threaded CLI; no concurrency concerns. The worktree path is deterministic (issue-<N>), so a second run for the same issue would fail the collision check (I1.3) before reaching this code."
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Worktree created with correct git command sequence",
+      "given": [
+        "A fake executor that records all git commands",
+        "Valid repoRoot, golemicDir, runId, issue number, and bot login"
+      ],
+      "when": [
+        "worktree.Create is called for the dev role"
+      ],
+      "then": [
+        "git fetch origin is called first",
+        "git worktree add <path> -b golemic/issue-<N> origin/main is called",
+        "git config calls set credential.helper, user.name, user.email in the worktree",
+        "git rev-parse origin/main is called to capture baseSha"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "BR-003",
+        "BR-006",
+        "IF-001",
+        "IC-001",
+        "IC-002",
+        "IC-003",
+        "IC-004",
+        "SC-001",
+        "SC-002"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "worktree_created event is written with correct fields",
+      "given": [
+        "Worktree creation succeeds"
+      ],
+      "when": [
+        "worktree.Create completes"
+      ],
+      "then": [
+        "An event of type worktree_created is written to the event log",
+        "The event payload contains path, branch (golemic/issue-<N>), baseSha, and role (dev)"
+      ],
+      "traces_to": [
+        "BR-006",
+        "SC-003",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Cleanup removes worktree and local branch",
+      "given": [
+        "A worktree exists at the expected path",
+        "A local branch golemic/issue-<N> exists"
+      ],
+      "when": [
+        "worktree.Cleanup is called"
+      ],
+      "then": [
+        "git worktree remove <path> is called",
+        "git branch -D golemic/issue-<N> is called"
+      ],
+      "traces_to": [
+        "BR-004",
+        "IF-002",
+        "SC-004"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "Cleanup is not called on error during worktree creation",
+      "given": [
+        "A fake executor that fails on git worktree add"
+      ],
+      "when": [
+        "worktree.Create is called and fails"
+      ],
+      "then": [
+        "The error is returned",
+        "No cleanup (git worktree remove) is called",
+        "The worktree may exist in a partial state"
+      ],
+      "traces_to": [
+        "BR-005",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Correct git command sequence for worktree creation",
+      "Credential helper is set correctly",
+      "user.name and user.email are set from bot login",
+      "baseSha is captured from origin/main",
+      "worktree_created event contains correct fields",
+      "Cleanup calls git worktree remove and git branch -D",
+      "Cleanup is not called on creation failure",
+      "Git command failures return appropriate errors"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./internal/worktree/..."
+    ],
+    "non_functional_requirements": [
+      "All git commands go through the injectable Executor interface",
+      "No credentials stored on disk"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "go build ./... && go vet ./... && go test -count=1 ./... is green",
+      "Credential helper is env-based, matching \u00a72.4 specification"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Credential helper implementation",
+      "decision": "Use env-based credential helper: '!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f'",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified verbatim in \u00a72.4: 'credential.helper = \"!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f\"'"
+    },
+    {
+      "id": "D-002",
+      "topic": "Bot identity for user.name/user.email",
+      "decision": "Determined at runtime via gh api user with the role-specific token",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'user.name/user.email der Bot-Identit\u00e4t (via gh api user mit dem jeweiligen Token ermittelt)'"
+    },
+    {
+      "id": "D-003",
+      "topic": "Cleanup scope",
+      "decision": "Cleanup is called only on success outcome, not on errors",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Nur bei success gerufen (\u00a72.11)' and 'Worktrees bleiben bei Fehlern stehen'"
+    },
+    {
+      "id": "D-004",
+      "topic": "Existing Executor interface",
+      "decision": "Worktree package uses the same Executor interface as preflight",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "internal/preflight defines the injectable Executor interface; worktree commands will use it"
+    },
+    {
+      "id": "D-005",
+      "topic": "Production executor for worktree commands",
+      "decision": "Worktree package uses the production osExecutor in main.go for real git operations",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "osExecutor is the production implementation of the Executor interface, used by preflight and reused by worktree"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/preflight/preflight.go",
+      "symbol": "Executor interface",
+      "location": "lines 48-56",
+      "finding": "Executor interface with Run and RunWithEnv methods exists; worktree commands will use this interface",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "cmd/golemic/main.go",
+      "symbol": "osExecutor",
+      "location": "lines 88-109",
+      "finding": "Production osExecutor implements the Executor interface; used by preflight, usable by worktree",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

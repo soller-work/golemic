@@ -1,0 +1,612 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "process",
+  "slice_id": "i1-3",
+  "title": "Runner Skeleton: run --issue, Host-Repo Resolution, Collision Check",
+  "summary": "Deterministic runner framework for golemic run --issue N. Resolves the host repo, loads config and credentials, generates a runId, creates the event log, writes run_started, loads the issue via gh, and performs a collision check (worktree, branch, or open PR already exists) before any worktree is created.",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Human maintainer (or future run.sh polling loop)",
+    "goal": "Start a deterministic run for a given issue number, ensuring no conflicting state exists",
+    "business_value": "Provides the safe entry point for the entire loop: validates preconditions, detects conflicts early, and records the run start in the event log",
+    "trigger": "golemic run --issue 42 is invoked from the host repo root",
+    "success_outcome": "A run is started with runId, run_started event is written, and no collision exists; the runner is ready to proceed to worktree creation"
+  },
+  "scope": {
+    "in_scope": [
+      "golemic run --issue N subcommand",
+      "Host-Repo resolution: git root from cwd; if under tools/golemic, resolve the surrounding repo",
+      "origin remote and default branch (main) resolution",
+      "Config loading (I0.2) and credentials loading (I0.3)",
+      "runId generation (e.g. issue-<N>-<timestamp>)",
+      "Event log creation and run_started event",
+      "Issue loading via gh issue view N --json title,body with dev token",
+      "Collision check: existing worktree under ~/.golemic/<project>/worktrees/issue-<N>, local/remote branch golemic/issue-<N>, or open PR with that head branch",
+      "Collision \u2192 abort with clear message including concrete cleanup commands, outcome aborted",
+      "Fail-closed: missing config/credentials abort before any GitHub access"
+    ],
+    "out_of_scope": [
+      "Worktree creation (I1.4)",
+      "Role invocation (I1.5, I1.6)",
+      "Loop orchestration beyond the initial check (I1.10)"
+    ]
+  },
+  "preconditions": [
+    "Preflight (I0.4) has completed successfully",
+    "Config loader (I0.2) and credentials loader (I0.3) are implemented",
+    "Event log package (I1.1) is implemented",
+    "gh CLI is available"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Host repo is determined by walking up from cwd; if cwd contains 'tools/golemic' in its path, resolve to the enclosing git root",
+      "applies_when": "golemic run starts",
+      "outcome": "repoRoot is set to the host repo's git root"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Config and credentials must load successfully before any GitHub or git operation",
+      "applies_when": "golemic run starts",
+      "outcome": "Load failure \u2192 clear error, exit != 0, no run_started event"
+    },
+    {
+      "id": "BR-003",
+      "rule": "runId format is issue-<N>-<timestamp> where timestamp is a compact, sortable format",
+      "applies_when": "A new run is started",
+      "outcome": "runId is set to e.g. issue-42-20260715T142530Z"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Collision: if a worktree ~/.golemic/<project>/worktrees/issue-<N> exists \u2192 abort",
+      "applies_when": "Before creating a worktree",
+      "outcome": "Error message: 'Worktree exists at <path>; remove with: git worktree remove <path>', outcome aborted"
+    },
+    {
+      "id": "BR-005",
+      "rule": "Collision: if a local or remote branch golemic/issue-<N> exists \u2192 abort",
+      "applies_when": "Before creating a worktree",
+      "outcome": "Error message: 'Branch golemic/issue-<N> exists locally or on origin; remove with: git branch -D golemic/issue-<N> && git push origin --delete golemic/issue-<N>', outcome aborted"
+    },
+    {
+      "id": "BR-006",
+      "rule": "Collision: if an open PR exists with head branch golemic/issue-<N> \u2192 abort",
+      "applies_when": "Before creating a worktree",
+      "outcome": "Error message: 'Open PR <url> exists with head branch golemic/issue-<N>; close it first', outcome aborted"
+    },
+    {
+      "id": "BR-007",
+      "rule": "The run_started event must be the first event in the log and must be written before any collision check that involves GitHub",
+      "applies_when": "run starts",
+      "outcome": "run_started is written with issue and runId payload; if collision check fails, the log still contains run_started with outcome aborted"
+    }
+  ],
+  "decision_tables": [
+    {
+      "id": "DT-001",
+      "name": "Collision check decision",
+      "inputs": [
+        "Worktree exists",
+        "Local branch exists",
+        "Remote branch exists",
+        "Open PR with head branch exists"
+      ],
+      "rows": [
+        {
+          "when": {
+            "Worktree exists": "false",
+            "Local branch exists": "false",
+            "Remote branch exists": "false",
+            "Open PR with head branch exists": "false"
+          },
+          "then": {
+            "result": "Proceed to worktree creation"
+          },
+          "rule_ids": [
+            "BR-004",
+            "BR-005",
+            "BR-006"
+          ]
+        },
+        {
+          "when": {
+            "Worktree exists": "true",
+            "Local branch exists": "any",
+            "Remote branch exists": "any",
+            "Open PR with head branch exists": "any"
+          },
+          "then": {
+            "result": "Abort: worktree collision"
+          },
+          "rule_ids": [
+            "BR-004"
+          ]
+        },
+        {
+          "when": {
+            "Worktree exists": "false",
+            "Local branch exists": "true",
+            "Remote branch exists": "any",
+            "Open PR with head branch exists": "any"
+          },
+          "then": {
+            "result": "Abort: local branch collision"
+          },
+          "rule_ids": [
+            "BR-005"
+          ]
+        },
+        {
+          "when": {
+            "Worktree exists": "false",
+            "Local branch exists": "false",
+            "Remote branch exists": "true",
+            "Open PR with head branch exists": "any"
+          },
+          "then": {
+            "result": "Abort: remote branch collision"
+          },
+          "rule_ids": [
+            "BR-005"
+          ]
+        },
+        {
+          "when": {
+            "Worktree exists": "false",
+            "Local branch exists": "false",
+            "Remote branch exists": "false",
+            "Open PR with head branch exists": "true"
+          },
+          "then": {
+            "result": "Abort: open PR collision"
+          },
+          "rule_ids": [
+            "BR-006"
+          ]
+        }
+      ],
+      "default_outcome": "Abort: collision state is not clear"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "cli",
+      "name": "golemic run --issue",
+      "operation": "golemic run --issue N",
+      "inputs": [
+        {
+          "name": "--issue",
+          "type": "int",
+          "required": true,
+          "constraints": [
+            "Must be a positive integer"
+          ],
+          "source": "CLI flag"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "No collision, run started successfully",
+          "status": "exit 0 (preliminary; actual exit depends on I1.10 full outcome)",
+          "body": "runId printed to stdout, run_started event written"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Config load fails",
+          "code": "CONFIG_LOAD_FAILED",
+          "status": "exit != 0",
+          "message": "Failed to load config: <error>"
+        },
+        {
+          "condition": "Credentials load fails",
+          "code": "CREDENTIALS_LOAD_FAILED",
+          "status": "exit != 0",
+          "message": "Failed to load credentials: <error>"
+        },
+        {
+          "condition": "Worktree already exists",
+          "code": "COLLISION_WORKTREE",
+          "status": "exit != 0",
+          "message": "Worktree exists at <path>; remove with: git worktree remove <path>"
+        },
+        {
+          "condition": "Branch already exists (local or remote)",
+          "code": "COLLISION_BRANCH",
+          "status": "exit != 0",
+          "message": "Branch golemic/issue-<N> exists; remove with: <commands>"
+        },
+        {
+          "condition": "Open PR with head branch exists",
+          "code": "COLLISION_PR",
+          "status": "exit != 0",
+          "message": "Open PR <url> exists with head branch golemic/issue-<N>; close it first"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [
+    {
+      "id": "PS-001",
+      "order": 1,
+      "name": "Resolve host repo",
+      "trigger": "golemic run --issue N is invoked",
+      "action": "Determine git root from cwd or enclosing repo if under tools/golemic",
+      "state_before": "No repo context known",
+      "state_after": "repoRoot, origin remote URL, default branch name are known",
+      "outcome": "repoRoot determined",
+      "failure_behavior": "Exit with error: 'not in a git repository'",
+      "terminal": false
+    },
+    {
+      "id": "PS-002",
+      "order": 2,
+      "name": "Load config and credentials",
+      "trigger": "Host repo is resolved",
+      "action": "Load .golemic/config.json via config.Load, then load credentials via credentials.NewLoader",
+      "state_before": "Config and credentials not loaded",
+      "state_after": "Config and credentials are loaded and validated",
+      "outcome": "Config and credentials ready",
+      "failure_behavior": "Exit with clear error naming the failure (config or credentials), no GitHub access attempted",
+      "terminal": false
+    },
+    {
+      "id": "PS-003",
+      "order": 3,
+      "name": "Generate runId and create event log",
+      "trigger": "Config and credentials loaded",
+      "action": "Generate runId = issue-<N>-<timestamp>, create event log directory, write run_started event",
+      "state_before": "No runId, no event log",
+      "state_after": "runId assigned, events.jsonl created with run_started as first event",
+      "outcome": "run_started written",
+      "failure_behavior": "Exit with error: 'failed to create event log'",
+      "terminal": false
+    },
+    {
+      "id": "PS-004",
+      "order": 4,
+      "name": "Load issue from GitHub",
+      "trigger": "Event log is ready",
+      "action": "Run gh issue view N --json title,body with dev token, parse response",
+      "state_before": "Issue details are not yet loaded",
+      "state_after": "Issue title, body, and number are known",
+      "outcome": "Issue loaded",
+      "failure_behavior": "Exit with error: 'failed to load issue N: <gh error>', outcome mapped to dev_failed in I1.10",
+      "terminal": false
+    },
+    {
+      "id": "PS-005",
+      "order": 5,
+      "name": "Collision check",
+      "trigger": "Issue is loaded",
+      "action": "Check for existing worktree, local/remote branch golemic/issue-<N>, and open PR with that head branch",
+      "state_before": "No collision state known",
+      "state_after": "All collision checks complete",
+      "outcome": "No collision \u2192 proceed to worktree creation. Collision \u2192 abort with cleanup commands.",
+      "failure_behavior": "On any collision: write run_finished with outcome aborted, exit != 0 with concrete cleanup commands",
+      "terminal": true
+    }
+  ],
+  "integration_contracts": [
+    {
+      "id": "IC-001",
+      "external_system": "GitHub (via gh CLI)",
+      "direction": "outbound",
+      "transport": "gh issue view N --json title,body via Executor.RunWithEnv with GH_TOKEN=dev_token",
+      "operation": "Load issue details",
+      "request_contract": "gh issue view <N> --json title,body",
+      "response_contract": "JSON with title (string) and body (string)",
+      "idempotency": "Read-only; idempotent",
+      "timeout": "30 seconds",
+      "retry_policy": "No retry; failure is fatal",
+      "failure_mapping": "Non-zero exit \u2192 'failed to load issue N'",
+      "compatibility": "gh CLI v2+"
+    },
+    {
+      "id": "IC-002",
+      "external_system": "git (local repo)",
+      "direction": "outbound",
+      "transport": "git commands via Executor.Run",
+      "operation": "Check for existing worktree and local branch",
+      "request_contract": "git worktree list, git branch --list golemic/issue-<N>, git ls-remote --heads origin golemic/issue-<N>",
+      "response_contract": "stdout strings",
+      "idempotency": "Read-only; idempotent",
+      "timeout": "30 seconds",
+      "retry_policy": "No retry",
+      "failure_mapping": "Non-zero exit \u2192 'failed to check git state'",
+      "compatibility": "git v2+"
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "Event log",
+      "precondition": "Event log directory is created",
+      "changes": [
+        {
+          "field": "content",
+          "operation": "append",
+          "value_source": "run_started event with issue, runId"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Dev token (GH_TOKEN) is used for gh issue view; token is loaded from credentials (I0.3)",
+    "authorization_rules": [
+      "The dev token must have read access to the host repo's issues"
+    ],
+    "data_classification": "Issue data (may contain project-specific information)",
+    "audit_requirements": [
+      "run_started event records the run start with issue number and runId"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "cmd/golemic/main.go",
+      "internal/runner (new package)"
+    ],
+    "integration_points": [
+      "internal/config.Load",
+      "internal/credentials.NewLoader",
+      "internal/eventlog",
+      "preflight.Executor (for gh, git commands)"
+    ],
+    "architecture_constraints": [
+      "Config and credentials must be loaded before any GitHub access",
+      "All external commands go through the injectable Executor interface",
+      "run_started must be the first event in the log"
+    ],
+    "allowed_changes": [
+      "Add run subcommand handler to main.go",
+      "Create internal/runner package for run orchestration",
+      "Add collision check functions"
+    ],
+    "forbidden_changes": [
+      "Do not skip collision checks",
+      "Do not access GitHub before config/credentials are loaded"
+    ],
+    "dependencies": [
+      "internal/config (I0.2)",
+      "internal/credentials (I0.3)",
+      "internal/eventlog (I1.1)",
+      "internal/preflight (Executor interface)"
+    ],
+    "migration_strategy": "New package; no migration needed",
+    "consistency_and_concurrency": "Single-threaded CLI; no concurrency concerns. The collision check is inherently racy (concurrent runs), but the deterministic branch name makes the second run fail with a clear collision message."
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Happy path: run starts with no collision",
+      "given": [
+        "Config and credentials are valid",
+        "No worktree, branch, or PR exists for issue-42"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "run_started event is written with issue=42 and a valid runId",
+        "Exit code is 0 (preliminary; actual outcome determined by I1.10)"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "BR-003",
+        "BR-007",
+        "PS-001",
+        "PS-002",
+        "PS-003",
+        "PS-004",
+        "PS-005",
+        "IC-001",
+        "IC-002",
+        "SC-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Worktree collision aborts with cleanup commands",
+      "given": [
+        "Worktree ~/.golemic/<project>/worktrees/issue-42 already exists"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message includes 'Worktree exists at' and the git worktree remove command",
+        "Outcome is aborted"
+      ],
+      "traces_to": [
+        "BR-004",
+        "DT-001",
+        "PS-005",
+        "IF-001",
+        "IC-002"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Branch collision aborts with cleanup commands",
+      "given": [
+        "Branch golemic/issue-42 exists locally or remotely"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message includes branch name and git branch deletion commands",
+        "Outcome is aborted"
+      ],
+      "traces_to": [
+        "BR-005",
+        "DT-001",
+        "PS-005",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "Open PR collision aborts with PR URL",
+      "given": [
+        "An open PR exists with head branch golemic/issue-42"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message includes the PR URL and instructions to close it",
+        "Outcome is aborted"
+      ],
+      "traces_to": [
+        "BR-006",
+        "DT-001",
+        "PS-005",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-005",
+      "title": "Missing config causes clear error before any GitHub access",
+      "given": [
+        "Config file .golemic/config.json does not exist"
+      ],
+      "when": [
+        "golemic run --issue 42 is invoked"
+      ],
+      "then": [
+        "Exit code is != 0",
+        "Error message mentions config file not found",
+        "No gh or git command was executed (beyond repo root detection)"
+      ],
+      "traces_to": [
+        "BR-002",
+        "PS-002",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Happy path writes run_started with correct payload",
+      "Worktree collision aborts with cleanup message",
+      "Local branch collision aborts",
+      "Remote branch collision aborts",
+      "Open PR collision aborts",
+      "Missing config aborts before GitHub access",
+      "Missing credentials aborts before GitHub access",
+      "Issue load failure handled gracefully",
+      "runId format is issue-<N>-<timestamp>"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./internal/runner/... ./cmd/golemic/..."
+    ],
+    "non_functional_requirements": [
+      "All external commands go through injectable Executor for testability",
+      "Error messages include concrete cleanup commands"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "go build ./... && go vet ./... && go test -count=1 ./... is green",
+      "Run subcommand is wired into main.go",
+      "Collision checks cover all three cases (worktree, branch, PR)"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Host repo resolution",
+      "decision": "If cwd is under tools/golemic, resolve the enclosing git repo as the host repo",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in \u00a72.7: golemic is a tool dropped into tools/golemic and works on the enclosing repo"
+    },
+    {
+      "id": "D-002",
+      "topic": "Collision check order",
+      "decision": "Check worktree, then local branch, then remote branch, then open PR; report first collision found",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'existiert Worktree ... lokaler oder Remote-Branch ... oder offener PR'"
+    },
+    {
+      "id": "D-003",
+      "topic": "runId format",
+      "decision": "runId = issue-<N>-<timestamp> (compact sortable timestamp)",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'runId erzeugen (z.B. issue-<N>-<timestamp>)'"
+    },
+    {
+      "id": "D-004",
+      "topic": "Existing preflight pattern",
+      "decision": "Runner uses the same Executor interface and config/credentials packages as preflight",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001",
+        "EV-002",
+        "EV-003"
+      ],
+      "rationale": "internal/preflight defines the Executor interface; internal/config and internal/credentials provide loading and validation"
+    },
+    {
+      "id": "D-005",
+      "topic": "Executor interface for runner commands",
+      "decision": "Runner uses the existing Executor interface for all gh and git commands",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-004"
+      ],
+      "rationale": "main.go osExecutor already implements the Executor interface; runner will reuse it"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/preflight/preflight.go",
+      "symbol": "Executor interface",
+      "location": "lines 48-56",
+      "finding": "Executor interface with Run and RunWithEnv methods exists; all external commands are injectable",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "internal/config/config.go",
+      "symbol": "Load function",
+      "location": "lines 48-107",
+      "finding": "Config.Load exists and validates required fields with clear error messages",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "internal/credentials/credentials.go",
+      "symbol": "Loader struct",
+      "location": "lines 64-68",
+      "finding": "Credentials loader with injectable homeDir exists; env var precedence over file is implemented",
+      "verified": true
+    },
+    {
+      "id": "EV-004",
+      "path": "cmd/golemic/main.go",
+      "symbol": "knownCommands",
+      "location": "lines 15-22",
+      "finding": "run is already listed as a known command with description 'Run the main process (not implemented)' and dispatches to 'not implemented' path",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

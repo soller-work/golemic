@@ -1,0 +1,460 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "integration",
+  "slice_id": "i1-6",
+  "title": "Headless Role Invocation (pi Executor)",
+  "summary": "Package internal/agent executes a role as a subprocess with correct context. Invokes pi -p --append-system-prompt @<promptfile> --tools <allowlist> \"<user-prompt>\" in the respective worktree. Sets GOLEMIC_RUN_ID, GOLEMIC_EVENT_LOG, role-specific GH_TOKEN, and PATH with golemic binary prepended. Enforces timeout from config, kills process group on timeout, captures stdout/stderr to transcript files, and returns exit code (unparsed, for logging only).",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Golemic runner (Go code)",
+    "goal": "Execute a role (dev or reviewer) as a headless subprocess with correct environment and timeout",
+    "business_value": "Deterministic, isolated agent execution: the runner controls the full environment, timeout, and transcript capture without parsing agent output",
+    "trigger": "Runner has rendered prompts (I1.5) and created the worktree (I1.4 / I1.8), and is ready to invoke the agent",
+    "success_outcome": "The agent process runs to completion (or timeout), stdout/stderr are captured to transcript files, and the exit code is returned for logging"
+  },
+  "scope": {
+    "in_scope": [
+      "Package internal/agent",
+      "pi CLI invocation: pi -p --append-system-prompt @<promptfile> --tools <allowlist> \"<user-prompt>\"",
+      "CWD set to the role's worktree",
+      "Environment: GOLEMIC_RUN_ID, GOLEMIC_EVENT_LOG, role-specific GH_TOKEN, PATH with golemic binary prepended, model from config",
+      "Timeout from config: kill process group on expiry, result mapped to timeout outcome",
+      "stdout captured to runs/<runId>/<role>.stdout.log",
+      "stderr captured to runs/<runId>/<role>.stderr.log",
+      "Exit code returned as informational (not parsed for semantic content)"
+    ],
+    "out_of_scope": [
+      "Interpretation of agent output (I1.10)",
+      "Prompt rendering (I1.5)",
+      "Worktree lifecycle (I1.4, I1.8)"
+    ]
+  },
+  "preconditions": [
+    "Prompts are rendered (I1.5)",
+    "Worktree exists (I1.4 or I1.8)",
+    "Config is loaded (I0.2) for model selection and timeout",
+    "Event log (I1.1) is available for env var",
+    "golemic binary is built and available in PATH"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "The pi CLI is invoked with -p (headless/pipe mode), --append-system-prompt @<systemPromptFile>, --tools <allowlist>, and the user prompt as the last positional argument",
+      "applies_when": "Running a role",
+      "outcome": "pi -p --append-system-prompt @<file> --tools read,bash,write,edit \"<userPrompt>\" (dev) or --tools read,bash \"<userPrompt>\" (reviewer)"
+    },
+    {
+      "id": "BR-002",
+      "rule": "The process environment includes GOLEMIC_RUN_ID, GOLEMIC_EVENT_LOG, role-specific GH_TOKEN, and PATH with the golemic binary directory prepended",
+      "applies_when": "Running a role",
+      "outcome": "Child process sees all four env vars set correctly"
+    },
+    {
+      "id": "BR-003",
+      "rule": "The model for the role is passed via the --model flag or env var (determined by pi CLI interface)",
+      "applies_when": "Running a role",
+      "outcome": "Config.Models.Dev or Config.Models.Reviewer is used for the respective role"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Timeout is enforced: if the process exceeds Config.TimeoutMinutes, the entire process group is killed and the result is timeout",
+      "applies_when": "Running a role",
+      "outcome": "Process group is killed via SIGKILL; result is timeout; transcript files contain partial output up to the kill"
+    },
+    {
+      "id": "BR-005",
+      "rule": "stdout and stderr are captured to separate transcript files under runs/<runId>/<role>.stdout.log and .stderr.log",
+      "applies_when": "Running a role",
+      "outcome": "Transcript files are written; content is not parsed or interpreted"
+    },
+    {
+      "id": "BR-006",
+      "rule": "The exit code of the agent is logged but not used for loop decisions; the event log is the authoritative source",
+      "applies_when": "Agent process exits",
+      "outcome": "Exit code is returned by the function; all loop decisions are based on events in the log"
+    },
+    {
+      "id": "BR-007",
+      "rule": "Tool allowlist for dev is read,bash,write,edit; for reviewer is read,bash (read-only per convention)",
+      "applies_when": "Running a role",
+      "outcome": "Dev gets --tools read,bash,write,edit; reviewer gets --tools read,bash"
+    }
+  ],
+  "decision_tables": [
+    {
+      "id": "DT-001",
+      "name": "Agent execution outcomes",
+      "inputs": [
+        "Process exits within timeout",
+        "Exit code"
+      ],
+      "rows": [
+        {
+          "when": {
+            "Process exits within timeout": "yes",
+            "Exit code": "0"
+          },
+          "then": {
+            "result": "Exit code 0 returned; transcript files written"
+          },
+          "rule_ids": [
+            "BR-005",
+            "BR-006"
+          ]
+        },
+        {
+          "when": {
+            "Process exits within timeout": "yes",
+            "Exit code": "non-zero"
+          },
+          "then": {
+            "result": "Exit code returned; transcript files written; event log is authoritative for loop decisions"
+          },
+          "rule_ids": [
+            "BR-005",
+            "BR-006"
+          ]
+        },
+        {
+          "when": {
+            "Process exits within timeout": "no",
+            "Exit code": "N/A"
+          },
+          "then": {
+            "result": "timeout outcome; process group killed; partial transcripts written"
+          },
+          "rule_ids": [
+            "BR-004",
+            "BR-005"
+          ]
+        }
+      ],
+      "default_outcome": "Unexpected execution error"
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "Agent Executor",
+      "operation": "RunRole(ctx, roleConfig) (exitCode int, transcriptPaths TranscriptPaths, err error)",
+      "inputs": [
+        {
+          "name": "roleConfig",
+          "type": "RoleConfig{role, systemPromptFile, userPrompt, worktreeDir, runID, eventLogPath, ghToken, golemicBinaryPath, model, timeout, toolAllowlist}",
+          "required": true,
+          "constraints": [
+            "role must be 'dev' or 'reviewer'",
+            "systemPromptFile must exist",
+            "userPrompt must be non-empty",
+            "worktreeDir must be an existing directory",
+            "ghToken must be non-empty",
+            "timeout must be positive"
+          ],
+          "source": "Runner"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Process completes within timeout",
+          "status": "exit code, nil error",
+          "body": "exitCode (int), TranscriptPaths{Stdout: <path>, Stderr: <path>}"
+        },
+        {
+          "condition": "Process exceeds timeout",
+          "status": "0, timeout error",
+          "body": "exitCode = 0, error wraps ErrTimeout, transcript files contain partial output"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Timeout exceeded",
+          "code": "AGENT_TIMEOUT",
+          "status": "error",
+          "message": "Agent role '<role>' timed out after <duration>"
+        },
+        {
+          "condition": "Process creation fails",
+          "code": "AGENT_START_FAILED",
+          "status": "error",
+          "message": "Failed to start agent process: <error>"
+        },
+        {
+          "condition": "Transcript file creation fails",
+          "code": "TRANSCRIPT_WRITE_FAILED",
+          "status": "error",
+          "message": "Failed to write transcript file: <path>"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [
+    {
+      "id": "IC-001",
+      "external_system": "pi CLI (agent runtime)",
+      "direction": "outbound",
+      "transport": "exec.Command with os/exec",
+      "operation": "pi -p --append-system-prompt @<file> --tools <allowlist> --model <model> \"<userPrompt>\"",
+      "request_contract": "Full command line with all arguments",
+      "response_contract": "stdout (agent transcript), stderr (agent errors)",
+      "idempotency": "Not idempotent (agent may create side effects like git commits)",
+      "timeout": "Config.TimeoutMinutes (default 30 min)",
+      "retry_policy": "No retry; timeout is a final outcome",
+      "failure_mapping": "Non-zero exit \u2192 exit code returned to caller; timeout \u2192 ErrTimeout",
+      "compatibility": "pi CLI with -p flag, --append-system-prompt, --tools, --model support"
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "Transcript files (runs/<runId>/<role>.stdout.log, .stderr.log)",
+      "precondition": "Process is started",
+      "changes": [
+        {
+          "field": "stdout transcript",
+          "operation": "create",
+          "value_source": "stdout of agent process"
+        },
+        {
+          "field": "stderr transcript",
+          "operation": "create",
+          "value_source": "stderr of agent process"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "GH_TOKEN is set to the role-specific token; the token is never logged or exposed in transcript files",
+    "authorization_rules": [
+      "Dev token is used for dev role; reviewer token is used for reviewer role",
+      "PATH is restricted to include only the golemic binary and the system PATH"
+    ],
+    "data_classification": "Agent output (may contain code or project data); token values must never appear in transcripts",
+    "audit_requirements": [
+      "Transcripts are stored for debugging; exit code is logged"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/agent"
+    ],
+    "integration_points": [
+      "os/exec for process creation",
+      "os.File for transcript capture",
+      "context.Context for timeout"
+    ],
+    "architecture_constraints": [
+      "Process group must be killed on timeout (not just the parent process)",
+      "stdout/stderr are captured to files, not piped through Go for parsing",
+      "The golemic binary path is prepended to PATH so agent subcommands (golemic emit, open-pr, submit-review) are available"
+    ],
+    "allowed_changes": [
+      "Create internal/agent package",
+      "Implement RunRole function"
+    ],
+    "forbidden_changes": [
+      "Do not parse or interpret stdout/stderr for loop decisions",
+      "Do not pass GH_TOKEN values in command-line arguments",
+      "Do not allow the agent process to outlive the timeout"
+    ],
+    "dependencies": [
+      "Standard library: os/exec, os, context, time, path/filepath, fmt"
+    ],
+    "migration_strategy": "New package; no migration needed",
+    "consistency_and_concurrency": "Single-threaded per role; each role runs sequentially. The process group kill ensures cleanup on timeout."
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Agent process is called with correct environment",
+      "given": [
+        "A fake executor that records the command and environment",
+        "Valid role config for dev role"
+      ],
+      "when": [
+        "RunRole is called"
+      ],
+      "then": [
+        "The command includes pi, -p, --append-system-prompt @<file>, --tools read,bash,write,edit, and the user prompt",
+        "The environment includes GOLEMIC_RUN_ID, GOLEMIC_EVENT_LOG, GH_TOKEN (dev token), and PATH with golemic binary directory prepended"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "BR-007",
+        "IF-001",
+        "IC-001",
+        "BR-003",
+        "BR-006"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Timeout kills process and returns timeout result",
+      "given": [
+        "A fake process that runs indefinitely",
+        "Timeout is set to 1 millisecond"
+      ],
+      "when": [
+        "RunRole is called"
+      ],
+      "then": [
+        "The process is killed (process group)",
+        "The error wraps ErrTimeout",
+        "Partial transcript files are written"
+      ],
+      "traces_to": [
+        "BR-004",
+        "DT-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Transcripts are written to correct locations",
+      "given": [
+        "A valid role execution"
+      ],
+      "when": [
+        "RunRole completes"
+      ],
+      "then": [
+        "runs/<runId>/<role>.stdout.log exists and contains stdout",
+        "runs/<runId>/<role>.stderr.log exists and contains stderr",
+        "Transcript files are under the runs directory"
+      ],
+      "traces_to": [
+        "BR-005",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "Reviewer tool allowlist is read-only",
+      "given": [
+        "A valid role config for reviewer role"
+      ],
+      "when": [
+        "RunRole is called"
+      ],
+      "then": [
+        "The --tools argument is read,bash (without write,edit)"
+      ],
+      "traces_to": [
+        "BR-007",
+        "IF-001",
+        "BR-006"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Dev role gets correct environment vars",
+      "Reviewer role gets correct environment vars",
+      "Dev tool allowlist is read,bash,write,edit",
+      "Reviewer tool allowlist is read,bash",
+      "Timeout kills process and returns timeout error",
+      "Timeout captures partial transcripts",
+      "Transcript files are written at correct paths",
+      "Exit code is returned without parsing",
+      "Process CWD is set to the worktree directory"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go vet ./...",
+      "go test -count=1 ./internal/agent/..."
+    ],
+    "non_functional_requirements": [
+      "Process group must be killed on timeout (not just the parent)",
+      "No GH_TOKEN values appear in command-line arguments or transcript paths"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "go build ./... && go vet ./... && go test -count=1 ./... is green",
+      "Timeout enforcement uses process group kill",
+      "Transcript files are written to runs/<runId>/<role>.{stdout,stderr}.log"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Agent invocation command",
+      "decision": "Use pi -p --append-system-prompt @<file> --tools <allowlist> \"<userPrompt>\"",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in \u00a72.1: 'pi -p --append-system-prompt @prompts/dev.md --tools read,bash,write,edit \"\u2026\"'"
+    },
+    {
+      "id": "D-002",
+      "topic": "Environment contract",
+      "decision": "Child process environment includes GOLEMIC_RUN_ID, GOLEMIC_EVENT_LOG, role-specific GH_TOKEN, and modified PATH",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in \u00a72.6: 'Der Runner setzt beim Headless-Aufruf: GOLEMIC_RUN_ID, GOLEMIC_EVENT_LOG, GH_TOKEN, PATH mit vorangestelltem golemic-Binary'"
+    },
+    {
+      "id": "D-003",
+      "topic": "Timeout mechanism",
+      "decision": "Kill the entire process group on timeout, not just the parent process",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in backlog: 'Prozessgruppe killen, Ergebnis timeout'"
+    },
+    {
+      "id": "D-004",
+      "topic": "Tool allowlists",
+      "decision": "Dev: read,bash,write,edit; Reviewer: read,bash",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Specified in Iteration 1 description: 'Tool-Allowlists fix: Dev = read,bash,write,edit; Reviewer = read,bash'"
+    },
+    {
+      "id": "D-005",
+      "topic": "Production executor availability",
+      "decision": "Agent executor uses os/exec directly (not through the Executor interface) for process spawning",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "osExecutor in main.go wraps exec.Command for simple Run/RunWithEnv; agent executor needs process group management for timeout, which requires direct os/exec usage"
+    },
+    {
+      "id": "D-006",
+      "topic": "Model and timeout from config",
+      "decision": "Agent reads model name and timeout duration from the Config struct",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "Config.Models.Dev/Reviewer hold the model names; Config.TimeoutMinutes holds the timeout; both are used by the agent executor"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "cmd/golemic/main.go",
+      "symbol": "osExecutor",
+      "location": "lines 88-109",
+      "finding": "Production osExecutor implements the Executor interface with Run and RunWithEnv methods; can be used by agent package for process execution",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "internal/config/config.go",
+      "symbol": "Config struct",
+      "location": "lines 12-20",
+      "finding": "Config struct has Models.Dev and Models.Reviewer strings and TimeoutMinutes field; agent package will read these for model selection and timeout",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}
