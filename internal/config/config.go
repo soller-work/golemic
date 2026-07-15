@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,7 +44,7 @@ func Load(repoRoot string) (*Config, error) {
 	configPath := filepath.Join(repoRoot, ".golemic", "config.json")
 
 	// Check if file exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("config file not found: %s", configPath)
 	}
 
@@ -58,11 +59,13 @@ func Load(repoRoot string) (*Config, error) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
-		if syntaxErr, ok := err.(*json.SyntaxError); ok {
+		var syntaxErr *json.SyntaxError
+		if errors.As(err, &syntaxErr) {
 			return nil, fmt.Errorf("invalid JSON in config file %s at offset %d: %w",
 				configPath, syntaxErr.Offset, err)
 		}
-		if unmarshalErr, ok := err.(*json.UnmarshalTypeError); ok {
+		var unmarshalErr *json.UnmarshalTypeError
+		if errors.As(err, &unmarshalErr) {
 			return nil, fmt.Errorf("invalid type in config file %s at field %s: %w",
 				configPath, unmarshalErr.Field, err)
 		}
