@@ -101,9 +101,10 @@ After approval, before reporting done:
 
 ## Report back to the maintainer
 
+Keep the final report short — 3–5 lines max:
 - Round count and final verdict.
-- One-line summary per round of what shifted.
-- Files new/modified/removed.
-- Verification command output (grep for `ok` / failures).
-- Non-blocking reviewer notes worth remembering for future iterations.
-- Ask about commit granularity before committing.
+- One-line summary of what was built.
+- Files changed (new/modified/removed), one line.
+- Non-blocking P3/P4 notes, if any (one line each).
+
+Then ask exactly one question: **"Commit?"** Do not ask about granularity, push, or anything else.
