@@ -1,17 +1,21 @@
-# Java / Spring Boot
-target/
-build/
-!**/src/main/**/target/
-!**/src/test/**/target/
-*.class
-*.jar
-*.war
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 
-# Gradle
-.gradle/
+# Test binary, built with `go test -c`
+*.test
 
-# Maven
-.mvn/wrapper/maven-wrapper.jar
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
 
 # IDE
 .idea/
@@ -32,3 +36,11 @@ build/
 # Env
 .env
 .env.local
+
+# Gradle (legacy - to be removed)
+.gradle/
+gradle/
+build.gradle.kts
+settings.gradle.kts
+gradlew*
+target/
