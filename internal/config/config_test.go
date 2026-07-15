@@ -3,13 +3,14 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func TestLoad(t *testing.T) {
 	tests := []struct {
 		name          string
-		configContent  string
+		configContent string
 		wantErr       bool
 		errContains   string
 		validate      func(*testing.T, *Config)
@@ -20,7 +21,7 @@ func TestLoad(t *testing.T) {
 				"project": "test-project",
 				"verify_command": "go test ./..."
 			}`,
-			wantErr:     false,
+			wantErr: false,
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Project != "test-project" {
 					t.Errorf("Project = %v, want test-project", cfg.Project)
@@ -55,7 +56,7 @@ func TestLoad(t *testing.T) {
 				},
 				"timeout_minutes": 45
 			}`,
-			wantErr:     false,
+			wantErr: false,
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Project != "my-project" {
 					t.Errorf("Project = %v, want my-project", cfg.Project)
@@ -78,10 +79,10 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
-			name:        "missing config file",
+			name:          "missing config file",
 			configContent: "",
-			wantErr:     true,
-			errContains: "config file not found",
+			wantErr:       true,
+			errContains:   "config file not found",
 		},
 		{
 			name: "broken JSON - missing closing brace",
@@ -173,7 +174,7 @@ func TestLoad(t *testing.T) {
 				"verify_command": "go test",
 				"timeout_minutes": 60
 			}`,
-			wantErr:     false,
+			wantErr: false,
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.TimeoutMinutes != 60 {
 					t.Errorf("TimeoutMinutes = %v, want 60", cfg.TimeoutMinutes)
@@ -187,7 +188,7 @@ func TestLoad(t *testing.T) {
 				"verify_command": "go test",
 				"label": ""
 			}`,
-			wantErr:     false,
+			wantErr: false,
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Label != "ready-for-agent" {
 					t.Errorf("Label = %v, want ready-for-agent (default)", cfg.Label)
@@ -204,7 +205,7 @@ func TestLoad(t *testing.T) {
 					"reviewer": "custom/reviewer"
 				}
 			}`,
-			wantErr:     false,
+			wantErr: false,
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Models.Dev != "z-ai/glm-4.6" {
 					t.Errorf("Models.Dev = %v, want z-ai/glm-4.6 (default)", cfg.Models.Dev)
@@ -224,7 +225,7 @@ func TestLoad(t *testing.T) {
 					"reviewer": ""
 				}
 			}`,
-			wantErr:     false,
+			wantErr: false,
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Models.Dev != "custom/dev" {
 					t.Errorf("Models.Dev = %v, want custom/dev", cfg.Models.Dev)
@@ -240,13 +241,13 @@ func TestLoad(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create temp directory for test
 			tmpDir := t.TempDir()
-			
+
 			// Create .golemic subdirectory
 			golemicDir := filepath.Join(tmpDir, ".golemic")
 			if err := os.MkdirAll(golemicDir, 0755); err != nil {
 				t.Fatalf("failed to create .golemic directory: %v", err)
 			}
-			
+
 			// Write config file if content is provided
 			if tt.configContent != "" {
 				configPath := filepath.Join(golemicDir, "config.json")
@@ -254,10 +255,10 @@ func TestLoad(t *testing.T) {
 					t.Fatalf("failed to write config file: %v", err)
 				}
 			}
-			
+
 			// Load config
 			cfg, err := Load(tmpDir)
-			
+
 			// Check error expectations
 			if tt.wantErr {
 				if err == nil {
@@ -266,28 +267,19 @@ func TestLoad(t *testing.T) {
 				}
 				if tt.errContains != "" {
 					// Check that the error message contains the expected substring
-					// We need to handle absolute paths in error messages
 					errMsg := err.Error()
-					found := false
-					// Check if errContains is in the error message
-					for i := 0; i <= len(errMsg)-len(tt.errContains); i++ {
-						if errMsg[i:i+len(tt.errContains)] == tt.errContains {
-							found = true
-							break
-						}
-					}
-					if !found {
+					if !strings.Contains(errMsg, tt.errContains) {
 						t.Errorf("Load() error = %v, expected to contain %q", err, tt.errContains)
 					}
 				}
 				return
 			}
-			
+
 			if err != nil {
 				t.Errorf("Load() unexpected error: %v", err)
 				return
 			}
-			
+
 			// Run validation function if provided
 			if tt.validate != nil {
 				tt.validate(t, cfg)
