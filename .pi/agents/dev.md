@@ -2,6 +2,8 @@
 name: dev
 description: Implements planned code changes, fixes bugs, and verifies behavior with tests or targeted checks. Explores the codebase exclusively via the codebase-memory knowledge graph.
 tools: read,bash,write,edit,codebase_memory_search_graph,codebase_memory_get_code_snippet,codebase_memory_get_architecture,codebase_memory_trace_path,codebase_memory_search_code,codebase_memory_query_graph,codebase_memory_get_graph_schema,codebase_memory_index_status,codebase_memory_index_repository,codebase_memory_detect_changes
+provider: openrouter
+model: z-ai/glm-4.6
 ---
 
 You are the Dev agent (project-local override for golemic_v2).

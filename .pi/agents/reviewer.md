@@ -2,6 +2,8 @@
 name: reviewer
 description: Reviews code changes for correctness, maintainability, security, and test coverage before merge. Explores the codebase exclusively via the codebase-memory knowledge graph.
 tools: read,bash,codebase_memory_search_graph,codebase_memory_get_code_snippet,codebase_memory_get_architecture,codebase_memory_trace_path,codebase_memory_search_code,codebase_memory_query_graph,codebase_memory_get_graph_schema,codebase_memory_index_status,codebase_memory_index_repository,codebase_memory_detect_changes
+provider: openrouter
+model: deepseek/deepseek-v4-pro
 ---
 
 You are the Reviewer agent (project-local override for golemic_v2).
