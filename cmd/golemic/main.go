@@ -1,13 +1,17 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
+	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
 )
 
@@ -17,7 +21,7 @@ var knownCommands = []struct {
 }{
 	{"preflight", "Check prerequisites"},
 	{"run", "Run the main process (not implemented)"},
-	{"emit", "Emit output (not implemented)"},
+	{"emit", "Emit an event to the run log"},
 	{"open-pr", "Open a pull request (not implemented)"},
 	{"submit-review", "Submit a review (not implemented)"},
 }
@@ -40,7 +44,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	command := args[1]
 
-	// Special case: preflight is implemented
+	// Special cases: preflight and emit are implemented
 	if command == "preflight" {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
@@ -62,6 +66,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		return runPreflight(osExecutor{}, homeDir, repoRoot, stdout, stderr)
+	}
+
+	if command == "emit" {
+		return runEmit(args, stdout, stderr, os.Getenv)
 	}
 
 	for _, c := range knownCommands {
@@ -91,6 +99,89 @@ func runPreflight(executor preflight.Executor, homeDir, repoRoot string, stdout,
 		return 0
 	}
 	return 1
+}
+
+// runEmit executes the emit subcommand: golemic emit --type <t> --payload '<json>'
+// It reads GOLEMIC_RUN_ID and GOLEMIC_EVENT_LOG from the environment via getenv,
+// validates inputs, and appends one event to the JSONL event log.
+func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	fs := flag.NewFlagSet("emit", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var typeFlag string
+	var payloadFlag string
+	fs.StringVar(&typeFlag, "type", "", "Event type (required)")
+	fs.StringVar(&payloadFlag, "payload", "", "Event payload as JSON object (required)")
+
+	// Parse flags from args[2:] (after "golemic emit")
+	if err := fs.Parse(args[2:]); err != nil {
+		return 1
+	}
+
+	// BR-004: Check env vars before any I/O.
+	runID := getenv("GOLEMIC_RUN_ID")
+	eventLogPath := getenv("GOLEMIC_EVENT_LOG")
+
+	if runID == "" || eventLogPath == "" {
+		var missing []string
+		if runID == "" {
+			missing = append(missing, "GOLEMIC_RUN_ID")
+		}
+		if eventLogPath == "" {
+			missing = append(missing, "GOLEMIC_EVENT_LOG")
+		}
+		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		return 1
+	}
+
+	// BR-001: --type must be non-empty.
+	if typeFlag == "" {
+		fmt.Fprintln(stderr, "--type must not be empty")
+		return 1
+	}
+
+	// BR-002: --payload must be valid JSON that decodes to a JSON object.
+	var payloadObj interface{}
+	if err := json.Unmarshal([]byte(payloadFlag), &payloadObj); err != nil {
+		fmt.Fprintf(stderr, "Invalid --payload: %v\n", err)
+		return 1
+	}
+
+	// Verify it is a JSON object (not array, string, number, or null).
+	payloadMap, isObject := payloadObj.(map[string]interface{})
+	if !isObject {
+		fmt.Fprintf(stderr, "Invalid --payload: JSON value must be an object, got %T\n", payloadObj)
+		return 1
+	}
+
+	// Re-encode to normalise formatting.
+	normalizedPayload, err := json.Marshal(payloadMap)
+	if err != nil {
+		fmt.Fprintf(stderr, "Invalid --payload: %v\n", err)
+		return 1
+	}
+
+	// Create writer and append the event.
+	writer, err := eventlog.NewWriter(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+	defer writer.Close()
+
+	event := eventlog.Event{
+		Type:    typeFlag,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   runID,
+		Payload: normalizedPayload,
+	}
+
+	if err := writer.Write(event); err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+
+	return 0
 }
 
 // osExecutor is the production executor that runs real commands.
