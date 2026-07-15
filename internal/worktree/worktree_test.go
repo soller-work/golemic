@@ -624,3 +624,460 @@ func TestCleanup_NonExistentWorktree(t *testing.T) {
 		t.Fatal("expected error for non-existent worktree, got nil")
 	}
 }
+// ---------------------------------------------------------------------------
+// AC-001: Reviewer worktree created from remote branch
+// ---------------------------------------------------------------------------
+
+func TestCreateForReviewer_GitCommandSequence(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},                           // git -C <repoRoot> fetch origin
+		execResponse{Stdout: "", Err: nil},                           // git -C <repoRoot> rev-parse --verify origin/golemic/issue-42
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},           // git -C <repoRoot> rev-parse origin/golemic/issue-42
+		execResponse{Stdout: "Created worktree\n", Err: nil},         // git -C <repoRoot> worktree add (detached)
+		execResponse{Stdout: "", Err: nil},                           // git -C <wtPath> config credential.helper
+		execResponse{Stdout: "", Err: nil},                           // git -C <wtPath> config user.name
+		execResponse{Stdout: "", Err: nil},                           // git -C <wtPath> config user.email
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+	branchName := "golemic/issue-42"
+	reviewer := "reviewer-bot"
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter)
+	if err != nil {
+		t.Fatalf("CreateForReviewer returned error: %v", err)
+	}
+
+	calls := mockExec.Calls()
+	if len(calls) != 7 {
+		t.Fatalf("expected 7 executor calls, got %d", len(calls))
+	}
+
+	// Call 0: git -C <repoRoot> fetch origin
+	expectCall(t, calls[0], "", "git", "-C", defaultRepoRoot, "fetch", "origin")
+
+	// Call 1: git -C <repoRoot> rev-parse --verify origin/golemic/issue-42
+	expectCall(t, calls[1], "", "git", "-C", defaultRepoRoot, "rev-parse", "--verify", "origin/golemic/issue-42")
+
+	// Call 2: git -C <repoRoot> rev-parse origin/golemic/issue-42
+	expectCall(t, calls[2], "", "git", "-C", defaultRepoRoot, "rev-parse", "origin/golemic/issue-42")
+
+	// Call 3: git -C <repoRoot> worktree add <path> origin/golemic/issue-42 (detached, no -b flag)
+	wtPath := filepath.Join(golemicDir, "worktrees", "issue-42-review")
+	expectCall(t, calls[3], "", "git", "-C", defaultRepoRoot, "worktree", "add", wtPath, "origin/golemic/issue-42")
+
+	// Call 4: git -C <wtPath> config credential.helper
+	credHelper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
+	expectCall(t, calls[4], "", "git", "-C", wtPath, "config", "credential.helper", credHelper)
+
+	// Call 5: git -C <wtPath> config user.name
+	expectCall(t, calls[5], "", "git", "-C", wtPath, "config", "user.name", reviewer)
+
+	// Call 6: git -C <wtPath> config user.email
+	expectCall(t, calls[6], "", "git", "-C", wtPath, "config", "user.email", reviewer)
+}
+
+// AC-001 continued: worktree_created event has role: reviewer
+func TestCreateForReviewer_EventHasReviewerRole(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+	branchName := "golemic/issue-42"
+	reviewer := "reviewer-bot"
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter)
+	if err != nil {
+		t.Fatalf("CreateForReviewer returned error: %v", err)
+	}
+
+	events := eventWriter.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+
+	ev := events[0]
+	if ev.Type != eventlog.EventWorktreeCreated {
+		t.Errorf("event type: got %q, want %q", ev.Type, eventlog.EventWorktreeCreated)
+	}
+
+	var payload map[string]string
+	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+		t.Fatalf("failed to unmarshal event payload: %v", err)
+	}
+
+	if payload["role"] != "reviewer" {
+		t.Errorf("payload.role: got %q, want %q", payload["role"], "reviewer")
+	}
+	if payload["branch"] != branchName {
+		t.Errorf("payload.branch: got %q, want %q", payload["branch"], branchName)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-002: Dirty check passes on clean worktree
+// ---------------------------------------------------------------------------
+
+func TestIsDirty_CleanWorktree(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil}, // git status --porcelain returns empty
+	)
+
+	dirty, err := IsDirty("/tmp/worktree", mockExec)
+	if err != nil {
+		t.Fatalf("IsDirty returned error: %v", err)
+	}
+	if dirty {
+		t.Errorf("expected dirty=false for clean worktree, got true")
+	}
+}
+
+// Clean worktree with just whitespace in output
+func TestIsDirty_CleanWorktreeWithWhitespace(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "  \n  \n", Err: nil},
+	)
+
+	dirty, err := IsDirty("/tmp/worktree", mockExec)
+	if err != nil {
+		t.Fatalf("IsDirty returned error: %v", err)
+	}
+	if dirty {
+		t.Errorf("expected dirty=false for whitespace-only output, got true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-003: Dirty check triggers on modified files
+// ---------------------------------------------------------------------------
+
+func TestIsDirty_DirtyWorktree(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "M file.go\n", Err: nil},
+	)
+
+	dirty, err := IsDirty("/tmp/worktree", mockExec)
+	if err != nil {
+		t.Fatalf("IsDirty returned error: %v", err)
+	}
+	if !dirty {
+		t.Errorf("expected dirty=true for modified file, got false")
+	}
+}
+
+// Multiple dirty files
+func TestIsDirty_DirtyWorktreeMultipleFiles(t *testing.T) {
+	output := "M file1.go\nA file2.go\nD file3.go\n"
+	mockExec := newMockExecutor(
+		execResponse{Stdout: output, Err: nil},
+	)
+
+	dirty, err := IsDirty("/tmp/worktree", mockExec)
+	if err != nil {
+		t.Fatalf("IsDirty returned error: %v", err)
+	}
+	if !dirty {
+		t.Errorf("expected dirty=true for multiple changes, got false")
+	}
+}
+
+// Git status fails
+func TestIsDirty_GitStatusFails(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: errors.New("fatal: not a git repository")},
+	)
+
+	dirty, err := IsDirty("/tmp/worktree", mockExec)
+	if err == nil {
+		t.Fatal("expected error from IsDirty, got nil")
+	}
+	if !strings.Contains(err.Error(), "GIT_STATUS_FAILED") {
+		t.Errorf("expected GIT_STATUS_FAILED in error, got: %v", err)
+	}
+	if dirty {
+		t.Errorf("expected dirty=false on error, got true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-004: Reviewer git identity uses reviewer bot login
+// ---------------------------------------------------------------------------
+
+func TestCreateForReviewer_IdentityIsReviewerBot(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+	branchName := "golemic/issue-42"
+	reviewer := "my-reviewer-bot"
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter)
+	if err != nil {
+		t.Fatalf("CreateForReviewer returned error: %v", err)
+	}
+
+	calls := mockExec.Calls()
+	if len(calls) < 7 {
+		t.Fatalf("expected at least 7 calls, got %d", len(calls))
+	}
+
+	wtPath := filepath.Join(golemicDir, "worktrees", "issue-42-review")
+
+	// Call 5: user.name should be set to reviewer bot login
+	expectCall(t, calls[5], "", "git", "-C", wtPath, "config", "user.name", reviewer)
+
+	// Call 6: user.email should be set to reviewer bot login
+	expectCall(t, calls[6], "", "git", "-C", wtPath, "config", "user.email", reviewer)
+}
+
+// ---------------------------------------------------------------------------
+// AC-005: Reviewer worktree is removed on success
+// ---------------------------------------------------------------------------
+
+func TestCleanupReviewerWorktree(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+	)
+	_, golemicDir, _, issueNum, _ := testCreateArgs()
+
+	err := CleanupReviewer(defaultRepoRoot, golemicDir, issueNum, mockExec)
+	if err != nil {
+		t.Fatalf("CleanupReviewer returned error: %v", err)
+	}
+
+	calls := mockExec.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 executor call, got %d", len(calls))
+	}
+
+	// CleanupReviewer should use the reviewer worktree path and NOT call branch -D
+	wtPath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", issueNum))
+	expectCall(t, calls[0], "", "git", "-C", defaultRepoRoot, "worktree", "remove", wtPath)
+}
+
+// ---------------------------------------------------------------------------
+// Round 2 Fixes: Error handling and validation
+// ---------------------------------------------------------------------------
+
+// P1 #2: Test REMOTE_BRANCH_NOT_FOUND error code
+func TestCreateForReviewer_RemoteBranchNotFound(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: errors.New("fatal: reference not found")},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-99", "bot", mockExec, eventWriter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if !strings.Contains(err.Error(), "REMOTE_BRANCH_NOT_FOUND") {
+		t.Errorf("expected REMOTE_BRANCH_NOT_FOUND in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "was the branch pushed?") {
+		t.Errorf("expected 'was the branch pushed?' in error message, got: %v", err)
+	}
+
+	if events := eventWriter.Events(); len(events) != 0 {
+		t.Errorf("expected 0 events on failure, got %d", len(events))
+	}
+}
+
+// P2 #4: Test invalid issue number validation
+func TestCreateForReviewer_InvalidIssueNumber(t *testing.T) {
+	eventWriter := newMockEventWriter()
+	mockExec := newMockExecutor()
+
+	testCases := []int{0, -1, -999}
+	for _, issueNum := range testCases {
+		err := CreateForReviewer(defaultRepoRoot, "/tmp", "run1", issueNum, "golemic/issue-1", "bot", mockExec, eventWriter)
+		if err == nil {
+			t.Errorf("expected error for issueNumber %d, got nil", issueNum)
+		}
+		if !strings.Contains(err.Error(), "INVALID_ISSUE_NUMBER") {
+			t.Errorf("expected INVALID_ISSUE_NUMBER for issueNumber %d, got: %v", issueNum, err)
+		}
+	}
+
+	if calls := mockExec.Calls(); len(calls) != 0 {
+		t.Errorf("expected 0 executor calls for invalid issueNumber, got %d", len(calls))
+	}
+}
+
+// P2 #6: Table-driven test for reviewerBotLogin edge cases
+func TestCreateForReviewer_ReviewerBotLoginEdgeCases(t *testing.T) {
+	testCases := []struct {
+		name          string
+		reviewerLogin string
+	}{
+		{"normal login", "reviewer-bot"},
+		{"login with dashes", "my-reviewer-bot-v1"},
+		{"login with underscore", "reviewer_bot"},
+		{"login with numbers", "reviewer123"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockExec := newMockExecutor(
+				execResponse{Stdout: "", Err: nil},
+				execResponse{Stdout: "", Err: nil},
+				execResponse{Stdout: testBaseSha + "\n", Err: nil},
+				execResponse{Stdout: "", Err: nil},
+				execResponse{Stdout: "", Err: nil},
+				execResponse{Stdout: "", Err: nil},
+				execResponse{Stdout: "", Err: nil},
+			)
+			eventWriter := newMockEventWriter()
+			_, golemicDir, runID, issueNum, _ := testCreateArgs()
+			branchName := "golemic/issue-" + fmt.Sprintf("%d", issueNum)
+
+			err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, tc.reviewerLogin, mockExec, eventWriter)
+			if err != nil {
+				t.Fatalf("CreateForReviewer failed: %v", err)
+			}
+
+			calls := mockExec.Calls()
+			wtPath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", issueNum))
+
+			expectCall(t, calls[5], "", "git", "-C", wtPath, "config", "user.name", tc.reviewerLogin)
+			expectCall(t, calls[6], "", "git", "-C", wtPath, "config", "user.email", tc.reviewerLogin)
+		})
+	}
+}
+
+// Error-path tests for CreateForReviewer
+func TestCreateForReviewer_FetchFails(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: errors.New("network error")},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "GIT_FETCH_FAILED") {
+		t.Errorf("expected GIT_FETCH_FAILED in error, got: %v", err)
+	}
+}
+
+func TestCreateForReviewer_VerifyBranchFails(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: errors.New("fatal: reference not found")},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "REMOTE_BRANCH_NOT_FOUND") {
+		t.Errorf("expected REMOTE_BRANCH_NOT_FOUND in error, got: %v", err)
+	}
+}
+
+func TestCreateForReviewer_RevParseFails(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: errors.New("fatal: bad object")},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "GIT_REV_PARSE_FAILED") {
+		t.Errorf("expected GIT_REV_PARSE_FAILED in error, got: %v", err)
+	}
+}
+
+func TestCreateForReviewer_WorktreeAddFails(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},
+		execResponse{Stdout: "", Err: errors.New("git worktree add failed: exit code 128")},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "GIT_WORKTREE_ADD_FAILED") {
+		t.Errorf("expected GIT_WORKTREE_ADD_FAILED in error, got: %v", err)
+	}
+
+	if events := eventWriter.Events(); len(events) != 0 {
+		t.Errorf("expected 0 events on failure, got %d", len(events))
+	}
+}
+
+func TestCreateForReviewer_ConfigFails(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: errors.New("invalid key")},
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "GIT_CONFIG_FAILED") {
+		t.Errorf("expected GIT_CONFIG_FAILED in error, got: %v", err)
+	}
+
+	if events := eventWriter.Events(); len(events) != 0 {
+		t.Errorf("expected 0 events on failure, got %d", len(events))
+	}
+}
+
+func TestCreateForReviewer_EventWriteFails(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+		execResponse{Stdout: "", Err: nil},
+	)
+	failWriter := &failEventWriter{}
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, failWriter)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "EVENT_WRITE_FAILED") {
+		t.Errorf("expected EVENT_WRITE_FAILED in error, got: %v", err)
+	}
+}
