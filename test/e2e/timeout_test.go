@@ -156,8 +156,8 @@ func toInvoke(t *testing.T, binary, workDir, binDir, homeDir string, extraEnv ma
 }
 
 // toSetupSandbox creates a hermetic git sandbox with a local bare origin.
-// Both prompts/dev.md and prompts/reviewer.md are written so the runner can
-// reach the reviewer step (needed for AC-002).
+// prompts/dev.md and prompts/reviewer.md must exist next to the golemic binary
+// (BR-003: never in the fixture repo).
 func toSetupSandbox(t *testing.T, realGit string) (bareRepo, workDir string) {
 	t.Helper()
 
@@ -200,17 +200,6 @@ func toSetupSandbox(t *testing.T, realGit string) (bareRepo, workDir string) {
 	run(workDir, realGit, "push", "origin", "HEAD:refs/heads/main")
 	run(workDir, realGit, "fetch", "origin")
 
-	if err := os.MkdirAll(filepath.Join(workDir, "prompts"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workDir, "prompts", "dev.md"),
-		[]byte("You are a dev agent."), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workDir, "prompts", "reviewer.md"),
-		[]byte("You are a reviewer agent."), 0644); err != nil {
-		t.Fatal(err)
-	}
 	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)

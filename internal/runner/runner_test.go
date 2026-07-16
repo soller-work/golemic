@@ -215,11 +215,6 @@ func mustRun(t *testing.T, dir, name string, args ...string) {
 
 func SkipTestRun_HappyPath_AC001(t *testing.T) {
 	homeDir, repoRoot, project := setupRunnerTest(t)
-	// Create necessary files for orchestration tests
-	promptsDir := filepath.Join(repoRoot, "prompts")
-	os.MkdirAll(promptsDir, 0755)
-	os.WriteFile(filepath.Join(promptsDir, "dev.md"), []byte("# Dev"), 0644)
-	os.WriteFile(filepath.Join(promptsDir, "reviewer.md"), []byte("# Reviewer"), 0644)
 	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
 	os.MkdirAll(guidelinesDir, 0755)                                                       //nolint:errcheck
 	os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644)      //nolint:errcheck
@@ -616,11 +611,6 @@ func TestRun_MissingCredentials_AC005(t *testing.T) {
 
 func SkipTestRun_RunIDFormat(t *testing.T) {
 	homeDir, repoRoot, _ := setupRunnerTest(t)
-	// Create necessary files for orchestration tests
-	promptsDir := filepath.Join(repoRoot, "prompts")
-	os.MkdirAll(promptsDir, 0755)
-	os.WriteFile(filepath.Join(promptsDir, "dev.md"), []byte("# Dev"), 0644)
-	os.WriteFile(filepath.Join(promptsDir, "reviewer.md"), []byte("# Reviewer"), 0644)
 	guidelinesDir2 := filepath.Join(repoRoot, ".golemic", "guidelines")
 	os.MkdirAll(guidelinesDir2, 0755)                                                        //nolint:errcheck
 	os.WriteFile(filepath.Join(guidelinesDir2, "dev.md"), []byte("# Guidelines"), 0644)      //nolint:errcheck
@@ -1233,7 +1223,7 @@ func TestDevGuidelinesPath_AC001(t *testing.T) {
 	os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("REV-MARKER"), 0644) //nolint:errcheck
 
 	devPath := filepath.Join(repoRoot, ".golemic", "guidelines", "dev.md")
-	_, userPrompt, err := prompt.RenderDev(
+	userPrompt, err := prompt.RenderDev(
 		prompt.Issue{Number: 1, Title: "t", Body: "b"},
 		"golemic-dev-1",
 		"go test",
@@ -1262,7 +1252,7 @@ func TestReviewerGuidelinesPath_AC002(t *testing.T) {
 	os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("REV-MARKER"), 0644) //nolint:errcheck
 
 	reviewerPath := filepath.Join(repoRoot, ".golemic", "guidelines", "reviewer.md")
-	_, userPrompt, err := prompt.RenderReviewer(
+	userPrompt, err := prompt.RenderReviewer(
 		99,
 		prompt.Issue{Number: 1, Title: "t", Body: "b"},
 		"go test",
@@ -1302,5 +1292,109 @@ func TestRunDevAgent_MissingGuidelines_AC003(t *testing.T) {
 	expectedPath := filepath.Join(repoRoot, ".golemic", "guidelines", "dev.md")
 	if !strings.Contains(stderr.String(), expectedPath) {
 		t.Errorf("stderr should contain %q, got: %s", expectedPath, stderr.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-001: SystemPromptFile is resolved from binary dir, not repoRoot
+// AC-002: Missing system prompt next to binary → fail-closed with binary-dir path in error
+// ---------------------------------------------------------------------------
+
+// setupDevRunner builds a minimal Runner for runDevAgent unit tests with valid
+// guidelines and credentials but no prompts/ anywhere inside repoRoot.
+func setupDevRunner(t *testing.T) (r *Runner, golemicDir string, stderr *bytes.Buffer) {
+	t.Helper()
+	homeDir, repoRoot, project := setupRunnerTest(t)
+
+	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loader := credentials.NewLoader(homeDir)
+	creds, err := loader.Load(project)
+	if err != nil {
+		t.Fatalf("load credentials: %v", err)
+	}
+
+	runner := New(nil, homeDir, repoRoot, 42)
+	runner.repoRoot = repoRoot
+	runner.project = project
+	runner.creds = creds
+	runner.runID = "issue-42-20240101T000000Z"
+	runner.issue = &issueData{Number: 42, Title: "t", Body: "b"}
+	runner.cfg = &config.Config{VerifyCommand: "go test", Models: config.Models{Dev: "claude-3-5-sonnet-20241022"}}
+	runner.branchName = "golemic-dev-42"
+
+	var buf bytes.Buffer
+	runner.SetStderr(&buf)
+	return runner, filepath.Join(repoRoot, ".golemic"), &buf
+}
+
+// TestRunDevAgent_SystemPromptFromBinaryDir_AC001 verifies that when
+// prompts/dev.md exists next to the test binary, the runner passes system-prompt
+// validation and fails for a different reason (worktree/CLI absent) — proving it
+// never looks in repoRoot.
+func TestRunDevAgent_SystemPromptFromBinaryDir_AC001(t *testing.T) {
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	binaryDir := filepath.Dir(execPath)
+	promptsDir := filepath.Join(binaryDir, "prompts")
+	devPromptPath := filepath.Join(promptsDir, "dev.md")
+
+	if _, statErr := os.Stat(devPromptPath); os.IsNotExist(statErr) {
+		if mkErr := os.MkdirAll(promptsDir, 0755); mkErr != nil {
+			t.Fatalf("MkdirAll prompts: %v", mkErr)
+		}
+		if wErr := os.WriteFile(devPromptPath, []byte("# Dev"), 0644); wErr != nil {
+			t.Fatalf("WriteFile dev.md: %v", wErr)
+		}
+		t.Cleanup(func() { os.Remove(devPromptPath) }) //nolint:errcheck
+	}
+
+	r, golemicDir, stderr := setupDevRunner(t)
+	r.runDevAgent(golemicDir, "/tmp/events.jsonl", 5*time.Minute)
+
+	// System prompt was found: error must NOT mention the system prompt path
+	if strings.Contains(stderr.String(), "systemPromptFile") {
+		t.Errorf("system prompt validation should pass when prompts/ is next to binary, got: %s", stderr.String())
+	}
+	// repoRoot must not appear in prompts context
+	if strings.Contains(stderr.String(), filepath.Join(r.repoRoot, "prompts")) {
+		t.Errorf("system prompt must not reference repoRoot/prompts, got: %s", stderr.String())
+	}
+}
+
+// TestRunDevAgent_MissingSystemPromptInBinaryDir_AC002 verifies fail-closed
+// behaviour when prompts/dev.md is absent from the binary directory: the runner
+// returns outcomeDevFailed and the error names the binary-dir path.
+func TestRunDevAgent_MissingSystemPromptInBinaryDir_AC002(t *testing.T) {
+	execPath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	binaryDir := filepath.Dir(execPath)
+	devPromptPath := filepath.Join(binaryDir, "prompts", "dev.md")
+
+	if _, statErr := os.Stat(devPromptPath); statErr == nil {
+		t.Skip("prompts/dev.md exists next to test binary; cannot test missing-prompt path without removing a real file")
+	}
+
+	r, golemicDir, stderr := setupDevRunner(t)
+	outcome := r.runDevAgent(golemicDir, "/tmp/events.jsonl", 5*time.Minute)
+
+	if outcome != outcomeDevFailed {
+		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
+	}
+	if !strings.Contains(stderr.String(), devPromptPath) {
+		t.Errorf("stderr should contain expected path %q, got: %s", devPromptPath, stderr.String())
+	}
+	if strings.Contains(stderr.String(), filepath.Join(r.repoRoot, "prompts")) {
+		t.Errorf("stderr must not reference repoRoot/prompts, got: %s", stderr.String())
 	}
 }

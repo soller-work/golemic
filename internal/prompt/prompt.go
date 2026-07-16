@@ -14,7 +14,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
 )
@@ -103,15 +102,16 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 // RenderDev renders a dev user prompt with all run-specific facts injected.
 //
 // It reads the guidelines file from guidelinesPath, renders the dev user template
-// with the given issue, branch, and verifyCommand, and returns the system prompt
-// file path and the rendered user prompt string.
+// with the given issue, branch, and verifyCommand, and returns the rendered user
+// prompt string. The system prompt path is resolved by the caller from the
+// golemic binary directory.
 //
 // Returns an error if the guidelines file does not exist or cannot be read,
 // or if template execution fails.
-func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath string) (systemPromptPath string, userPrompt string, err error) {
+func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
 	guidelines, err := readGuidelines(guidelinesPath)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
 	titleB64 := base64.StdEncoding.EncodeToString([]byte(issue.Title))
@@ -128,29 +128,30 @@ func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath 
 
 	tmpl, err := template.New("dev").Parse(devUserTemplate)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to parse dev prompt template: %w", err)
+		return "", fmt.Errorf("failed to parse dev prompt template: %w", err)
 	}
 
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {
-		return "", "", fmt.Errorf("failed to render dev prompt template: %w", err)
+		return "", fmt.Errorf("failed to render dev prompt template: %w", err)
 	}
 
-	return filepath.Join("prompts", "dev.md"), sb.String(), nil
+	return sb.String(), nil
 }
 
 // RenderReviewer renders a reviewer user prompt with all run-specific facts injected.
 //
 // It reads the guidelines file from guidelinesPath, renders the reviewer user template
-// with the given PR number, issue, and verifyCommand, and returns the system prompt
-// file path and the rendered user prompt string.
+// with the given PR number, issue, and verifyCommand, and returns the rendered user
+// prompt string. The system prompt path is resolved by the caller from the
+// golemic binary directory.
 //
 // Returns an error if the guidelines file does not exist or cannot be read,
 // or if template execution fails.
-func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string) (systemPromptPath string, userPrompt string, err error) {
+func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
 	guidelines, err := readGuidelines(guidelinesPath)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
 
 	data := reviewerTemplateData{
@@ -162,15 +163,15 @@ func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesP
 
 	tmpl, err := template.New("reviewer").Parse(reviewerUserTemplate)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to parse reviewer prompt template: %w", err)
+		return "", fmt.Errorf("failed to parse reviewer prompt template: %w", err)
 	}
 
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {
-		return "", "", fmt.Errorf("failed to render reviewer prompt template: %w", err)
+		return "", fmt.Errorf("failed to render reviewer prompt template: %w", err)
 	}
 
-	return filepath.Join("prompts", "reviewer.md"), sb.String(), nil
+	return sb.String(), nil
 }
 
 // readGuidelines reads the guidelines file at the given path.

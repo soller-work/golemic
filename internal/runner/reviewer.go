@@ -17,6 +17,7 @@ import (
 // runReviewerAgent runs the reviewer agent and returns the outcome.
 func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration) string {
 	golemicBinaryPath, _ := os.Executable()
+	binaryDir := filepath.Dir(golemicBinaryPath)
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
 
@@ -28,7 +29,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	}
 
 	// Render reviewer prompt
-	systemPromptFile, userPrompt, err := prompt.RenderReviewer(
+	userPrompt, err := prompt.RenderReviewer(
 		prNumber,
 		prompt.Issue{
 			Number: r.issue.Number,
@@ -46,7 +47,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	// Run reviewer agent
 	_, _, err = agent.RunRole(context.Background(), agent.RoleConfig{
 		Role:              "reviewer",
-		SystemPromptFile:  filepath.Join(r.repoRoot, systemPromptFile),
+		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "reviewer.md"),
 		UserPrompt:        userPrompt,
 		WorktreeDir:       reviewerWorktreePath,
 		RunID:             r.runID,

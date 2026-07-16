@@ -33,14 +33,9 @@ func TestRenderDev_ContainsAllFacts(t *testing.T) {
 	guidelinesContent := "# Dev Guidelines (Test)\n\n## Stack\nGo 1.21, standard library"
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", guidelinesContent)
 
-	systemPromptPath, userPrompt, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+	userPrompt, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
-	}
-
-	// System prompt path
-	if systemPromptPath != "prompts/dev.md" {
-		t.Errorf("systemPromptPath = %q, want %q", systemPromptPath, "prompts/dev.md")
 	}
 
 	// Issue number
@@ -86,12 +81,6 @@ func TestRenderDev_ContainsAllFacts(t *testing.T) {
 		t.Error("userPrompt missing condition that open-pr is only allowed after verify_command exits 0")
 	}
 
-	// AC-004: System prompt path returned (sub-check)
-	if systemPromptPath == "" {
-		t.Error("systemPromptPath is empty")
-	}
-
-	// AC-005: Prompt in memory as string (sub-check)
 	if userPrompt == "" {
 		t.Error("userPrompt is empty string")
 	}
@@ -103,14 +92,9 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", guidelinesContent)
 
 	prNumber := 123
-	systemPromptPath, userPrompt, err := RenderReviewer(prNumber, testIssue, "go test ./...", guidelinesPath)
+	userPrompt, err := RenderReviewer(prNumber, testIssue, "go test ./...", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
-	}
-
-	// System prompt path
-	if systemPromptPath != "prompts/reviewer.md" {
-		t.Errorf("systemPromptPath = %q, want %q", systemPromptPath, "prompts/reviewer.md")
 	}
 
 	// PR number
@@ -151,12 +135,6 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 		t.Error("userPrompt missing 'golemic submit-review' as final step")
 	}
 
-	// AC-004: System prompt path returned (sub-check)
-	if systemPromptPath == "" {
-		t.Error("systemPromptPath is empty")
-	}
-
-	// AC-005: Prompt in memory as string (sub-check)
 	if userPrompt == "" {
 		t.Error("userPrompt is empty string")
 	}
@@ -166,7 +144,7 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 func TestRenderDev_MissingGuidelinesError(t *testing.T) {
 	nonexistentPath := filepath.Join(t.TempDir(), "nonexistent", "dev.md")
 
-	_, userPrompt, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", nonexistentPath)
+	userPrompt, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", nonexistentPath)
 
 	if err == nil {
 		t.Fatal("RenderDev() expected error for missing guidelines file, got nil")
@@ -187,7 +165,7 @@ func TestRenderDev_MissingGuidelinesError(t *testing.T) {
 func TestRenderReviewer_MissingGuidelinesError(t *testing.T) {
 	nonexistentPath := filepath.Join(t.TempDir(), "nonexistent", "reviewer.md")
 
-	_, userPrompt, err := RenderReviewer(123, testIssue, "go test ./...", nonexistentPath)
+	userPrompt, err := RenderReviewer(123, testIssue, "go test ./...", nonexistentPath)
 
 	if err == nil {
 		t.Fatal("RenderReviewer() expected error for missing guidelines file, got nil")
@@ -202,40 +180,11 @@ func TestRenderReviewer_MissingGuidelinesError(t *testing.T) {
 	}
 }
 
-// AC-004 standalone: System prompt paths returned correctly for both roles
-func TestRenderDev_SystemPromptPath(t *testing.T) {
-	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Test")
-
-	systemPromptPath, _, err := RenderDev(testIssue, "branch", "verify", guidelinesPath)
-	if err != nil {
-		t.Fatalf("RenderDev() unexpected error: %v", err)
-	}
-
-	want := "prompts/dev.md"
-	if systemPromptPath != want {
-		t.Errorf("systemPromptPath = %q, want %q", systemPromptPath, want)
-	}
-}
-
-func TestRenderReviewer_SystemPromptPath(t *testing.T) {
-	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Test")
-
-	systemPromptPath, _, err := RenderReviewer(123, testIssue, "verify", guidelinesPath)
-	if err != nil {
-		t.Fatalf("RenderReviewer() unexpected error: %v", err)
-	}
-
-	want := "prompts/reviewer.md"
-	if systemPromptPath != want {
-		t.Errorf("systemPromptPath = %q, want %q", systemPromptPath, want)
-	}
-}
-
 // AC-005 standalone: Prompt is rendered as a non-empty string in memory
 func TestRenderDev_UserPromptNonEmpty(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Test Guidelines")
 
-	_, userPrompt, err := RenderDev(testIssue, "branch", "verify", guidelinesPath)
+	userPrompt, err := RenderDev(testIssue, "branch", "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
@@ -248,7 +197,7 @@ func TestRenderDev_UserPromptNonEmpty(t *testing.T) {
 func TestRenderReviewer_UserPromptNonEmpty(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Test Guidelines")
 
-	_, userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath)
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -263,7 +212,7 @@ func TestRenderDev_GuidelinesVerbatim(t *testing.T) {
 	guidelinesContent := "# Custom Guidelines\n\nSome **markdown** content with `code` and\n\nmulti-line text."
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", guidelinesContent)
 
-	_, userPrompt, err := RenderDev(testIssue, "branch", "verify", guidelinesPath)
+	userPrompt, err := RenderDev(testIssue, "branch", "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
@@ -277,7 +226,7 @@ func TestRenderReviewer_GuidelinesVerbatim(t *testing.T) {
 	guidelinesContent := "# Custom Reviewer Guidelines\n\nSome **markdown** content with `code`."
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", guidelinesContent)
 
-	_, userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath)
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -290,7 +239,7 @@ func TestRenderReviewer_GuidelinesVerbatim(t *testing.T) {
 // Step list in dev prompt ends with open-pr
 func TestRenderDev_StepListEndsWithOpenPR(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
-	_, userPrompt, err := RenderDev(testIssue, "branch", "verify", guidelinesPath)
+	userPrompt, err := RenderDev(testIssue, "branch", "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
@@ -308,7 +257,7 @@ func TestRenderDev_StepListEndsWithOpenPR(t *testing.T) {
 // Step list in reviewer prompt ends with submit-review
 func TestRenderReviewer_StepListEndsWithSubmitReview(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
-	_, userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath)
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -327,7 +276,7 @@ func TestRenderDev_EmptyTitleBody(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 	emptyIssue := Issue{Number: 99, Title: "", Body: ""}
 
-	_, userPrompt, err := RenderDev(emptyIssue, "branch", "verify", guidelinesPath)
+	userPrompt, err := RenderDev(emptyIssue, "branch", "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderDev() unexpected error for empty title/body: %v", err)
 	}
@@ -347,7 +296,7 @@ func TestRenderDev_AdversarialShellSafety(t *testing.T) {
 	}
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 
-	_, userPrompt, err := RenderDev(adversarialIssue, "branch", "verify", guidelinesPath)
+	userPrompt, err := RenderDev(adversarialIssue, "branch", "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
@@ -443,7 +392,7 @@ func bashCheckSyntax(cmd string) error {
 func TestRenderReviewer_NonZeroPR(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
 
-	_, userPrompt, err := RenderReviewer(1, testIssue, "verify", guidelinesPath)
+	userPrompt, err := RenderReviewer(1, testIssue, "verify", guidelinesPath)
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error for PR#1: %v", err)
 	}

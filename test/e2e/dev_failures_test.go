@@ -163,7 +163,9 @@ func dfInvoke(t *testing.T, binary, workDir, binDir, homeDir string, extraEnv ma
 // dfSetupSandbox creates:
 //   - a local bare git repo (the "origin")
 //   - a working git repo with origin pointing to the bare repo
-//   - .golemic/guidelines/dev.md and prompts/dev.md (required by the runner's prompt renderer)
+//   - .golemic/guidelines/dev.md (required by the runner's prompt renderer)
+//
+// prompts/dev.md must exist next to the golemic binary (BR-003: never in the fixture repo).
 //
 // Returns (bareRepoPath, sandboxRepoPath).
 func dfSetupSandbox(t *testing.T, realGit string) (string, string) {
@@ -216,14 +218,6 @@ func dfSetupSandbox(t *testing.T, realGit string) (string, string) {
 	// Fetch so origin/main tracking ref exists in the working repo.
 	run(workDir, realGit, "fetch", "origin")
 
-	// Create files the prompt renderer and agent.RunRole validation require.
-	if err := os.MkdirAll(filepath.Join(workDir, "prompts"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workDir, "prompts", "dev.md"),
-		[]byte("You are a dev agent."), 0644); err != nil {
-		t.Fatal(err)
-	}
 	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)

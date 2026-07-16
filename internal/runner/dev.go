@@ -15,11 +15,12 @@ import (
 // runDevAgent runs the dev agent and returns the outcome.
 func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Duration) string {
 	golemicBinaryPath, _ := os.Executable()
+	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
 
 	// Render dev prompt
-	systemPromptFile, userPrompt, err := prompt.RenderDev(
+	userPrompt, err := prompt.RenderDev(
 		prompt.Issue{
 			Number: r.issue.Number,
 			Title:  r.issue.Title,
@@ -37,7 +38,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	// Run dev agent
 	_, _, err = agent.RunRole(context.Background(), agent.RoleConfig{
 		Role:              "dev",
-		SystemPromptFile:  filepath.Join(r.repoRoot, systemPromptFile),
+		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
 		UserPrompt:        userPrompt,
 		WorktreeDir:       devWorktreePath,
 		RunID:             r.runID,

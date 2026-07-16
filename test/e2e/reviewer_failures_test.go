@@ -164,8 +164,10 @@ func rfInvoke(t *testing.T, binary, workDir, binDir, homeDir string, extraEnv ma
 // rfSetupSandbox creates:
 //   - a local bare git repo (the "origin")
 //   - a working git repo with origin pointing to the bare repo
-//   - .golemic/guidelines/dev.md, .golemic/guidelines/reviewer.md and prompts/dev.md +
-//     prompts/reviewer.md (required by the runner's prompt renderer and agent.RunRole system-prompt validation)
+//   - .golemic/guidelines/dev.md and .golemic/guidelines/reviewer.md (required by the runner's prompt renderer)
+//
+// prompts/dev.md and prompts/reviewer.md must exist next to the golemic binary
+// (BR-003: never in the fixture repo).
 //
 // Returns (bareRepoPath, sandboxRepoPath).
 func rfSetupSandbox(t *testing.T, realGit string) (string, string) {
@@ -211,18 +213,6 @@ func rfSetupSandbox(t *testing.T, realGit string) (string, string) {
 	run(workDir, realGit, "push", "origin", "HEAD:refs/heads/main")
 	run(workDir, realGit, "fetch", "origin")
 
-	if err := os.MkdirAll(filepath.Join(workDir, "prompts"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(workDir, "prompts", "dev.md"),
-		[]byte("You are a dev agent."), 0644); err != nil {
-		t.Fatal(err)
-	}
-	// reviewer.md required by prompt.RenderReviewer → agent.RunRole system-prompt validation.
-	if err := os.WriteFile(filepath.Join(workDir, "prompts", "reviewer.md"),
-		[]byte("You are a reviewer agent."), 0644); err != nil {
-		t.Fatal(err)
-	}
 	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
