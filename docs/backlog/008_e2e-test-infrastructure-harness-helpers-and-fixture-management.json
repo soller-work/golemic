@@ -1,0 +1,556 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "integration",
+  "slice_id": "e2e-test-infrastructure-harness-helpers-fixture-management",
+  "title": "E2E Test Infrastructure: harness, helpers, and fixture management",
+  "summary": "Provide reusable test infrastructure for E2E tests: process spawning harness, GitHub API helpers, environment/config management, cleanup, and fixture isolation. Foundation for all E2E test scenarios (I2\u2013I7).",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Test engineer / CI system",
+    "goal": "Execute E2E tests against real golemic_e2e sandbox with automatic setup, cleanup, and artifact isolation",
+    "business_value": "Reliable, reproducible E2E testing without manual GitHub operations; CI-friendly",
+    "trigger": "go test ./test/e2e runs",
+    "success_outcome": "Tests can spawn golemic processes, create/delete issues, verify PRs/reviews, cleanup without affecting other tests"
+  },
+  "scope": {
+    "in_scope": [
+      "Process harness: exec.Command to run golemic binary",
+      "Environment setup: load golemic_e2e config, set tokens, manage working directory",
+      "GitHub API helpers: createTestIssue, deleteTestIssue, assertPRExists, assertReviewExists",
+      "Test fixture management: broken configs, invalid tokens, stale branches/PRs",
+      "Cleanup: defer-based automatic teardown per test",
+      "Logging: capture stdout/stderr from golemic subprocess",
+      "Isolation: each test uses unique issue number to prevent collisions"
+    ],
+    "out_of_scope": [
+      "Agent prompt tuning",
+      "GitHub webhook handling",
+      "CI/CD pipeline setup (only test code structure)"
+    ]
+  },
+  "preconditions": [
+    "golemic binary can be built: go build ./cmd/golemic",
+    "golemic_e2e repo exists and is cloned locally",
+    "Test tokens (GOLEMIC_DEV_TOKEN, GOLEMIC_REVIEWER_TOKEN) available as env vars or in ~/.golemic/golemic_e2e/credentials.json",
+    "gh CLI installed and authenticated for test runs"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Each test must clean up all artifacts (issues, PRs, branches, worktrees)",
+      "applies_when": "Test finishes (success or failure)",
+      "outcome": "golemic_e2e state restored to baseline"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Each test uses unique issue number to prevent collisions",
+      "applies_when": "Test creates issue",
+      "outcome": "Parallel tests on different issue numbers are safe"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Tokens must never appear in test logs or output",
+      "applies_when": "Tests capture subprocess output",
+      "outcome": "Redact tokens from logs before assertion"
+    },
+    {
+      "id": "BR-004",
+      "rule": "Test must fail fast if golemic_e2e config is invalid",
+      "applies_when": "Test setup",
+      "outcome": "Preflight errors caught before subprocess spawn"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "Test harness package",
+      "operation": "import test/e2e/harness",
+      "inputs": [
+        {
+          "name": "golemic_e2e path",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "absolute or relative path"
+          ],
+          "source": "environment or flag"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "success",
+          "status": "harness.GollemicRunner instance",
+          "body": "Ready to spawn processes"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "golemic_e2e not found",
+          "code": "SETUP_ERROR",
+          "status": "error",
+          "message": "Cannot locate golemic_e2e directory"
+        },
+        {
+          "condition": "config.json invalid",
+          "code": "CONFIG_ERROR",
+          "status": "error",
+          "message": "config.json parse error or missing fields"
+        },
+        {
+          "condition": "tokens missing",
+          "code": "AUTH_ERROR",
+          "status": "error",
+          "message": "GOLEMIC_DEV_TOKEN or GOLEMIC_REVIEWER_TOKEN not set"
+        }
+      ]
+    },
+    {
+      "id": "IF-002",
+      "kind": "internal_api",
+      "name": "GitHub helpers package",
+      "operation": "import test/e2e/github",
+      "inputs": [
+        {
+          "name": "gh CLI path",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "in PATH or explicit"
+          ],
+          "source": "environment"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "success",
+          "status": "helpers available",
+          "body": "createTestIssue, deleteTestIssue, assertPRExists, etc."
+        }
+      ],
+      "errors": [
+        {
+          "condition": "gh CLI not found",
+          "code": "SETUP_ERROR",
+          "status": "error",
+          "message": "gh not in PATH"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [
+    {
+      "id": "PS-001",
+      "order": 1,
+      "name": "Load test dependencies",
+      "trigger": "go test invoked",
+      "action": "Import harness, helpers, load golemic_e2e config, verify tokens",
+      "state_before": "Test binary starting",
+      "state_after": "Config loaded, tokens available",
+      "outcome": "Setup succeeds",
+      "failure_behavior": "Test fails with setup error",
+      "terminal": false
+    },
+    {
+      "id": "PS-002",
+      "order": 2,
+      "name": "Create test issue",
+      "trigger": "Individual test starts",
+      "action": "Call createTestIssue(title, body); returns issue.Number",
+      "state_before": "Config ready",
+      "state_after": "Issue exists on GitHub",
+      "outcome": "Issue number available for test",
+      "failure_behavior": "Test skips or fails",
+      "terminal": false
+    },
+    {
+      "id": "PS-003",
+      "order": 3,
+      "name": "Run golemic subprocess",
+      "trigger": "Test logic begins",
+      "action": "Spawn golemic run --issue N with harness; capture output",
+      "state_before": "Issue created",
+      "state_after": "Process executed; output captured",
+      "outcome": "stdout/stderr available",
+      "failure_behavior": "Subprocess failure propagated to test",
+      "terminal": false
+    },
+    {
+      "id": "PS-004",
+      "order": 4,
+      "name": "Assert outcomes",
+      "trigger": "Subprocess finished",
+      "action": "Call helpers: assertPRExists, assertReviewExists, etc.",
+      "state_before": "Output captured",
+      "state_after": "Assertions pass or fail",
+      "outcome": "Test passes or fails",
+      "failure_behavior": "Test assertion error",
+      "terminal": false
+    },
+    {
+      "id": "PS-005",
+      "order": 5,
+      "name": "Cleanup",
+      "trigger": "Test ends (defer)",
+      "action": "Delete PR, branch, issue; verify worktrees cleaned",
+      "state_before": "Test artifacts on GitHub",
+      "state_after": "All artifacts removed",
+      "outcome": "Sandbox restored",
+      "failure_behavior": "Cleanup errors logged (non-fatal)",
+      "terminal": true
+    }
+  ],
+  "integration_contracts": [
+    {
+      "id": "IC-001",
+      "external_system": "GitHub API",
+      "operation": "create/delete issues, query PRs/reviews",
+      "request_contract": "gh issue create/delete/view",
+      "response_contract": "Issue JSON, PR JSON",
+      "direction": "outbound",
+      "transport": "HTTP (via gh CLI wrapper)",
+      "idempotency": "Issue numbers unique per test; deletion idempotent",
+      "timeout": "30 seconds per gh command",
+      "retry_policy": "Manual retry via test re-run; limited retries (3 attempts) for transient GitHub API errors",
+      "compatibility": "gh CLI >= 2.0; GitHub REST API v3",
+      "failure_mapping": "gh non-zero exit -> test error"
+    },
+    {
+      "id": "IC-002",
+      "external_system": "Local process execution",
+      "operation": "spawn golemic binary",
+      "request_contract": "exec.Command with args and env",
+      "response_contract": "exit code, stdout, stderr",
+      "direction": "outbound",
+      "transport": "subprocess invocation",
+      "idempotency": "Each invocation independent",
+      "timeout": "config.timeout_minutes (default 30min per role)",
+      "retry_policy": "No automatic retry; test controls logic via exec.Command timeout and signal handling",
+      "compatibility": "Go 1.21+; POSIX-compliant shell; binary must be available",
+      "failure_mapping": "non-zero exit -> test assertion error"
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "golemic_e2e repository",
+      "precondition": "Test begins",
+      "changes": [
+        {
+          "field": "Issue",
+          "operation": "create",
+          "value_source": "createTestIssue helper"
+        },
+        {
+          "field": "Issue",
+          "operation": "delete",
+          "value_source": "deleteTestIssue helper (cleanup)"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "Local filesystem (~/.golemic/golemic_e2e/runs/)",
+      "precondition": "golemic process runs",
+      "changes": [
+        {
+          "field": "event log",
+          "operation": "create",
+          "value_source": "golemic writes events.jsonl"
+        }
+      ]
+    }
+  ],
+  "side_effects": [
+    {
+      "id": "SE-001",
+      "type": "external_call",
+      "description": "Subprocess spawned and monitored",
+      "delivery": "synchronous",
+      "idempotency": "Process ID ensures unique invocation",
+      "failure_policy": "Kill process on timeout"
+    },
+    {
+      "id": "SE-002",
+      "type": "audit",
+      "description": "Test logs captured and optionally printed on failure",
+      "delivery": "synchronous",
+      "idempotency": "One log per test run",
+      "failure_policy": "Logs retained for debugging"
+    }
+  ],
+  "security": {
+    "authentication": "GOLEMIC_DEV_TOKEN and GOLEMIC_REVIEWER_TOKEN; tokens must not appear in test output",
+    "authorization_rules": [
+      "Tokens scoped to write golemic_e2e repo",
+      "Tests run with user's GitHub auth only; no service account needed"
+    ],
+    "data_classification": "Test infrastructure; tokens are secrets",
+    "audit_requirements": [
+      "Test names and pass/fail results logged",
+      "Token redaction verified in logs"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "test/e2e/harness.go (ProcessRunner, environment setup)",
+      "test/e2e/github.go (GitHub API helpers)",
+      "test/e2e/fixtures.go (broken configs, test data)",
+      "test/e2e/cleanup.go (defer-based teardown)"
+    ],
+    "integration_points": [
+      "cmd/golemic binary (spawned as subprocess)",
+      "GitHub API (via gh CLI)",
+      "Local git (worktree queries, branch cleanup)",
+      "golemic_e2e sandbox (working directory)"
+    ],
+    "architecture_constraints": [
+      "Harness must not modify golemic source code",
+      "Environment setup must use golemic_e2e's existing .golemic/config.json",
+      "All cleanup must be idempotent (safe to call twice)"
+    ],
+    "allowed_changes": [
+      "Create test/e2e/ directory and packages",
+      "Add test Go files and helpers",
+      "Add test fixtures (broken configs, scripts)"
+    ],
+    "forbidden_changes": [
+      "Do not modify cmd/golemic or internal/runner",
+      "Do not modify golemic_e2e production files",
+      "Do not hardcode GitHub tokens (use env vars)"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Test infrastructure is additive; no breaking changes to existing code",
+    "consistency_and_concurrency": "Each test creates unique issue number (e.g., appends timestamp); parallel test execution safe as long as different issues used"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Harness loads golemic_e2e config and tokens",
+      "given": [
+        "golemic_e2e directory exists",
+        ".golemic/config.json is valid",
+        "GOLEMIC_DEV_TOKEN and GOLEMIC_REVIEWER_TOKEN set"
+      ],
+      "when": [
+        "Test imports harness; calls NewRunner(golemic_e2e_path)"
+      ],
+      "then": [
+        "Runner instance created",
+        "Config loaded",
+        "Tokens available (not nil)",
+        "Ready to spawn processes"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "BR-003",
+        "BR-004",
+        "PS-001",
+        "IF-001",
+        "IC-002",
+        "SE-001",
+        "SE-002"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Test creates and deletes issue",
+      "given": [
+        "Harness ready",
+        "gh CLI authenticated"
+      ],
+      "when": [
+        "Test calls github.CreateTestIssue(title, body)"
+      ],
+      "then": [
+        "Issue created on GitHub",
+        "Issue number returned",
+        "Test calls defer github.DeleteTestIssue(issueNum)",
+        "Issue deleted after test"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "PS-002",
+        "PS-005",
+        "IF-002",
+        "IC-001",
+        "SC-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Subprocess spawned and output captured",
+      "given": [
+        "Harness ready",
+        "Issue created"
+      ],
+      "when": [
+        "Test calls runner.Exec(\"run\", \"--issue\", issueNum)"
+      ],
+      "then": [
+        "golemic binary spawned",
+        "stdout and stderr captured",
+        "Exit code available",
+        "Output does not contain tokens (redacted if needed)"
+      ],
+      "traces_to": [
+        "BR-003",
+        "PS-003",
+        "IF-002",
+        "IC-002",
+        "SE-001"
+      ]
+    },
+    {
+      "id": "AC-004",
+      "title": "Helpers assert PR and review existence",
+      "given": [
+        "golemic process completed successfully",
+        "PR created on GitHub"
+      ],
+      "when": [
+        "Test calls github.AssertPRExists(issueNum)",
+        "Test calls github.AssertReviewExists(prNum)"
+      ],
+      "then": [
+        "PR found and verified",
+        "Review found and verified",
+        "Assertions pass"
+      ],
+      "traces_to": [
+        "PS-004",
+        "IF-002",
+        "IC-001"
+      ]
+    },
+    {
+      "id": "AC-005",
+      "title": "Cleanup removes all test artifacts",
+      "given": [
+        "Test created issue, PR, branch, worktree"
+      ],
+      "when": [
+        "Test ends (defer cleanup called)"
+      ],
+      "then": [
+        "PR deleted",
+        "Branch deleted (local and remote)",
+        "Worktrees removed",
+        "Issue deleted",
+        "golemic_e2e state clean"
+      ],
+      "traces_to": [
+        "BR-001",
+        "PS-005",
+        "SC-001",
+        "SC-002"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit",
+      "integration",
+      "end_to_end"
+    ],
+    "test_cases": [
+      "AC-001: Harness initialization",
+      "AC-002: Issue lifecycle (create/delete)",
+      "AC-003: Subprocess execution and output",
+      "AC-004: GitHub assertions",
+      "AC-005: Cleanup verification"
+    ],
+    "quality_commands": [
+      "go test ./test/e2e -run TestInfrastructure (harness unit tests)",
+      "go test ./test/e2e -run TestHarness_* (integration with golemic_e2e)",
+      "go test ./test/e2e -v (all tests with verbose output)"
+    ],
+    "non_functional_requirements": [
+      "Setup overhead: <5s per test",
+      "Cleanup must complete within 10s (timeout on stale resources)",
+      "Logs must not exceed 100MB per test run",
+      "Parallel tests safe: up to 10 concurrent safely (depends on GitHub API limits)"
+    ],
+    "definition_of_done": [
+      "test/e2e/ directory created with harness.go, github.go, fixtures.go, cleanup.go",
+      "All AC scenarios pass",
+      "No tokens in logs",
+      "Cleanup verifiable (can run test twice; second run still clean)",
+      "README in test/e2e/ documents usage and extending tests",
+      "CI integration ready (no local-only dependencies)"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Infrastructure location",
+      "decision": "Place test code in golemic/test/e2e/, not in golemic_e2e. Test harness and helpers are part of golemic tooling, not the sample project.",
+      "source": "user",
+      "evidence_ids": [
+        "EV-001",
+        "EV-002",
+        "EV-003"
+      ],
+      "rationale": "Clean separation: tool code vs. test fixtures. Allows CI integration without exposing test-specific code to sample project."
+    },
+    {
+      "id": "D-002",
+      "topic": "Cleanup strategy",
+      "decision": "Use defer-based cleanup in each test; idempotent operations safe to call multiple times. No centralized cleanup script.",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "Rust/Go pattern; each test is self-contained and safe to run in isolation."
+    },
+    {
+      "id": "D-003",
+      "topic": "Process spawning",
+      "decision": "Use exec.Command (Go stdlib) to spawn golemic binary as subprocess; capture stdout/stderr.",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "No external dependencies; matches existing test patterns in golemic (cmd/golemic/main_test.go already uses this)."
+    },
+    {
+      "id": "D-004",
+      "topic": "Unique issue numbering",
+      "decision": "Each test creates issues with unique identifiers (timestamp + test name appended); prevents collisions in parallel runs.",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [],
+      "rationale": "GitHub issue numbers auto-increment; tests can safely create sequential issues without conflicts."
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "cmd/golemic/main_test.go",
+      "symbol": "fakeExecutor",
+      "location": "lines 18-42",
+      "finding": "Existing test pattern: subprocess spawning and output capture via exec.Command",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "internal/runner/runner.go",
+      "symbol": "Runner",
+      "location": "lines 1-50",
+      "finding": "Runner struct manages orchestration; tests will instantiate and call via subprocess",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "docs/e2e.md",
+      "symbol": null,
+      "location": "Part 2.1\u20132.4",
+      "finding": "Manual smoke test shows expected environment setup: .golemic/config.json, tokens, gh auth",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}
