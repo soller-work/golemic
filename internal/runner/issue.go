@@ -7,8 +7,9 @@ import (
 
 // loadIssue fetches issue details from GitHub via gh issue view with the dev token.
 func (r *Runner) loadIssue() (*issueData, error) {
-	out, err := r.executor.RunWithEnv(
+	out, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		r.repoRoot,
 		"gh", "issue", "view", fmt.Sprintf("%d", r.issueNum), "--json", "title,body",
 	)
 	if err != nil {

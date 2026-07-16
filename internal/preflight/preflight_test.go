@@ -36,6 +36,14 @@ func (f *fakeExecutor) RunWithEnv(env map[string]string, name string, args ...st
 	return "", fmt.Errorf("not mocked: %s %v", name, args)
 }
 
+func (f *fakeExecutor) RunInDir(_ string, name string, args ...string) (string, error) {
+	return f.Run(name, args...)
+}
+
+func (f *fakeExecutor) RunWithEnvInDir(env map[string]string, _ string, name string, args ...string) (string, error) {
+	return f.RunWithEnv(env, name, args...)
+}
+
 // fakeExecutorOK returns an executor that always succeeds.
 func fakeExecutorOK() *fakeExecutor {
 	return &fakeExecutor{

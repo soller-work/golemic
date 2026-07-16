@@ -33,7 +33,7 @@ func (r *Runner) checkWorktreeCollision() *Collision {
 // Returns error on git command failure (fail-closed per IC-002).
 func (r *Runner) checkBranchCollision() (*Collision, error) {
 	// Local branch check
-	localOut, err := r.executor.Run("git", "branch", "--list", r.branchName)
+	localOut, err := r.executor.RunInDir(r.repoRoot, "git", "branch", "--list", r.branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check git state: %w", err)
 	}
@@ -44,7 +44,7 @@ func (r *Runner) checkBranchCollision() (*Collision, error) {
 	}
 
 	// Remote branch check
-	remoteOut, err := r.executor.Run("git", "ls-remote", "--heads", "origin", r.branchName)
+	remoteOut, err := r.executor.RunInDir(r.repoRoot, "git", "ls-remote", "--heads", "origin", r.branchName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check git state: %w", err)
 	}
@@ -60,8 +60,9 @@ func (r *Runner) checkBranchCollision() (*Collision, error) {
 // checkPRCollision checks BR-006: open PR with head branch exists → abort.
 // Returns error on gh command or parse failure (fail-closed).
 func (r *Runner) checkPRCollision() (*Collision, error) {
-	out, err := r.executor.RunWithEnv(
+	out, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		r.repoRoot,
 		"gh", "pr", "list", "--head", r.branchName, "--json", "url,state",
 	)
 	if err != nil {

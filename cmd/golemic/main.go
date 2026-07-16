@@ -522,6 +522,38 @@ func (e osExecutor) RunWithEnv(env map[string]string, name string, args ...strin
 	return string(out), nil
 }
 
+func (e osExecutor) RunInDir(dir string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", &preflight.ErrExit{ExitCode: exitErr.ExitCode(), Stderr: string(exitErr.Stderr)}
+		}
+		return "", err
+	}
+	return string(out), nil
+}
+
+func (e osExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return "", &preflight.ErrExit{ExitCode: exitErr.ExitCode(), Stderr: string(exitErr.Stderr)}
+		}
+		return "", err
+	}
+	return string(out), nil
+}
+
 func main() {
 	os.Exit(run(os.Args, os.Stdout, os.Stderr))
 }

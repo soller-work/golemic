@@ -61,6 +61,10 @@ type Executor interface {
 	Run(name string, args ...string) (string, error)
 	// RunWithEnv executes a command with additional environment variables set.
 	RunWithEnv(env map[string]string, name string, args ...string) (string, error)
+	// RunInDir executes a command with the given working directory.
+	RunInDir(dir string, name string, args ...string) (string, error)
+	// RunWithEnvInDir executes a command with the given working directory and environment.
+	RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error)
 }
 
 // Preflight runs all prerequisite checks in fixed order.
@@ -191,13 +195,13 @@ func (p *Preflight) checkGit() Result {
 	}
 
 	// 2. git worktree list (also verifies we are inside a git repo)
-	_, err = p.executor.Run("git", "worktree", "list")
+	_, err = p.executor.RunInDir(p.repoRoot, "git", "worktree", "list")
 	if err != nil {
 		return Result{Name: "git", Ok: false, Details: "git worktree list failed: " + err.Error()}
 	}
 
 	// 3. Check remote origin exists
-	remoteOut, err := p.executor.Run("git", "config", "--get", "remote.origin.url")
+	remoteOut, err := p.executor.RunInDir(p.repoRoot, "git", "config", "--get", "remote.origin.url")
 	if err != nil {
 		return Result{Name: "git", Ok: false, Details: "no remote 'origin' configured: " + err.Error()}
 	}

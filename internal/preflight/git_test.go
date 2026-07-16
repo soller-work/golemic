@@ -280,3 +280,72 @@ func TestMaskURL(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// AC-003: checkGit pins worktree list and config to p.repoRoot
+// ---------------------------------------------------------------------------
+
+// dirCapturingExecutor records dirs used by RunInDir.
+type dirCapturingExecutor struct {
+	dirs     []string
+	runFunc  func(name string, args ...string) (string, error)
+}
+
+func (d *dirCapturingExecutor) Run(name string, args ...string) (string, error) {
+	if d.runFunc != nil {
+		return d.runFunc(name, args...)
+	}
+	return "", nil
+}
+
+func (d *dirCapturingExecutor) RunWithEnv(env map[string]string, name string, args ...string) (string, error) {
+	return d.Run(name, args...)
+}
+
+func (d *dirCapturingExecutor) RunInDir(dir string, name string, args ...string) (string, error) {
+	d.dirs = append(d.dirs, dir)
+	if d.runFunc != nil {
+		return d.runFunc(name, args...)
+	}
+	return "", nil
+}
+
+func (d *dirCapturingExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
+	return d.RunInDir(dir, name, args...)
+}
+
+func TestCheckGit_PinnedToRepoRoot_AC003(t *testing.T) {
+	const repoRoot = "/fake/host/repo"
+
+	callIdx := 0
+	exec := &dirCapturingExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			callIdx++
+			switch callIdx {
+			case 1:
+				return "git version 2.0.0", nil // git --version (not pinned)
+			case 2:
+				return "/fake/host/repo (main)\n", nil // git worktree list
+			default:
+				return "https://github.com/owner/repo.git", nil // git config
+			}
+		},
+	}
+
+	p := New(exec, t.TempDir(), repoRoot)
+	result := p.checkGit()
+
+	if !result.Ok {
+		t.Fatalf("checkGit() unexpectedly failed: %s", result.Details)
+	}
+
+	// Both pinned calls must use repoRoot
+	if len(exec.dirs) < 2 {
+		t.Fatalf("expected at least 2 RunInDir calls, got %d", len(exec.dirs))
+	}
+	for i, dir := range exec.dirs {
+		if dir != repoRoot {
+			t.Errorf("RunInDir call %d used dir %q, want %q", i, dir, repoRoot)
+		}
+	}
+}

@@ -52,6 +52,25 @@ func (f *fakeExecutor) RunWithEnv(env map[string]string, name string, args ...st
 	return "", fmt.Errorf("not mocked: %s %v", name, args)
 }
 
+func (f *fakeExecutor) RunInDir(dir string, name string, args ...string) (string, error) {
+	f.calls = append(f.calls, callRecord{name: name, args: args})
+	if f.runFunc != nil {
+		return f.runFunc(name, args...)
+	}
+	return "", fmt.Errorf("not mocked: %s %v", name, args)
+}
+
+func (f *fakeExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
+	f.calls = append(f.calls, callRecord{name: name, args: args, env: env})
+	if f.runWithEnvFunc != nil {
+		return f.runWithEnvFunc(env, name, args...)
+	}
+	if f.runFunc != nil {
+		return f.runFunc(name, args...)
+	}
+	return "", fmt.Errorf("not mocked: %s %v", name, args)
+}
+
 // ---------------------------------------------------------------------------
 // realGitExecutor runs git commands using os/exec for integration-style tests.
 // ---------------------------------------------------------------------------
@@ -88,6 +107,14 @@ func (e *realGitExecutor) RunWithEnv(env map[string]string, name string, args ..
 		return "", err
 	}
 	return string(out), nil
+}
+
+func (e *realGitExecutor) RunInDir(dir string, name string, args ...string) (string, error) {
+	return e.Run(name, args...)
+}
+
+func (e *realGitExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
+	return e.RunWithEnv(env, name, args...)
 }
 
 // ---------------------------------------------------------------------------
@@ -1397,5 +1424,161 @@ func TestRunDevAgent_MissingSystemPromptInBinaryDir_AC002(t *testing.T) {
 	}
 	if strings.Contains(stderr.String(), filepath.Join(r.repoRoot, "prompts")) {
 		t.Errorf("stderr must not reference repoRoot/prompts, got: %s", stderr.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// dirCapturingExecutor records dirs used by RunInDir / RunWithEnvInDir
+// ---------------------------------------------------------------------------
+
+type dirRecord struct {
+	dir  string
+	name string
+	args []string
+	env  map[string]string
+}
+
+type dirCapturingExecutor struct {
+	dirCalls []dirRecord
+	runFunc  func(name string, args ...string) (string, error)
+}
+
+func (d *dirCapturingExecutor) Run(name string, args ...string) (string, error) {
+	if d.runFunc != nil {
+		return d.runFunc(name, args...)
+	}
+	return "", nil
+}
+
+func (d *dirCapturingExecutor) RunWithEnv(env map[string]string, name string, args ...string) (string, error) {
+	if d.runFunc != nil {
+		return d.runFunc(name, args...)
+	}
+	return "", nil
+}
+
+func (d *dirCapturingExecutor) RunInDir(dir string, name string, args ...string) (string, error) {
+	d.dirCalls = append(d.dirCalls, dirRecord{dir: dir, name: name, args: args})
+	if d.runFunc != nil {
+		return d.runFunc(name, args...)
+	}
+	return "", nil
+}
+
+func (d *dirCapturingExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
+	d.dirCalls = append(d.dirCalls, dirRecord{dir: dir, name: name, args: args, env: env})
+	if d.runFunc != nil {
+		return d.runFunc(name, args...)
+	}
+	return "", nil
+}
+
+// loadTestCreds creates credentials in homeDir and returns a *credentials.Credentials.
+func loadTestCreds(t *testing.T, homeDir, project string) *credentials.Credentials {
+	t.Helper()
+	credDir := filepath.Join(homeDir, ".golemic", project)
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	credJSON := `{"dev_token": "ghp_dev_pin_test", "reviewer_token": "ghp_rev_pin_test"}`
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loader := credentials.NewLoader(homeDir)
+	creds, err := loader.Load(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return creds
+}
+
+// ---------------------------------------------------------------------------
+// AC-001: checkBranchCollision and checkPRCollision pin calls to repoRoot
+// ---------------------------------------------------------------------------
+
+func TestCheckBranchCollision_PinnedToRepoRoot_AC001(t *testing.T) {
+	repoRoot := "/fake/host/repo"
+	exec := &dirCapturingExecutor{
+		runFunc: func(name string, args ...string) (string, error) { return "", nil },
+	}
+	r := &Runner{executor: exec, repoRoot: repoRoot, branchName: "golemic/issue-7"}
+
+	_, err := r.checkBranchCollision()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(exec.dirCalls) < 2 {
+		t.Fatalf("expected at least 2 RunInDir calls, got %d", len(exec.dirCalls))
+	}
+	for _, c := range exec.dirCalls {
+		if c.dir != repoRoot {
+			t.Errorf("call %s %v used dir %q, want %q", c.name, c.args, c.dir, repoRoot)
+		}
+	}
+	// Verify the two git subcommands
+	if exec.dirCalls[0].args[0] != "branch" {
+		t.Errorf("first call should be 'git branch', got args %v", exec.dirCalls[0].args)
+	}
+	if exec.dirCalls[1].args[0] != "ls-remote" {
+		t.Errorf("second call should be 'git ls-remote', got args %v", exec.dirCalls[1].args)
+	}
+}
+
+func TestCheckPRCollision_PinnedToRepoRoot_AC001(t *testing.T) {
+	repoRoot := "/fake/host/repo"
+	homeDir := t.TempDir()
+	creds := loadTestCreds(t, homeDir, "pin-test")
+
+	exec := &dirCapturingExecutor{
+		runFunc: func(name string, args ...string) (string, error) { return "[]", nil },
+	}
+	r := &Runner{executor: exec, repoRoot: repoRoot, branchName: "golemic/issue-7", creds: creds}
+
+	_, err := r.checkPRCollision()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(exec.dirCalls) != 1 {
+		t.Fatalf("expected 1 RunWithEnvInDir call, got %d", len(exec.dirCalls))
+	}
+	if exec.dirCalls[0].dir != repoRoot {
+		t.Errorf("gh pr list used dir %q, want %q", exec.dirCalls[0].dir, repoRoot)
+	}
+	if exec.dirCalls[0].name != "gh" {
+		t.Errorf("expected 'gh', got %q", exec.dirCalls[0].name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-002: loadIssue pins gh issue view to repoRoot
+// ---------------------------------------------------------------------------
+
+func TestLoadIssue_PinnedToRepoRoot_AC002(t *testing.T) {
+	repoRoot := "/fake/host/repo"
+	homeDir := t.TempDir()
+	creds := loadTestCreds(t, homeDir, "pin-test")
+
+	exec := &dirCapturingExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			return `{"title":"T","body":"B"}`, nil
+		},
+	}
+	r := &Runner{executor: exec, repoRoot: repoRoot, issueNum: 5, creds: creds}
+
+	_, err := r.loadIssue()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(exec.dirCalls) != 1 {
+		t.Fatalf("expected 1 RunWithEnvInDir call, got %d", len(exec.dirCalls))
+	}
+	if exec.dirCalls[0].dir != repoRoot {
+		t.Errorf("gh issue view used dir %q, want %q", exec.dirCalls[0].dir, repoRoot)
+	}
+	if exec.dirCalls[0].name != "gh" {
+		t.Errorf("expected 'gh', got %q", exec.dirCalls[0].name)
 	}
 }

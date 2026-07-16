@@ -69,6 +69,14 @@ func (m *mockExecutor) RunWithEnv(env map[string]string, name string, args ...st
 	return m.responses[idx].Stdout, m.responses[idx].Err
 }
 
+func (m *mockExecutor) RunInDir(_ string, name string, args ...string) (string, error) {
+	return m.Run(name, args...)
+}
+
+func (m *mockExecutor) RunWithEnvInDir(env map[string]string, _ string, name string, args ...string) (string, error) {
+	return m.RunWithEnv(env, name, args...)
+}
+
 func (m *mockExecutor) Calls() []cmdCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
