@@ -1,0 +1,43 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    # Complexity linters
+    - funlen
+    - cyclop
+    - gocognit
+    - nestif
+    - interfacebloat
+    - maintidx
+    # Standard linters
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+
+  settings:
+    funlen:
+      # Default is 60 lines / 40 statements; 80/60 is more practical for test-heavy code
+      lines: 80
+      statements: 60
+
+    cyclop:
+      # Default max-complexity is 10; keep it to catch genuinely tangled control flow
+      max-complexity: 10
+
+    gocognit:
+      # Default min-complexity is 30; tighten to 20 to catch cognitive complexity earlier
+      min-complexity: 20
+
+    nestif:
+      # Default min-complexity is 5; keep default
+      min-complexity: 5
+
+    interfacebloat:
+      # Default max is 10; 8 nudges toward narrower interfaces without being too strict
+      max: 8
+
+    maintidx:
+      # Default under is 20 (lower score = less maintainable); keep default
+      under: 20
