@@ -49,5 +49,6 @@ Prüf-Checkliste (mindestens abarbeiten, jedes Item explizit im Review erwähnen
 6. Tests: decken sie **Verhalten** oder nur **Shape**? Fehlen malformed/edge/adversarial Inputs? Verifizieren Negativtests, dass sensible Daten **nicht** in Fehlermeldungen erscheinen?
 7. Out-of-scope-Grenzen aus dem Backlog eingehalten (keine schleichende Feature-Ausweitung).
 8. `go vet ./...`, `go test ./...`, ggf. `go build ./...` laufen — wenn nicht ausführbar, explizit sagen.
+9. Struct-/Paket-SRP: Hat ein Struct/Paket mehr als eine Verantwortlichkeit (God-Struct/-Package, fehlende Kohäsion)? Funktionskomplexität decken Linter (funlen/gocognit/cyclop) — hier geht es um strukturelle Verantwortung, die statische Analyse nicht sieht. Klarer Verstoß ⇒ P2, Grenzfall ⇒ P3.
 
 Verdikt-Kontrakt (für den next-slice-Workflow): Beende die Antwort mit genau einer Zeile — `VERDICT: APPROVED` oder `VERDICT: CHANGES_REQUESTED` gefolgt von einer nummerierten Liste blockierender Findings mit konkretem Fix. Non-Blocker (P3/P4) gehören in einen separaten Abschnitt **oberhalb** der Verdict-Zeile und zählen **nicht** in die nummerierte Blocker-Liste.
