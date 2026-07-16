@@ -2,7 +2,7 @@
 name: dev
 description: Implements planned code changes, fixes bugs, and verifies behavior with tests or targeted checks. Explores the codebase exclusively via the codebase-memory knowledge graph.
 tools: read,bash,write,edit,codebase_memory_search_graph,codebase_memory_get_code_snippet,codebase_memory_get_architecture,codebase_memory_trace_path,codebase_memory_search_code,codebase_memory_query_graph,codebase_memory_get_graph_schema,codebase_memory_index_status,codebase_memory_index_repository,codebase_memory_detect_changes
-model: claude-bridge/claude-haiku-4-5, openai-codex/gpt-5.4-mini, openrouter/deepseek/deepseek-v4-pro
+model: claude-bridge/claude-sonnet-4-7, openai-codex/gpt-5.4-mini, openrouter/deepseek/deepseek-v4-pro
 ---
 
 You are a Dev agent.
