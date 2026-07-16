@@ -70,9 +70,11 @@ func ValidateProjectName(name string) error {
 
 // Loader loads credentials with an injectable home directory and an optional
 // template resolver. If Resolver is nil, a default EnvResolver is used.
+// If LookupEnv is nil, os.LookupEnv is used.
 type Loader struct {
-	homeDir  string
-	Resolver template.Resolver
+	homeDir   string
+	Resolver  template.Resolver
+	LookupEnv func(string) (string, bool)
 }
 
 // NewLoader creates a Loader that resolves ~ to the given homeDir.
@@ -159,9 +161,13 @@ func (l *Loader) Load(project string) (*Credentials, error) {
 	// and use the env value directly.
 	// Track whether each was explicitly set (not just its value) — needed for
 	// determining whether the missing file is the root cause (F1).
+	lookup := l.LookupEnv
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
 	envDevSet := false
 	envRevSet := false
-	if envDev, ok := os.LookupEnv("GOLEMIC_DEV_TOKEN"); ok {
+	if envDev, ok := lookup("GOLEMIC_DEV_TOKEN"); ok {
 		creds.devToken = envDev
 		creds.devSource = "direct_env"
 		envDevSet = true
@@ -174,7 +180,7 @@ func (l *Loader) Load(project string) (*Credentials, error) {
 		creds.devToken = resolved
 		creds.devSource = source
 	}
-	if envRev, ok := os.LookupEnv("GOLEMIC_REVIEWER_TOKEN"); ok {
+	if envRev, ok := lookup("GOLEMIC_REVIEWER_TOKEN"); ok {
 		creds.reviewerToken = envRev
 		creds.reviewerSource = "direct_env"
 		envRevSet = true

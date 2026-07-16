@@ -45,6 +45,7 @@ type Runner struct {
 	stderr      io.Writer
 	issueNum    int
 	preflighter Preflighter // nil = create from executor+homeDir+repoRoot in Run()
+	lookupEnv   func(string) (string, bool)
 
 	// Resolved during Run
 	repoRoot   string
@@ -79,6 +80,10 @@ func (r *Runner) SetStderr(w io.Writer) { r.stderr = w }
 // SetPreflighter injects a custom Preflighter, replacing the default preflight
 // implementation. Used by tests to inject a passing or failing stub.
 func (r *Runner) SetPreflighter(p Preflighter) { r.preflighter = p }
+
+// SetLookupEnv injects a custom env lookup for credentials loading.
+// nil means os.LookupEnv (production default).
+func (r *Runner) SetLookupEnv(fn func(string) (string, bool)) { r.lookupEnv = fn }
 
 // ---------------------------------------------------------------------------
 // Run
@@ -132,6 +137,7 @@ func (r *Runner) Run() int {
 	r.project = cfg.Project
 
 	loader := credentials.NewLoader(r.homeDir)
+	loader.LookupEnv = r.lookupEnv
 	creds, err := loader.Load(r.project)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to load credentials: %v\n", err)

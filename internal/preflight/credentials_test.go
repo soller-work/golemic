@@ -214,10 +214,6 @@ func TestCheckCredentials(t *testing.T) { //nolint:cyclop,funlen,gocognit,mainti
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Isolate from environment: env vars take precedence over file values.
-			t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
-			t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
-
 			exec := tt.setupExec()
 			homeDir := t.TempDir()
 			repoRoot := t.TempDir()
@@ -228,6 +224,8 @@ func TestCheckCredentials(t *testing.T) { //nolint:cyclop,funlen,gocognit,mainti
 			}
 
 			p := New(exec, homeDir, repoRoot)
+			// Isolate from real env: inject empty lookup so file values are used.
+			p.SetLookupEnv(func(string) (string, bool) { return "", false })
 			tt.setupFunc(t, homeDir, repoRoot)
 
 			result := p.checkCredentials()
@@ -342,11 +340,6 @@ func TestCheckCredentialsSanitizeErr(t *testing.T) {
 
 func TestCheckCredentialsSourceInDetails(t *testing.T) { //nolint:cyclop // moved verbatim; cyclomatic complexity 15 exceeds threshold
 	// Verify that successful credentials check includes source info in Details.
-	cu1 := unsetEnvPreflight(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnvPreflight(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			return "gh version 2.0.0", nil
@@ -401,6 +394,7 @@ func TestCheckCredentialsSourceInDetails(t *testing.T) { //nolint:cyclop // move
 	}
 
 	p := New(exec, homeDir, repoRoot)
+	p.SetLookupEnv(emptyLookup)
 	result := p.checkCredentials()
 
 	if !result.Ok {
@@ -417,11 +411,6 @@ func TestCheckCredentialsSourceInDetails(t *testing.T) { //nolint:cyclop // move
 func TestCheckCredentialsTemplateErrorNoLeak(t *testing.T) {
 	// When a template resolution error occurs during checkCredentials,
 	// the result Details must not leak token values.
-	cu1 := unsetEnvPreflight(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnvPreflight(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	exec := fakeExecutorOK()
 	homeDir := t.TempDir()
 	repoRoot := t.TempDir()
@@ -456,6 +445,7 @@ func TestCheckCredentialsTemplateErrorNoLeak(t *testing.T) {
 	}
 
 	p := New(exec, homeDir, repoRoot)
+	p.SetLookupEnv(emptyLookup)
 	result := p.checkCredentials()
 
 	if result.Ok {
@@ -518,6 +508,7 @@ func TestCheck_IdenticalTokensRejectedLocally_AC002(t *testing.T) { //nolint:cyc
 
 	var buf bytes.Buffer
 	p.SetStdout(&buf)
+	p.SetLookupEnv(func(string) (string, bool) { return "", false })
 	results := p.Check()
 
 	// Credentials check must fail

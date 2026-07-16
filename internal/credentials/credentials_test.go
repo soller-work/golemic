@@ -35,6 +35,17 @@ func unsetEnv(t *testing.T, key string) func() {
 	}
 }
 
+// envLookup returns a lookup function backed by the given map.
+func envLookup(env map[string]string) func(string) (string, bool) {
+	return func(key string) (string, bool) {
+		v, ok := env[key]
+		return v, ok
+	}
+}
+
+// emptyLookup is an env lookup that returns nothing.
+func emptyLookup(string) (string, bool) { return "", false }
+
 // writeCredsFile creates the credentials directory and file with the given content and permissions.
 func writeCredsFile(t *testing.T, homeDir, project, content string, perm os.FileMode) string {
 	t.Helper()
@@ -91,6 +102,7 @@ func TestLoadCredentials(t *testing.T) {
 	tests := []struct {
 		name        string
 		setup       func(t *testing.T, homeDir string) (project string, cleanup func())
+		envVars     map[string]string // GOLEMIC_* vars injected into loader; nil = empty
 		wantErr     bool
 		errContains []string
 		check       func(t *testing.T, err error) // optional additional error assertions
@@ -116,9 +128,9 @@ func TestLoadCredentials(t *testing.T) {
 					"dev_token": "ghp_file_dev",
 					"reviewer_token": "ghp_file_rev"
 				}`, 0600)
-				cleanup := setEnv(t, "GOLEMIC_DEV_TOKEN", "ghp_env_dev")
-				return "test-proj", cleanup
+				return "test-proj", func() {}
 			},
+			envVars: map[string]string{"GOLEMIC_DEV_TOKEN": "ghp_env_dev"},
 			wantDev: "ghp_env_dev",
 			wantRev: "ghp_file_rev",
 		},
@@ -129,9 +141,9 @@ func TestLoadCredentials(t *testing.T) {
 					"dev_token": "ghp_file_dev",
 					"reviewer_token": "ghp_file_rev"
 				}`, 0600)
-				cleanup := setEnv(t, "GOLEMIC_REVIEWER_TOKEN", "ghp_env_rev")
-				return "test-proj", cleanup
+				return "test-proj", func() {}
 			},
+			envVars: map[string]string{"GOLEMIC_REVIEWER_TOKEN": "ghp_env_rev"},
 			wantDev: "ghp_file_dev",
 			wantRev: "ghp_env_rev",
 		},
@@ -142,9 +154,11 @@ func TestLoadCredentials(t *testing.T) {
 					"dev_token": "ghp_file_dev",
 					"reviewer_token": "ghp_file_rev"
 				}`, 0600)
-				c1 := setEnv(t, "GOLEMIC_DEV_TOKEN", "ghp_env_dev")
-				c2 := setEnv(t, "GOLEMIC_REVIEWER_TOKEN", "ghp_env_rev")
-				return "test-proj", func() { c1(); c2() }
+				return "test-proj", func() {}
+			},
+			envVars: map[string]string{
+				"GOLEMIC_DEV_TOKEN":      "ghp_env_dev",
+				"GOLEMIC_REVIEWER_TOKEN": "ghp_env_rev",
 			},
 			wantDev: "ghp_env_dev",
 			wantRev: "ghp_env_rev",
@@ -152,9 +166,11 @@ func TestLoadCredentials(t *testing.T) {
 		{
 			name: "only env vars no file",
 			setup: func(t *testing.T, homeDir string) (string, func()) {
-				c1 := setEnv(t, "GOLEMIC_DEV_TOKEN", "ghp_env_dev")
-				c2 := setEnv(t, "GOLEMIC_REVIEWER_TOKEN", "ghp_env_rev")
-				return "test-proj", func() { c1(); c2() }
+				return "test-proj", func() {}
+			},
+			envVars: map[string]string{
+				"GOLEMIC_DEV_TOKEN":      "ghp_env_dev",
+				"GOLEMIC_REVIEWER_TOKEN": "ghp_env_rev",
 			},
 			wantDev: "ghp_env_dev",
 			wantRev: "ghp_env_rev",
@@ -221,9 +237,9 @@ func TestLoadCredentials(t *testing.T) {
 		{
 			name: "file missing with only dev env does not wrap ErrNotExist",
 			setup: func(t *testing.T, homeDir string) (string, func()) {
-				c1 := setEnv(t, "GOLEMIC_DEV_TOKEN", "ghp_dev_only")
-				return "test-proj", c1
+				return "test-proj", func() {}
 			},
+			envVars:     map[string]string{"GOLEMIC_DEV_TOKEN": "ghp_dev_only"},
 			wantErr:     true,
 			errContains: []string{"GOLEMIC_REVIEWER_TOKEN", "reviewer_token"},
 			check: func(t *testing.T, err error) {
@@ -235,9 +251,9 @@ func TestLoadCredentials(t *testing.T) {
 		{
 			name: "file missing with only reviewer env does not wrap ErrNotExist",
 			setup: func(t *testing.T, homeDir string) (string, func()) {
-				c1 := setEnv(t, "GOLEMIC_REVIEWER_TOKEN", "ghp_rev_only")
-				return "test-proj", c1
+				return "test-proj", func() {}
 			},
+			envVars:     map[string]string{"GOLEMIC_REVIEWER_TOKEN": "ghp_rev_only"},
 			wantErr:     true,
 			errContains: []string{"GOLEMIC_DEV_TOKEN", "dev_token"},
 			check: func(t *testing.T, err error) {
@@ -265,9 +281,9 @@ func TestLoadCredentials(t *testing.T) {
 					"dev_token": "ghp_dev_valid",
 					"reviewer_token": ""
 				}`, 0600)
-				cleanup := setEnv(t, "GOLEMIC_REVIEWER_TOKEN", "")
-				return "test-proj", cleanup
+				return "test-proj", func() {}
 			},
+			envVars:     map[string]string{"GOLEMIC_REVIEWER_TOKEN": ""},
 			wantErr:     true,
 			errContains: []string{"GOLEMIC_REVIEWER_TOKEN"},
 		},
@@ -348,6 +364,7 @@ func TestLoadCredentials(t *testing.T) {
 			}
 
 			l := NewLoader(homeDir)
+			l.LookupEnv = envLookup(tt.envVars) // hermetic: only tt.envVars visible
 			creds, err := l.Load(project)
 
 			if tt.wantErr {
@@ -449,6 +466,7 @@ func TestCredentialsString(t *testing.T) {
 func TestErrorsIs(t *testing.T) {
 	t.Run("missing credentials error wraps os.ErrNotExist", func(t *testing.T) {
 		l := NewLoader(t.TempDir())
+		l.LookupEnv = emptyLookup
 		_, err := l.Load("no-such-project")
 		if err == nil {
 			t.Fatal("expected error")
@@ -482,6 +500,7 @@ func TestSymlinkToSecureFile(t *testing.T) {
 	}
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	creds, err := l.Load("test-proj")
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
@@ -547,11 +566,6 @@ func TestCredentialsSourceAccessors(t *testing.T) {
 
 func TestTemplateResolveFromScaffold(t *testing.T) {
 	// AC-001: Env-var templates resolve from scaffold
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	cleanup1 := setEnv(t, "MY_DEV_TOKEN", "ghp_dev_abc")
 	cleanup2 := setEnv(t, "MY_REV_TOKEN", "ghp_rev_xyz")
 	defer cleanup1()
@@ -564,6 +578,7 @@ func TestTemplateResolveFromScaffold(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	creds, err := l.Load("test-proj")
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
@@ -584,11 +599,6 @@ func TestTemplateResolveFromScaffold(t *testing.T) {
 
 func TestMixedLiteralAndTemplate(t *testing.T) {
 	// AC-002: Mixed literal + template sources
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	cleanup := setEnv(t, "MY_REV_TOKEN", "ghp_rev_xyz")
 	defer cleanup()
 
@@ -599,6 +609,7 @@ func TestMixedLiteralAndTemplate(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	creds, err := l.Load("test-proj")
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
@@ -619,13 +630,6 @@ func TestMixedLiteralAndTemplate(t *testing.T) {
 
 func TestMissingEnvVarError(t *testing.T) {
 	// AC-003: Missing env var error
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
-	os.Unsetenv("MISSING_VAR")
-
 	homeDir := t.TempDir()
 	writeCredsFile(t, homeDir, "test-proj", `{
 		"dev_token": "${MISSING_VAR}",
@@ -633,6 +637,7 @@ func TestMissingEnvVarError(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	_, err := l.Load("test-proj")
 	if err == nil {
 		t.Fatal("Load() expected error, got nil")
@@ -647,11 +652,6 @@ func TestMissingEnvVarError(t *testing.T) {
 
 func TestMalformedTemplateError(t *testing.T) {
 	// AC-004: Malformed template error
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	homeDir := t.TempDir()
 	writeCredsFile(t, homeDir, "test-proj", `{
 		"dev_token": "${UNCLOSED",
@@ -659,6 +659,7 @@ func TestMalformedTemplateError(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	_, err := l.Load("test-proj")
 	if err == nil {
 		t.Fatal("Load() expected error, got nil")
@@ -674,11 +675,6 @@ func TestMalformedTemplateError(t *testing.T) {
 
 func TestBackwardCompatiblePlainLiterals(t *testing.T) {
 	// AC-005: Plain literals only — backward compatible
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	homeDir := t.TempDir()
 	writeCredsFile(t, homeDir, "test-proj", `{
 		"dev_token": "ghp_dev_plain",
@@ -686,6 +682,7 @@ func TestBackwardCompatiblePlainLiterals(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	creds, err := l.Load("test-proj")
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
@@ -706,11 +703,6 @@ func TestBackwardCompatiblePlainLiterals(t *testing.T) {
 
 func TestDefaultFallback(t *testing.T) {
 	// AC-006: Default fallback
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	cs := setEnv(t, "EMPTY_VAR", "")
 	defer cs()
 	os.Unsetenv("MISSING_VAR_FOR_FB")
@@ -722,6 +714,7 @@ func TestDefaultFallback(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	creds, err := l.Load("test-proj")
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
@@ -742,12 +735,8 @@ func TestDefaultFallback(t *testing.T) {
 
 func TestEnvVarPrecedenceOverTemplate(t *testing.T) {
 	// Explicit GOLEMIC_DEV_TOKEN env var overrides template in file
-	cleanup1 := setEnv(t, "GOLEMIC_DEV_TOKEN", "ghp_env_dev")
 	cleanup2 := setEnv(t, "MY_DEV_TOKEN", "ghp_should_not_use")
-	cleanup3 := setEnv(t, "GOLEMIC_REVIEWER_TOKEN", "ghp_env_rev")
-	defer cleanup1()
 	defer cleanup2()
-	defer cleanup3()
 
 	homeDir := t.TempDir()
 	writeCredsFile(t, homeDir, "test-proj", `{
@@ -756,6 +745,10 @@ func TestEnvVarPrecedenceOverTemplate(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = envLookup(map[string]string{
+		"GOLEMIC_DEV_TOKEN":      "ghp_env_dev",
+		"GOLEMIC_REVIEWER_TOKEN": "ghp_env_rev",
+	})
 	creds, err := l.Load("test-proj")
 	if err != nil {
 		t.Fatalf("Load() unexpected error: %v", err)
@@ -776,11 +769,6 @@ func TestEnvVarPrecedenceOverTemplate(t *testing.T) {
 
 func TestCustomResolverInjection(t *testing.T) {
 	// Verify the Loader.Resolver field can be injected for testing
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
 	homeDir := t.TempDir()
 	writeCredsFile(t, homeDir, "test-proj", `{
 		"dev_token": "will-be-overridden",
@@ -788,6 +776,7 @@ func TestCustomResolverInjection(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = emptyLookup
 	// Inject a custom resolver that always returns the same values
 	l.Resolver = &stubResolver{value: "from-stub", source: "template_env"}
 
@@ -815,14 +804,7 @@ func (s *stubResolver) Resolve(value string) (string, string, error) {
 func TestEnvVarPrecedenceEmptyOverTemplate(t *testing.T) {
 	// GOLEMIC_DEV_TOKEN="" (set to empty) overrides a template and produces
 	// a missing-credentials error, not a template-resolution error.
-	cu1 := unsetEnv(t, "GOLEMIC_DEV_TOKEN")
-	cu2 := unsetEnv(t, "GOLEMIC_REVIEWER_TOKEN")
-	defer cu1()
-	defer cu2()
-
-	cleanup1 := setEnv(t, "GOLEMIC_DEV_TOKEN", "")
 	cleanup2 := setEnv(t, "MY_VAR", "ghp_from_env")
-	defer cleanup1()
 	defer cleanup2()
 
 	homeDir := t.TempDir()
@@ -832,6 +814,7 @@ func TestEnvVarPrecedenceEmptyOverTemplate(t *testing.T) {
 	}`, 0600)
 
 	l := NewLoader(homeDir)
+	l.LookupEnv = envLookup(map[string]string{"GOLEMIC_DEV_TOKEN": ""})
 	_, err := l.Load("test-proj")
 	if err == nil {
 		t.Fatal("Load() expected error, got nil")
@@ -853,5 +836,38 @@ func TestEnvVarPrecedenceEmptyOverTemplate(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "ghp_valid") {
 		t.Errorf("error must not contain token values, got: %v", err)
+	}
+}
+
+// TestInjectedEnvPrecedenceOverFile_AC003 verifies BR-003: injected GOLEMIC_* lookup
+// wins over credentials.json values, with source tagged as direct_env.
+func TestInjectedEnvPrecedenceOverFile_AC003(t *testing.T) {
+	homeDir := t.TempDir()
+	writeCredsFile(t, homeDir, "test-proj", `{
+		"dev_token": "ghp_file_dev",
+		"reviewer_token": "ghp_file_rev"
+	}`, 0600)
+
+	l := NewLoader(homeDir)
+	l.LookupEnv = envLookup(map[string]string{
+		"GOLEMIC_DEV_TOKEN":      "ghp_env_dev",
+		"GOLEMIC_REVIEWER_TOKEN": "ghp_env_rev",
+	})
+
+	creds, err := l.Load("test-proj")
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if creds.DevToken() != "ghp_env_dev" {
+		t.Errorf("DevToken() = %q, want %q", creds.DevToken(), "ghp_env_dev")
+	}
+	if creds.ReviewerToken() != "ghp_env_rev" {
+		t.Errorf("ReviewerToken() = %q, want %q", creds.ReviewerToken(), "ghp_env_rev")
+	}
+	if creds.DevSource() != "direct_env" {
+		t.Errorf("DevSource() = %q, want %q", creds.DevSource(), "direct_env")
+	}
+	if creds.ReviewerSource() != "direct_env" {
+		t.Errorf("ReviewerSource() = %q, want %q", creds.ReviewerSource(), "direct_env")
 	}
 }

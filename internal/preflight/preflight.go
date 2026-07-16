@@ -72,6 +72,7 @@ type Preflight struct {
 	cachedCfg  *config.Config // cached config loaded by checkConfig, reused by checkCredentials
 	configDone bool           // true once checkConfig has attempted to load
 	checkMode  bool           // true = read-only check mode (no writes, local token comparison)
+	lookupEnv  func(string) (string, bool)
 }
 
 // New creates a new Preflight checker.
@@ -89,6 +90,12 @@ func New(executor Executor, homeDir, repoRoot string) *Preflight {
 // SetStdout sets the writer for check result lines. Defaults to io.Discard.
 func (p *Preflight) SetStdout(w io.Writer) {
 	p.stdout = w
+}
+
+// SetLookupEnv injects a custom env lookup for credentials loading.
+// nil means os.LookupEnv (production default).
+func (p *Preflight) SetLookupEnv(fn func(string) (string, bool)) {
+	p.lookupEnv = fn
 }
 
 // ghUserLogin holds the login field from `gh api user`.
@@ -394,6 +401,7 @@ func (p *Preflight) checkCredentials() Result {
 	if p.checkMode {
 		// Check mode: no scaffolding, local token-value comparison only (no gh api call)
 		loader := credentials.NewLoader(p.homeDir)
+		loader.LookupEnv = p.lookupEnv
 		creds, loadErr := loader.Load(cfg.Project)
 		if loadErr != nil {
 			return Result{Name: "Credentials", Ok: false, Details: loadErr.Error()}
@@ -421,6 +429,7 @@ func (p *Preflight) checkCredentials() Result {
 
 	// Load credentials
 	loader := credentials.NewLoader(p.homeDir)
+	loader.LookupEnv = p.lookupEnv
 	creds, err := loader.Load(cfg.Project)
 	if err != nil {
 		return Result{Name: "Credentials", Ok: false, Details: err.Error()}

@@ -9,17 +9,9 @@ import (
 	"testing"
 )
 
-// unsetEnv ensures an env var is not set for the duration of the test.
-func unsetEnvPreflight(t *testing.T, key string) func() {
-	t.Helper()
-	old, had := os.LookupEnv(key)
-	os.Unsetenv(key)
-	return func() {
-		if had {
-			os.Setenv(key, old)
-		}
-	}
-}
+// emptyLookup is an env lookup that returns nothing — used to isolate tests from GOLEMIC_* env.
+func emptyLookup(string) (string, bool) { return "", false }
+
 
 // fakeExecutor simulates external commands with configurable results.
 type fakeExecutor struct {
@@ -100,13 +92,9 @@ func setupPreflight(t *testing.T, exec *fakeExecutor) (*Preflight, string, strin
 }
 
 func TestRunAllAllChecksPass(t *testing.T) {
-	// Ensure env vars match mock-recognizable tokens (env vars take precedence
-	// over file values in credentials.Loader)
-	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
-	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
-
 	exec := fakeExecutorOK()
 	p, homeDir, repoRoot := setupPreflight(t, exec)
+	p.SetLookupEnv(emptyLookup) // file has ghp_dev_token / ghp_rev_token which satisfy the mock
 
 	projectName := filepath.Base(repoRoot)
 
@@ -218,14 +206,10 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 }
 
 func TestRunAllScaffoldingFailThenFix(t *testing.T) {
-	// Ensure env vars match mock-recognizable tokens (env vars take precedence
-	// over file values in credentials.Loader)
-	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
-	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
-
 	// Simulate a repo without .golemic/ and without config
 	exec := fakeExecutorOK()
 	p, homeDir, repoRoot := setupPreflight(t, exec)
+	p.SetLookupEnv(emptyLookup)
 
 	projectName := filepath.Base(repoRoot)
 
@@ -269,6 +253,7 @@ func TestRunAllScaffoldingFailThenFix(t *testing.T) {
 	// Second run — should now pass
 	var buf2 bytes.Buffer
 	p2 := New(exec, homeDir, repoRoot)
+	p2.SetLookupEnv(emptyLookup)
 	p2.SetStdout(&buf2)
 	results2 := p2.RunAll()
 
@@ -338,12 +323,9 @@ func TestErrExit(t *testing.T) {
 
 func TestPreflightCheckOrder(t *testing.T) {
 	// AC-005: checkCredentialsScaffolding runs before checkCredentials
-	// Ensure env vars match mock-recognizable tokens
-	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
-	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
-
 	exec := fakeExecutorOK()
 	p, homeDir, repoRoot := setupPreflight(t, exec)
+	p.SetLookupEnv(emptyLookup) // file has ghp_dev_token / ghp_rev_token which satisfy the mock
 
 	projectName := filepath.Base(repoRoot)
 

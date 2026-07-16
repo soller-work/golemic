@@ -585,6 +585,7 @@ func TestRun_MissingCredentials_AC005(t *testing.T) {
 	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
+	runner.SetLookupEnv(func(string) (string, bool) { return "", false })
 
 	exitCode := runner.Run()
 
