@@ -71,6 +71,7 @@ type Preflight struct {
 	stdout     io.Writer
 	cachedCfg  *config.Config // cached config loaded by checkConfig, reused by checkCredentials
 	configDone bool           // true once checkConfig has attempted to load
+	checkMode  bool           // true = read-only check mode (no writes, local token comparison)
 }
 
 // New creates a new Preflight checker.
@@ -95,9 +96,28 @@ type ghUserLogin struct {
 	Login string `json:"login"`
 }
 
-// RunAll runs all checks in order, prints results to stdout, and returns them.
-// Credentials scaffolding is handled transparently inside checkCredentials (BR-002, §2.9).
+// RunAll runs all checks in setup mode (may scaffold files) and returns results.
+// Output format: OK: <name> / FAILED: <name> - <detail>, final summary ok/failed.
 func (p *Preflight) RunAll() Results {
+	p.checkMode = false
+	return p.runChecks()
+}
+
+// Check runs all checks in read-only mode: no file writes, no scaffolding,
+// token distinctness via local value comparison (no gh api call).
+// Output format: OK: <name> / FAILED: <name> - <detail>, final summary ok/failed.
+func (p *Preflight) Check() Results {
+	p.checkMode = true
+	return p.runChecks()
+}
+
+// runChecks executes the 6 checks in fixed order, prints per-check lines and
+// the final ok/failed summary to p.stdout, and returns the results.
+func (p *Preflight) runChecks() Results {
+	// Reset cached state so repeated calls on the same instance are independent.
+	p.cachedCfg = nil
+	p.configDone = false
+
 	results := Results{
 		p.checkGhVersion(),
 		p.checkPiVersion(),
@@ -111,8 +131,14 @@ func (p *Preflight) RunAll() Results {
 		if r.Ok {
 			fmt.Fprintf(p.stdout, "OK: %s\n", r.Name)
 		} else {
-			fmt.Fprintf(p.stdout, "FEHLT: %s — %s\n", r.Name, r.Details)
+			fmt.Fprintf(p.stdout, "FAILED: %s - %s\n", r.Name, r.Details)
 		}
+	}
+
+	if results.AllOK() {
+		fmt.Fprintln(p.stdout, "ok")
+	} else {
+		fmt.Fprintln(p.stdout, "failed")
 	}
 
 	return results
@@ -234,9 +260,9 @@ func writeFileAtomic(path string, content []byte, perms os.FileMode) error {
 	return nil
 }
 
-// checkScaffolding checks if .golemic/ exists; if missing, creates it from templates.
-// Creating the scaffolding counts as FEHLT so the human fills in the templates.
-// Existing files are never overwritten (idempotency).
+// checkScaffolding checks if .golemic/ exists.
+// In setup mode: creates scaffolding from templates if missing.
+// In check mode: missing config.json → FAILED, nothing written.
 func (p *Preflight) checkScaffolding() Result {
 	golemicDir := filepath.Join(p.repoRoot, ".golemic")
 	configPath := filepath.Join(golemicDir, "config.json")
@@ -244,6 +270,12 @@ func (p *Preflight) checkScaffolding() Result {
 	// Check if config.json already exists
 	if _, err := os.Stat(configPath); err == nil {
 		return Result{Name: ".golemic/ Scaffolding", Ok: true}
+	}
+
+	// Check mode: never write, missing → FAILED
+	if p.checkMode {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false,
+			Details: ".golemic/config.json missing"}
 	}
 
 	// Validate project name before creating anything
@@ -278,7 +310,7 @@ func (p *Preflight) checkScaffolding() Result {
 		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create guidelines/reviewer.md: " + err.Error()}
 	}
 
-	return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "wurde angelegt — bitte config.json und Guidelines ausfüllen"}
+	return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "created — please fill in config.json and guidelines"}
 }
 
 // createConfig marshals a config.Config with defaults and writes it to configPath
@@ -336,18 +368,16 @@ func (p *Preflight) checkConfig() Result {
 	p.configDone = true
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
-			return Result{Name: "config.json valide", Ok: false, Details: ".golemic/config.json fehlt"}
+			return Result{Name: "config.json valide", Ok: false, Details: ".golemic/config.json missing"}
 		}
 		return Result{Name: "config.json valide", Ok: false, Details: err.Error()}
 	}
 	return Result{Name: "config.json valide", Ok: true}
 }
 
-// checkCredentials loads credentials and validates both tokens via gh api user.
-// It checks that the two tokens resolve to different GitHub logins.
-// Reuses the cached config from checkConfig if available.
-// If credentials.json is missing, it scaffolds the skeleton file transparently
-// before attempting validation (BR-002, §2.9, §3.0).
+// checkCredentials validates GitHub tokens.
+// Setup mode: scaffolds credentials.json if missing, then validates via gh api user.
+// Check mode: loads credentials without scaffolding, compares token values locally.
 func (p *Preflight) checkCredentials() Result {
 	// Use cached config from checkConfig if available, otherwise load fresh
 	var cfg *config.Config
@@ -361,8 +391,20 @@ func (p *Preflight) checkCredentials() Result {
 		return Result{Name: "Credentials", Ok: false, Details: "cannot load config: " + err.Error()}
 	}
 
-	// Scaffold credentials.json if missing (transparent side effect, §2.9).
-	// The scaffolding is NOT a user-visible check — only validation is reported.
+	if p.checkMode {
+		// Check mode: no scaffolding, local token-value comparison only (no gh api call)
+		loader := credentials.NewLoader(p.homeDir)
+		creds, loadErr := loader.Load(cfg.Project)
+		if loadErr != nil {
+			return Result{Name: "Credentials", Ok: false, Details: loadErr.Error()}
+		}
+		if creds.DevToken() == creds.ReviewerToken() {
+			return Result{Name: "Credentials", Ok: false, Details: "tokens identical"}
+		}
+		return Result{Name: "Credentials", Ok: true}
+	}
+
+	// Setup mode: scaffold credentials.json if missing (transparent side effect, §2.9).
 	credPath := filepath.Join(p.homeDir, ".golemic", cfg.Project, "credentials.json")
 	if _, statErr := os.Stat(credPath); os.IsNotExist(statErr) {
 		if valErr := credentials.ValidateProjectName(cfg.Project); valErr == nil {
@@ -372,7 +414,6 @@ func (p *Preflight) checkCredentials() Result {
 			}
 			data, marshalErr := json.MarshalIndent(skeleton, "", "    ")
 			if marshalErr == nil {
-				// Ignore write errors — credential loading will surface them
 				_ = writeFileAtomic(credPath, data, 0600)
 			}
 		}
@@ -382,26 +423,25 @@ func (p *Preflight) checkCredentials() Result {
 	loader := credentials.NewLoader(p.homeDir)
 	creds, err := loader.Load(cfg.Project)
 	if err != nil {
-		// Never leak token values in error messages
 		return Result{Name: "Credentials", Ok: false, Details: err.Error()}
 	}
 
 	// Validate dev token
 	devLogin, err := p.ghWhoami(creds.DevToken())
 	if err != nil {
-		return Result{Name: "Credentials", Ok: false, Details: "dev token ungültig: " + sanitizeErr(err)}
+		return Result{Name: "Credentials", Ok: false, Details: "dev token invalid: " + sanitizeErr(err)}
 	}
 
 	// Validate reviewer token
 	revLogin, err := p.ghWhoami(creds.ReviewerToken())
 	if err != nil {
-		return Result{Name: "Credentials", Ok: false, Details: "reviewer token ungültig: " + sanitizeErr(err)}
+		return Result{Name: "Credentials", Ok: false, Details: "reviewer token invalid: " + sanitizeErr(err)}
 	}
 
 	// Check that logins are different (§2.8)
 	if devLogin == revLogin {
 		return Result{Name: "Credentials", Ok: false,
-			Details: fmt.Sprintf("dev und reviewer token verwenden denselben Account (%s); sie müssen verschieden sein", devLogin)}
+			Details: fmt.Sprintf("dev and reviewer token use the same account (%s); they must be different", devLogin)}
 	}
 
 	return Result{Name: "Credentials", Ok: true,
@@ -424,10 +464,10 @@ func (p *Preflight) ghWhoami(token string) (string, error) {
 
 	var user ghUserLogin
 	if err := json.Unmarshal([]byte(out), &user); err != nil {
-		return "", fmt.Errorf("gh api user: ungültige Antwort")
+		return "", fmt.Errorf("gh api user: invalid response")
 	}
 	if user.Login == "" {
-		return "", fmt.Errorf("gh api user: leerer login")
+		return "", fmt.Errorf("gh api user: empty login")
 	}
 
 	return user.Login, nil

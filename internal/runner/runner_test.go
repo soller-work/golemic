@@ -139,6 +139,25 @@ func setupHappyExecutor(repoRoot string) *fakeExecutor {
 
 
 
+// ---------------------------------------------------------------------------
+// Preflighter stubs
+// ---------------------------------------------------------------------------
+
+// passingPreflighter always returns all-OK results. Used to inject a no-op gate
+// so runner unit tests don't need to mock gh/pi/git preflight commands.
+type passingPreflighter struct{}
+
+func (passingPreflighter) Check() preflight.Results {
+	return preflight.Results{{Name: "stub", Ok: true}}
+}
+
+// failingPreflighter returns a single failing result for gate tests.
+type failingPreflighter struct{ detail string }
+
+func (f failingPreflighter) Check() preflight.Results {
+	return preflight.Results{{Name: "gh installiert", Ok: false, Details: f.detail}}
+}
+
 // setupRunnerTest creates temp directories and writes a minimal valid config and
 // credentials. Returns the homeDir, repoRoot, and project name.
 func setupRunnerTest(t *testing.T) (homeDir, repoRoot, project string) {
@@ -204,6 +223,7 @@ func SkipTestRun_HappyPath_AC001(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -258,6 +278,7 @@ func TestRun_WorktreeCollision_AC002(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -358,6 +379,7 @@ func TestRun_LocalBranchCollision_AC003(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -409,6 +431,7 @@ func TestRun_RemoteBranchCollision_AC003(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -456,6 +479,7 @@ func TestRun_OpenPRCollision_AC004(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -496,6 +520,7 @@ func TestRun_MissingConfig_AC005(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -557,6 +582,7 @@ func TestRun_MissingCredentials_AC005(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -595,6 +621,7 @@ func SkipTestRun_RunIDFormat(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 42)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -653,6 +680,7 @@ func TestRun_IssueLoadFailure(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	runner := New(exec, homeDir, repoRoot, 99999)
+	runner.SetPreflighter(passingPreflighter{})
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
@@ -1089,5 +1117,94 @@ func TestCheckPRCollision_GhFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "failed to check PR state") {
 		t.Errorf("error should contain 'failed to check PR state', got: %v", err)
+	}
+}
+// ---------------------------------------------------------------------------
+// AC-001: Failing Preflighter stub → exit 1, no run dir/event log/GitHub access
+// ---------------------------------------------------------------------------
+
+func TestRun_PreflightGate_FailClosed_AC001(t *testing.T) {
+	homeDir, repoRoot, project := setupRunnerTest(t)
+	exec := setupHappyExecutor(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	r := New(exec, homeDir, repoRoot, 42)
+	r.SetPreflighter(failingPreflighter{detail: "gh not found"})
+	r.SetStdout(&stdout)
+	r.SetStderr(&stderr)
+
+	exitCode := r.Run()
+
+	if exitCode != 1 {
+		t.Fatalf("exit code: got %d, want 1", exitCode)
+	}
+
+	errMsg := stderr.String()
+	if !strings.Contains(errMsg, "FAILED: ") {
+		t.Errorf("stderr missing 'FAILED: ', got: %q", errMsg)
+	}
+	if !strings.Contains(errMsg, "failed") {
+		t.Errorf("stderr missing final 'failed', got: %q", errMsg)
+	}
+	if !strings.Contains(errMsg, "gh not found") {
+		t.Errorf("stderr missing detail 'gh not found', got: %q", errMsg)
+	}
+
+	// No run directory / event log created
+	runsDir := filepath.Join(homeDir, ".golemic", project, "runs")
+	if _, err := os.Stat(runsDir); !os.IsNotExist(err) {
+		t.Error("runs directory must not be created when preflight fails")
+	}
+
+	// No GitHub access: gh issue/pr calls must not have been made
+	for _, call := range exec.calls {
+		if call.name == "gh" {
+			t.Errorf("gh command must not be called when preflight fails: %s %v", call.name, call.args)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-003: Passing Preflighter stub → run proceeds (run_started + run dir created)
+// ---------------------------------------------------------------------------
+
+func TestRun_PreflightGate_PassProceedsNormally_AC003(t *testing.T) {
+	homeDir, repoRoot, project := setupRunnerTest(t)
+	exec := setupHappyExecutor(repoRoot)
+
+	var stdout, stderr bytes.Buffer
+	r := New(exec, homeDir, repoRoot, 42)
+	r.SetPreflighter(passingPreflighter{})
+	r.SetStdout(&stdout)
+	r.SetStderr(&stderr)
+
+	// We don't care about the final outcome (orchestration will fail without
+	// full agent setup), just that the run proceeded past the gate and created
+	// a run directory / event log with run_started.
+	r.Run()
+
+	// Verify a run directory was created
+	runsDir := filepath.Join(homeDir, ".golemic", project, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		t.Fatalf("runs dir should exist after passing preflight: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("at least one run directory should exist after passing preflight")
+	}
+
+	// Verify run_started event was written
+	runID := entries[0].Name()
+	logPath := filepath.Join(runsDir, runID, "events.jsonl")
+	var reader eventlog.Reader
+	events, err := reader.Read(logPath)
+	if err != nil {
+		t.Fatalf("failed to read event log: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("event log should contain at least run_started")
+	}
+	if events[0].Type != eventlog.EventRunStarted {
+		t.Errorf("first event should be run_started, got: %q", events[0].Type)
 	}
 }

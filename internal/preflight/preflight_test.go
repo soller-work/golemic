@@ -717,7 +717,7 @@ func TestCheckConfig(t *testing.T) {
 				// No .golemic directory
 			},
 			wantOk:     false,
-			wantDetail: "fehlt",
+			wantDetail: "missing",
 		},
 		{
 			name: "invalid config.json",
@@ -760,8 +760,8 @@ func TestCheckConfigErrorsIsNotExist(t *testing.T) {
 	p, _, _ := setupPreflight(t, fakeExecutorOK())
 	result := p.checkConfig()
 	if !result.Ok {
-		if !strings.Contains(result.Details, "fehlt") {
-			t.Errorf("checkConfig missing file should say 'fehlt', got: %s", result.Details)
+		if !strings.Contains(result.Details, "missing") {
+			t.Errorf("checkConfig missing file should say 'missing', got: %s", result.Details)
 		}
 	}
 }
@@ -873,7 +873,7 @@ func TestCheckCredentials(t *testing.T) {
 			},
 			wantOk: false,
 			// same-bot returned for both tokens
-			wantDetail: "denselben Account",
+			wantDetail: "same account",
 		},
 		{
 			name: "dev token invalid",
@@ -919,7 +919,7 @@ func TestCheckCredentials(t *testing.T) {
 				}
 			},
 			wantOk:     false,
-			wantDetail: "dev token ungültig",
+			wantDetail: "dev token invalid",
 		},
 		{
 			name: "reviewer token invalid",
@@ -965,7 +965,7 @@ func TestCheckCredentials(t *testing.T) {
 				}
 			},
 			wantOk:     false,
-			wantDetail: "reviewer token ungültig",
+			wantDetail: "reviewer token invalid",
 		},
 	}
 
@@ -1161,6 +1161,9 @@ func TestRunAllAllChecksPass(t *testing.T) {
 			t.Errorf("output missing %q, got: %s", expected, output)
 		}
 	}
+	if !strings.Contains(output, "\nok\n") {
+		t.Errorf("output missing final 'ok' summary, got: %s", output)
+	}
 }
 
 func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
@@ -1194,21 +1197,21 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 	output := buf.String()
 	// All 6 checks should appear in output
 	for _, expected := range []string{
-		"FEHLT: gh installiert",
-		"FEHLT: pi installiert",
-		"FEHLT: git",
-		"FEHLT: .golemic/ Scaffolding",
-		"FEHLT: config.json valide",
-		"FEHLT: Credentials",
+		"FAILED: gh installiert",
+		"FAILED: pi installiert",
+		"FAILED: git",
+		"FAILED: .golemic/ Scaffolding",
+		"FAILED: config.json valide",
+		"FAILED: Credentials",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output missing %q, got: %s", expected, output)
 		}
 	}
 
-	// Must NOT contain SUCCESS
-	if strings.Contains(output, "SUCCESS") {
-		t.Errorf("output must not contain SUCCESS when checks fail, got: %s", output)
+	// Must contain final 'failed' summary
+	if !strings.Contains(output, "\nfailed\n") {
+		t.Errorf("output missing final 'failed' summary, got: %s", output)
 	}
 }
 
@@ -1528,16 +1531,16 @@ func TestPreflightCheckOrder(t *testing.T) {
 	output := buf.String()
 	prevIdx := -1
 	for _, expected := range expectedNames {
-		// Search for exact line: "OK: <name>\n" or "FEHLT: <name> —"
-		// Using " —" suffix for FEHLT avoids "Credentials" matching
-		// inside "Credentials Scaffolding".
+		// Search for exact line: "OK: <name>\n" or "FAILED: <name> -"
+		// Using " -" suffix for FAILED avoids "Credentials" matching
+		// inside other check names.
 		okLine := "OK: " + expected + "\n"
-		fehltLine := "FEHLT: " + expected + " —"
+		failedLine := "FAILED: " + expected + " -"
 		idxOK := strings.Index(output, okLine)
-		idxFEHLT := strings.Index(output, fehltLine)
+		idxFAILED := strings.Index(output, failedLine)
 		idx := idxOK
-		if idx < 0 || (idxFEHLT >= 0 && idxFEHLT < idx) {
-			idx = idxFEHLT
+		if idx < 0 || (idxFAILED >= 0 && idxFAILED < idx) {
+			idx = idxFAILED
 		}
 		if idx < 0 {
 			t.Errorf("output missing %q", expected)
@@ -1672,5 +1675,133 @@ func TestCheckCredentialsTemplateErrorNoLeak(t *testing.T) {
 	}
 	if strings.Contains(result.Details, "ghp_") {
 		t.Errorf("result Details must not contain token values, got: %q", result.Details)
+	}
+}
+
+// TestCheck_IdenticalTokensRejectedLocally covers AC-002: in check mode, identical
+// token values are rejected by local comparison with no gh api user call.
+func TestCheck_IdenticalTokensRejectedLocally_AC002(t *testing.T) {
+	ghApiCalled := false
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			switch name {
+			case "gh":
+				return "gh version 2.0.0", nil
+			case "pi":
+				return "pi version 1.0.0", nil
+			case "git":
+				if len(args) >= 1 && args[0] == "config" {
+					return "https://github.com/owner/repo.git", nil
+				}
+				if len(args) >= 1 && args[0] == "worktree" {
+					return "/tmp/repo (main)\n", nil
+				}
+				return "git version 2.0.0", nil
+			}
+			return "", fmt.Errorf("not mocked: %s", name)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "user" {
+				ghApiCalled = true
+			}
+			return "", fmt.Errorf("not mocked: %s %v", name, args)
+		},
+	}
+
+	p, homeDir, repoRoot := setupPreflight(t, exec)
+
+	// Create valid config
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{"project":"test-project","verify_command":"go test"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Credentials with identical token values
+	credDir := filepath.Join(homeDir, ".golemic", "test-project")
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(`{"dev_token":"ghp_same_token","reviewer_token":"ghp_same_token"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	p.SetStdout(&buf)
+	results := p.Check()
+
+	// Credentials check must fail
+	if results[5].Ok {
+		t.Error("credentials check should fail with identical tokens")
+	}
+	if !strings.Contains(results[5].Details, "tokens identical") {
+		t.Errorf("details should mention 'tokens identical', got: %q", results[5].Details)
+	}
+
+	// gh api user must NOT have been called
+	if ghApiCalled {
+		t.Error("gh api user must not be called in check mode for token distinctness")
+	}
+
+	// Output must contain FAILED for credentials and final 'failed'
+	out := buf.String()
+	if !strings.Contains(out, "FAILED: Credentials") {
+		t.Errorf("output missing FAILED: Credentials, got: %s", out)
+	}
+	if !strings.Contains(out, "\nfailed\n") {
+		t.Errorf("output missing final 'failed' summary, got: %s", out)
+	}
+}
+
+// TestCheck_MissingGolemicDir_WritesNothing covers AC-004: check mode with missing
+// .golemic/ exits with FAILED and writes no files.
+func TestCheck_MissingGolemicDir_WritesNothing_AC004(t *testing.T) {
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			switch name {
+			case "gh":
+				return "gh version 2.0.0", nil
+			case "pi":
+				return "pi version 1.0.0", nil
+			case "git":
+				if len(args) >= 1 && args[0] == "config" {
+					return "https://github.com/owner/repo.git", nil
+				}
+				if len(args) >= 1 && args[0] == "worktree" {
+					return "/tmp/repo (main)\n", nil
+				}
+				return "git version 2.0.0", nil
+			}
+			return "", fmt.Errorf("not mocked: %s", name)
+		},
+	}
+
+	homeDir := t.TempDir()
+	repoRoot := t.TempDir() // no .golemic/
+	p := New(exec, homeDir, repoRoot)
+
+	var buf bytes.Buffer
+	p.SetStdout(&buf)
+	results := p.Check()
+
+	// Scaffolding check must fail
+	if results[3].Ok {
+		t.Error("scaffolding check should fail when .golemic/ is missing in check mode")
+	}
+	if !strings.Contains(results[3].Details, "missing") {
+		t.Errorf("details should mention 'missing', got: %q", results[3].Details)
+	}
+
+	// .golemic/ must NOT have been created
+	if _, err := os.Stat(filepath.Join(repoRoot, ".golemic")); !os.IsNotExist(err) {
+		t.Error(".golemic/ must not be created in check mode")
+	}
+
+	// Output must contain FAILED for scaffolding
+	out := buf.String()
+	if !strings.Contains(out, "FAILED: .golemic/ Scaffolding") {
+		t.Errorf("output missing FAILED: .golemic/ Scaffolding, got: %s", out)
 	}
 }

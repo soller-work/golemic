@@ -81,14 +81,21 @@ type Collision struct {
 // Runner
 // ---------------------------------------------------------------------------
 
+// Preflighter runs preflight checks in read-only mode. Implementations must be
+// safe to call multiple times.
+type Preflighter interface {
+	Check() preflight.Results
+}
+
 // Runner orchestrates a golemic run.
 type Runner struct {
-	executor preflight.Executor
-	homeDir  string
-	cwd      string
-	stdout   io.Writer
-	stderr   io.Writer
-	issueNum int
+	executor    preflight.Executor
+	homeDir     string
+	cwd         string
+	stdout      io.Writer
+	stderr      io.Writer
+	issueNum    int
+	preflighter Preflighter // nil = create from executor+homeDir+repoRoot in Run()
 
 	// Resolved during Run
 	repoRoot   string
@@ -119,6 +126,10 @@ func (r *Runner) SetStdout(w io.Writer) { r.stdout = w }
 
 // SetStderr sets the writer for error output.
 func (r *Runner) SetStderr(w io.Writer) { r.stderr = w }
+
+// SetPreflighter injects a custom Preflighter, replacing the default preflight
+// implementation. Used by tests to inject a passing or failing stub.
+func (r *Runner) SetPreflighter(p Preflighter) { r.preflighter = p }
 
 // ---------------------------------------------------------------------------
 // Host repo resolution
@@ -286,6 +297,24 @@ func (r *Runner) Run() int {
 	}
 	r.repoRoot = repoRoot
 	r.project = filepath.Base(repoRoot)
+
+	// ---- Preflight gate (read-only, before any GitHub/event-log access) ----
+	pfl := r.preflighter
+	if pfl == nil {
+		// Production path: create a real check-mode preflight with stdout discarded;
+		// the runner prints failures to stderr directly.
+		pfl = preflight.New(r.executor, r.homeDir, r.repoRoot)
+	}
+	gateResults := pfl.Check()
+	if !gateResults.AllOK() {
+		for _, res := range gateResults {
+			if !res.Ok {
+				fmt.Fprintf(r.stderr, "FAILED: %s - %s\n", res.Name, res.Details)
+			}
+		}
+		fmt.Fprintln(r.stderr, "failed")
+		return 1
+	}
 
 	// ---- PS-002: Load config and credentials (BR-002: fail-closed) ----
 	cfg, err := config.Load(repoRoot)

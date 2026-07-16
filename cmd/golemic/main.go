@@ -48,6 +48,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	command := args[1]
 
 	if command == "preflight" {
+		pfs := flag.NewFlagSet("preflight", flag.ContinueOnError)
+		pfs.SetOutput(stderr)
+		var checkFlag bool
+		pfs.BoolVar(&checkFlag, "check", false, "Run in read-only check mode (no scaffolding, local token comparison)")
+		if err := pfs.Parse(args[2:]); err != nil {
+			return 1
+		}
+
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
 			fmt.Fprintf(stderr, "failed to get home directory: %v\n", err)
@@ -67,7 +75,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 
-		return runPreflight(osExecutor{}, homeDir, repoRoot, stdout, stderr)
+		return runPreflight(osExecutor{}, homeDir, repoRoot, stdout, stderr, checkFlag)
 	}
 
 	if command == "run" {
@@ -99,17 +107,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 // runPreflight executes the preflight command with injectable dependencies.
-// All external effects (executor, homeDir, repoRoot) are parameters so tests
-// can use fakes and temp directories.
-func runPreflight(executor preflight.Executor, homeDir, repoRoot string, stdout, stderr io.Writer) int {
-
+// checkMode=false runs setup mode (scaffolds); checkMode=true runs read-only check mode.
+func runPreflight(executor preflight.Executor, homeDir, repoRoot string, stdout, stderr io.Writer, checkMode bool) int {
 	p := preflight.New(executor, homeDir, repoRoot)
 	p.SetStdout(stdout)
 
-	results := p.RunAll()
+	var results preflight.Results
+	if checkMode {
+		results = p.Check()
+	} else {
+		results = p.RunAll()
+	}
 
 	if results.AllOK() {
-		fmt.Fprintln(stdout, "SUCCESS")
 		return 0
 	}
 	return 1

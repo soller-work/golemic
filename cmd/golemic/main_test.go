@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1631,7 +1632,7 @@ func TestRunPreflight(t *testing.T) {
 				"OK: .golemic/ Scaffolding\n" +
 				"OK: config.json valide\n" +
 				"OK: Credentials\n" +
-				"SUCCESS\n",
+				"ok\n",
 		},
 		{
 			name: "gh missing",
@@ -1644,9 +1645,9 @@ func TestRunPreflight(t *testing.T) {
 				},
 			},
 			wantExit: 1,
-			wantStdout: "FEHLT: gh installiert — gh not found: executable file not found\n" +
-				"FEHLT: pi installiert — pi not found: executable file not found\n" +
-				"FEHLT: git — git not found: executable file not found\n",
+			wantStdout: "FAILED: gh installiert - gh not found: executable file not found\n" +
+				"FAILED: pi installiert - pi not found: executable file not found\n" +
+				"FAILED: git - git not found: executable file not found\n",
 			// Remaining lines (scaffolding, config, credentials) depend on temp dir
 			// path and are checked via prefix/contains below.
 		},
@@ -1695,7 +1696,7 @@ func TestRunPreflight(t *testing.T) {
 			}
 
 			var stdout, stderr bytes.Buffer
-			got := runPreflight(tt.exec, homeDir, repoRoot, &stdout, &stderr)
+			got := runPreflight(tt.exec, homeDir, repoRoot, &stdout, &stderr, false)
 
 			if got != tt.wantExit {
 				t.Errorf("exit code: got %d, want %d", got, tt.wantExit)
@@ -1712,19 +1713,19 @@ func TestRunPreflight(t *testing.T) {
 				if !strings.HasPrefix(out, tt.wantStdout) {
 					t.Errorf("stdout prefix mismatch:\n  got:  %q\n  want prefix: %q", out, tt.wantStdout)
 				}
-				// Verify the remaining lines are FEHLT
-				if !strings.Contains(out, "FEHLT: .golemic/ Scaffolding") {
-					t.Errorf("stdout missing FEHLT: .golemic/ Scaffolding\n  got: %q", out)
+				// Verify the remaining lines are FAILED
+				if !strings.Contains(out, "FAILED: .golemic/ Scaffolding") {
+					t.Errorf("stdout missing FAILED: .golemic/ Scaffolding\n  got: %q", out)
 				}
-				if !strings.Contains(out, "FEHLT: config.json valide") {
-					t.Errorf("stdout missing FEHLT: config.json valide\n  got: %q", out)
+				if !strings.Contains(out, "FAILED: config.json valide") {
+					t.Errorf("stdout missing FAILED: config.json valide\n  got: %q", out)
 				}
-				if !strings.Contains(out, "FEHLT: Credentials") {
-					t.Errorf("stdout missing FEHLT: Credentials\n  got: %q", out)
+				if !strings.Contains(out, "FAILED: Credentials") {
+					t.Errorf("stdout missing FAILED: Credentials\n  got: %q", out)
 				}
-				// Must NOT contain SUCCESS
-				if strings.Contains(out, "SUCCESS") {
-					t.Errorf("stdout must not contain SUCCESS when checks fail, got: %q", out)
+				// Must contain final 'failed' summary
+				if !strings.Contains(out, "\nfailed\n") {
+					t.Errorf("stdout missing final 'failed' summary, got: %q", out)
 				}
 			}
 
@@ -1732,5 +1733,92 @@ func TestRunPreflight(t *testing.T) {
 				t.Errorf("stderr should be empty, got: %q", stderr.String())
 			}
 		})
+	}
+}
+// TestRunPreflightCheckFlag_MissingGolemic covers AC-004: check mode with missing
+// .golemic/ exits 1 and writes nothing.
+func TestRunPreflightCheckFlag_MissingGolemic_AC004(t *testing.T) {
+	exec := fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			switch name {
+			case "gh":
+				return "gh version 2.0.0", nil
+			case "pi":
+				return "pi version 1.0.0", nil
+			case "git":
+				if len(args) >= 1 && args[0] == "config" {
+					return "https://github.com/owner/repo.git", nil
+				}
+				if len(args) >= 1 && args[0] == "worktree" {
+					return "/tmp/repo (main)\n", nil
+				}
+				return "git version 2.0.0", nil
+			}
+			return "", fmt.Errorf("not mocked: %s", name)
+		},
+	}
+	homeDir := t.TempDir()
+	repoRoot := t.TempDir() // no .golemic/
+
+	var stdout bytes.Buffer
+	exitCode := runPreflight(exec, homeDir, repoRoot, &stdout, io.Discard, true)
+
+	if exitCode != 1 {
+		t.Errorf("exit code: got %d, want 1", exitCode)
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "FAILED: .golemic/ Scaffolding") {
+		t.Errorf("stdout missing FAILED for scaffolding, got: %q", out)
+	}
+	if !strings.Contains(out, "failed") {
+		t.Errorf("stdout missing final 'failed' summary, got: %q", out)
+	}
+
+	// .golemic/ must not have been created
+	if _, err := os.Stat(filepath.Join(repoRoot, ".golemic")); !os.IsNotExist(err) {
+		t.Error(".golemic/ must not be created in check mode")
+	}
+}
+
+// TestRunPreflightSetupMode_Scaffolds covers AC-005: setup mode (no --check flag)
+// still scaffolds .golemic/ when missing.
+func TestRunPreflightSetupMode_Scaffolds_AC005(t *testing.T) {
+	exec := fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			switch name {
+			case "gh":
+				return "gh version 2.0.0", nil
+			case "pi":
+				return "pi version 1.0.0", nil
+			case "git":
+				if len(args) >= 1 && args[0] == "config" {
+					return "https://github.com/owner/repo.git", nil
+				}
+				if len(args) >= 1 && args[0] == "worktree" {
+					return "/tmp/repo (main)\n", nil
+				}
+				return "git version 2.0.0", nil
+			}
+			return "", fmt.Errorf("not mocked: %s", name)
+		},
+	}
+	homeDir := t.TempDir()
+	repoRoot := t.TempDir() // no .golemic/
+
+	var stdout bytes.Buffer
+	exitCode := runPreflight(exec, homeDir, repoRoot, &stdout, io.Discard, false)
+
+	// Setup mode scaffolds, but still FAILED (template placeholder not filled)
+	if exitCode != 1 {
+		t.Errorf("exit code: got %d, want 1 (template not filled)", exitCode)
+	}
+
+	// .golemic/ must have been created
+	if _, err := os.Stat(filepath.Join(repoRoot, ".golemic")); os.IsNotExist(err) {
+		t.Error(".golemic/ should be created in setup mode")
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, ".golemic", "config.json")); os.IsNotExist(err) {
+		t.Error(".golemic/config.json should be scaffolded in setup mode")
 	}
 }

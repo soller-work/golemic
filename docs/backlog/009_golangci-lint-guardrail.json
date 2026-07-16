@@ -1,0 +1,300 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "command",
+  "slice_id": "golangci-lint-guardrail",
+  "depends_on": [],
+  "title": "golangci-lint Guardrail (new-from-rev, komplexitaetsfokussiert)",
+  "summary": "Fuehrt golangci-lint mit Komplexitaets-Lintern (funlen, cyclop, gocognit, nestif, interfacebloat, maintidx) plus Go-Standardlintern ueber ein make-lint-Target ein. new-from-rev-Modus lintet nur geaenderte Zeilen, sodass Bestandscode gruen bleibt und kein weiterer Komplexitaets-Schuldenaufbau moeglich ist.",
+  "stakeholder_intent": {
+    "actor": "Maintainer / Go-Entwickler",
+    "goal": "Neu geschriebenen oder geaenderten Go-Code automatisch auf Funktions-Komplexitaet und Standardfehler pruefen",
+    "business_value": "Stoppt weiteren Aufbau technischer Schulden im Komplexitaets-Segment, ohne Bestandscode anfassen zu muessen",
+    "trigger": "Entwickler fuehrt make lint lokal aus",
+    "success_outcome": "make lint schlaegt fehl, sobald geaenderter Code einen aktivierten Linter verletzt; unveraenderter Bestandscode erzeugt keine Findings"
+  },
+  "scope": {
+    "in_scope": [
+      ".golangci.yml mit funlen, cyclop, gocognit, nestif, interfacebloat, maintidx",
+      "Go-Standardlinter: govet, staticcheck, errcheck, ineffassign",
+      "new-from-rev-Modus gegen den Merge-Base (nur geaenderte Zeilen werden gemeldet)",
+      "Makefile-Target lint, das golangci-lint aufruft"
+    ],
+    "out_of_scope": [
+      "GitHub-Actions/CI-Integration (spaeteres Issue)",
+      "depguard Import-Richtungs-Regeln (Issue depguard-import-rules)",
+      "Refactoring von Bestandscode (Issues split-runner-package, split-large-test-files)",
+      "File-Size-Gate (bewusst verworfen)",
+      "Struct-/Package-Kohaesion-Metriken wie LCOM"
+    ]
+  },
+  "preconditions": [
+    "Go-Toolchain vorhanden",
+    "Repository ist ein Git-Repo mit Historie, sodass new-from-rev einen Basis-Ref aufloesen kann",
+    "golangci-lint ist lokal installierbar"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Nur gegenueber dem Basis-Ref geaenderte Zeilen werden gemeldet",
+      "applies_when": "make lint laeuft",
+      "outcome": "Findings ausschliesslich auf geaenderten/neuen Zeilen"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Jede Verletzung eines aktivierten Linters fuehrt zu Exit-Code ungleich 0",
+      "applies_when": "golangci-lint findet mindestens ein Issue auf geaendertem Code",
+      "outcome": "make lint bricht mit Fehler ab"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Unveraenderter Bestandscode erzeugt keine Findings",
+      "applies_when": "Datei wurde gegenueber dem Basis-Ref nicht angefasst",
+      "outcome": "Kein Finding, Exit 0"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "cli",
+      "name": "make lint",
+      "operation": "make lint",
+      "inputs": [
+        {
+          "name": "working tree",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Go-Quelldateien im Repo"
+          ],
+          "source": "Dateisystem"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "kein Finding auf geaendertem Code",
+          "status": "exit 0",
+          "body": "keine Ausgabe bzw. Erfolgsmeldung"
+        },
+        {
+          "condition": "Finding auf geaendertem Code",
+          "status": "exit 1",
+          "body": "stdout: golangci-lint-Report mit Datei:Zeile und Linter-Name"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "aktivierter Linter verletzt",
+          "code": "1",
+          "status": "exit 1",
+          "message": "golangci-lint Report, z.B. funlen/cyclop/gocognit Verstoss"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "Repo-Wurzel: .golangci.yml",
+      "precondition": "Keine .golangci.yml vorhanden",
+      "changes": [
+        {
+          "field": ".golangci.yml",
+          "operation": "create",
+          "value_source": "Linter-Konfiguration mit Komplexitaets- und Standardlintern plus new-from-rev-Einstellung"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "Repo-Wurzel: Makefile",
+      "precondition": "Kein Makefile vorhanden",
+      "changes": [
+        {
+          "field": "Makefile (Target lint)",
+          "operation": "create",
+          "value_source": "Target, das golangci-lint run im new-from-rev-Modus ausfuehrt"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Keine; rein lokales Entwicklungswerkzeug",
+    "authorization_rules": [
+      "Keine besonderen Rechte erforderlich"
+    ],
+    "data_classification": "Quellcode-Metadaten",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      ".golangci.yml",
+      "Makefile"
+    ],
+    "integration_points": [
+      "golangci-lint CLI",
+      "git Merge-Base fuer new-from-rev"
+    ],
+    "architecture_constraints": [
+      "Keine Aenderungen an Produktivcode",
+      "Bestandscode bleibt unangetastet und gruen"
+    ],
+    "allowed_changes": [
+      "Neue .golangci.yml",
+      "Neues Makefile mit lint-Target"
+    ],
+    "forbidden_changes": [
+      "Keine Produktivcode-Aenderungen",
+      "Kein depguard hier (separates Issue)",
+      "Kein File-Size-Gate"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Additiv; nur neue Konfigurationsdateien",
+    "consistency_and_concurrency": "Nicht relevant; lokaler Einzellauf"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Geaenderter Code ueber Komplexitaetsschwelle scheitert",
+      "given": [
+        "make lint ist konfiguriert",
+        "Eine geaenderte Funktion ueberschreitet eine funlen-/cyclop-Schwelle"
+      ],
+      "when": [
+        "Entwickler fuehrt make lint aus"
+      ],
+      "then": [
+        "make lint meldet das Finding mit Datei:Zeile",
+        "Exit-Code ungleich 0"
+      ],
+      "traces_to": [
+        "BR-002",
+        "SC-001",
+        "SC-002",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Unveraenderter Bestandscode bleibt gruen",
+      "given": [
+        "make lint ist konfiguriert",
+        "Keine Datei wurde gegenueber dem Basis-Ref geaendert"
+      ],
+      "when": [
+        "Entwickler fuehrt make lint aus"
+      ],
+      "then": [
+        "Keine Findings",
+        "Exit-Code 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-003",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Sauberer neuer Code passiert den Guardrail",
+      "given": [
+        "make lint ist konfiguriert",
+        "Neu hinzugefuegter Code unterschreitet alle Schwellen und ist standardkonform"
+      ],
+      "when": [
+        "Entwickler fuehrt make lint aus"
+      ],
+      "then": [
+        "Keine Findings",
+        "Exit-Code 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "SC-002",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "integration"
+    ],
+    "test_cases": [
+      "make lint gruen bei unveraendertem Repo",
+      "make lint rot bei absichtlich komplexer neuer Funktion",
+      "make lint gruen bei sauberer neuer Funktion"
+    ],
+    "quality_commands": [
+      "make lint"
+    ],
+    "non_functional_requirements": [
+      "Lauf terminiert in vernuenftiger Zeit auf dem gesamten Modul"
+    ],
+    "definition_of_done": [
+      ".golangci.yml und Makefile-Target vorhanden",
+      "make lint laeuft im new-from-rev-Modus",
+      "Bestandscode erzeugt keine Findings",
+      "Alle drei Akzeptanzszenarien nachweisbar"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Baseline-Strategie",
+      "decision": "new-from-rev-Modus: nur geaenderte Zeilen werden gelintet",
+      "source": "user",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "Null Reibung auf Bestandscode, aber jeder neue/beruehrte Code muss sauber sein"
+    },
+    {
+      "id": "D-002",
+      "topic": "Linter-Auswahl",
+      "decision": "Komplexitaetslinter funlen, cyclop, gocognit, nestif, interfacebloat, maintidx plus Standardlinter govet, staticcheck, errcheck, ineffassign",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "Zielt auf Funktions-/Interface-Komplexitaet (SRP-Treiber), nicht auf Dateilaenge"
+    },
+    {
+      "id": "D-003",
+      "topic": "Ausfuehrungsort",
+      "decision": "Zunaechst nur lokal via make lint; CI spaeter separat",
+      "source": "user",
+      "evidence_ids": [
+        "EV-002"
+      ],
+      "rationale": "Es existiert noch keine CI; lokaler Guardrail zuerst"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "go.mod",
+      "symbol": null,
+      "location": "Repo-Wurzel",
+      "finding": "Go-Modul mit Git-Historie vorhanden; new-from-rev kann einen Basis-Ref aufloesen",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "go.mod",
+      "symbol": null,
+      "location": "Repo-Wurzel",
+      "finding": "Weder .golangci.yml noch Makefile noch .github/workflows vorhanden; kein bestehender Lint-Guardrail",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}
