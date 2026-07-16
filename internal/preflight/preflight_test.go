@@ -12,6 +12,18 @@ import (
 	"testing"
 )
 
+// unsetEnv ensures an env var is not set for the duration of the test.
+func unsetEnvPreflight(t *testing.T, key string) func() {
+	t.Helper()
+	old, had := os.LookupEnv(key)
+	os.Unsetenv(key)
+	return func() {
+		if had {
+			os.Setenv(key, old)
+		}
+	}
+}
+
 // fakeExecutor simulates external commands with configurable results.
 type fakeExecutor struct {
 	runFunc        func(name string, args ...string) (string, error)
@@ -1516,11 +1528,11 @@ func TestCheckCredentialsScaffoldingCreatesFile(t *testing.T) {
 	}
 	devToken, devOk := parsed["dev_token"]
 	revToken, revOk := parsed["reviewer_token"]
-	if !devOk || devToken != "" {
-		t.Errorf("dev_token should be empty string, got: %v", devToken)
+	if !devOk || devToken != "${GOLEMIC_DEV_TOKEN}" {
+		t.Errorf("dev_token should be template reference, got: %v", devToken)
 	}
-	if !revOk || revToken != "" {
-		t.Errorf("reviewer_token should be empty string, got: %v", revToken)
+	if !revOk || revToken != "${GOLEMIC_REVIEWER_TOKEN}" {
+		t.Errorf("reviewer_token should be template reference, got: %v", revToken)
 	}
 
 	// Verify permissions are 0600
@@ -1692,5 +1704,130 @@ func TestPreflightCheckOrder(t *testing.T) {
 			t.Errorf("output order violation: %q appears before previous check", expected)
 		}
 		prevIdx = idx
+	}
+}
+func TestCheckCredentialsSourceInDetails(t *testing.T) {
+	// Verify that successful credentials check includes source info in Details.
+	cu1 := unsetEnvPreflight(t, "GOLEMIC_DEV_TOKEN")
+	cu2 := unsetEnvPreflight(t, "GOLEMIC_REVIEWER_TOKEN")
+	defer cu1()
+	defer cu2()
+
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			return "gh version 2.0.0", nil
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 1 && args[0] == "api" && args[1] == "user" {
+				token := env["GH_TOKEN"]
+				if strings.Contains(token, "dev") {
+					return `{"login":"dev-bot"}`, nil
+				}
+				if strings.Contains(token, "rev") {
+					return `{"login":"reviewer-bot"}`, nil
+				}
+			}
+			return "", fmt.Errorf("not mocked")
+		},
+	}
+	homeDir := t.TempDir()
+	repoRoot := t.TempDir()
+
+	// Init git repo
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create config.json
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{
+		"project": "test-project",
+		"verify_command": "go test"
+	}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// AC-002: Mixed literal + template — dev=file_literal, reviewer=template_env
+	// Set MY_REV_TOKEN for the reviewer template
+	t.Setenv("MY_REV_TOKEN", "ghp_rev_token")
+
+	credDir := filepath.Join(homeDir, ".golemic", "test-project")
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// dev_token is literal, reviewer_token is template
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(`{
+		"dev_token": "ghp_literal_dev",
+		"reviewer_token": "${MY_REV_TOKEN}"
+	}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New(exec, homeDir, repoRoot)
+	result := p.checkCredentials()
+
+	if !result.Ok {
+		t.Fatalf("checkCredentials() should be OK, got: %s", result.Details)
+	}
+	if !strings.Contains(result.Details, "dev=file_literal") {
+		t.Errorf("Details should contain dev=file_literal, got: %s", result.Details)
+	}
+	if !strings.Contains(result.Details, "reviewer=template_env") {
+		t.Errorf("Details should contain reviewer=template_env, got: %s", result.Details)
+	}
+}
+
+func TestCheckCredentialsTemplateErrorNoLeak(t *testing.T) {
+	// When a template resolution error occurs during checkCredentials,
+	// the result Details must not leak token values.
+	cu1 := unsetEnvPreflight(t, "GOLEMIC_DEV_TOKEN")
+	cu2 := unsetEnvPreflight(t, "GOLEMIC_REVIEWER_TOKEN")
+	defer cu1()
+	defer cu2()
+
+	exec := fakeExecutorOK()
+	homeDir := t.TempDir()
+	repoRoot := t.TempDir()
+
+	// Init git repo
+	if err := os.MkdirAll(filepath.Join(repoRoot, ".git"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create config.json
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{
+		"project": "test-project",
+		"verify_command": "go test"
+	}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create credentials with malformed template in dev_token
+	credDir := filepath.Join(homeDir, ".golemic", "test-project")
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(`{
+		"dev_token": "${UNCLOSED",
+		"reviewer_token": "ghp_valid"
+	}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := New(exec, homeDir, repoRoot)
+	result := p.checkCredentials()
+
+	if result.Ok {
+		t.Fatal("checkCredentials() should fail for malformed template")
+	}
+	if strings.Contains(result.Details, "ghp_") {
+		t.Errorf("result Details must not contain token values, got: %q", result.Details)
 	}
 }

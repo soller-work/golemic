@@ -315,8 +315,8 @@ func (p *Preflight) createCredentialsSkeleton() error {
 	credPath := filepath.Join(p.homeDir, ".golemic", projectName, "credentials.json")
 
 	skeleton := credentialsSkeleton{
-		DevToken:      "",
-		ReviewerToken: "",
+		DevToken:      "${GOLEMIC_DEV_TOKEN}",
+		ReviewerToken: "${GOLEMIC_REVIEWER_TOKEN}",
 	}
 	data, err := json.MarshalIndent(skeleton, "", "    ")
 	if err != nil {
@@ -438,7 +438,8 @@ func (p *Preflight) checkCredentials() Result {
 			Details: fmt.Sprintf("dev und reviewer token verwenden denselben Account (%s); sie müssen verschieden sein", devLogin)}
 	}
 
-	return Result{Name: "Credentials", Ok: true}
+	return Result{Name: "Credentials", Ok: true,
+		Details: fmt.Sprintf("dev=%s, reviewer=%s", creds.DevSource(), creds.ReviewerSource())}
 }
 
 // ghWhoami runs `gh api user` with the given GH_TOKEN and returns the login name.

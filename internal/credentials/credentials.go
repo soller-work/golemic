@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"golemic/internal/template"
 )
 
 // projectNameRe validates project names to prevent path traversal.
@@ -17,8 +19,10 @@ var projectNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
 // Credentials holds the bot tokens loaded from file and/or environment.
 // Token values are not exposed via String() or in error messages.
 type Credentials struct {
-	devToken      string
-	reviewerToken string
+	devToken       string
+	reviewerToken  string
+	devSource      string
+	reviewerSource string
 }
 
 // DevToken returns the dev bot token.
@@ -26,6 +30,14 @@ func (c *Credentials) DevToken() string { return c.devToken }
 
 // ReviewerToken returns the reviewer bot token.
 func (c *Credentials) ReviewerToken() string { return c.reviewerToken }
+
+// DevSource returns the source of the dev token (file_literal, direct_env,
+// template_env, or template_default). Empty string if not loaded.
+func (c *Credentials) DevSource() string { return c.devSource }
+
+// ReviewerSource returns the source of the reviewer token (file_literal,
+// direct_env, template_env, or template_default). Empty string if not loaded.
+func (c *Credentials) ReviewerSource() string { return c.reviewerSource }
 
 // String returns a redacted representation — never contains token values.
 func (c *Credentials) String() string {
@@ -56,9 +68,11 @@ func ValidateProjectName(name string) error {
 	return nil
 }
 
-// Loader loads credentials with an injectable home directory.
+// Loader loads credentials with an injectable home directory and an optional
+// template resolver. If Resolver is nil, a default EnvResolver is used.
 type Loader struct {
-	homeDir string
+	homeDir  string
+	Resolver template.Resolver
 }
 
 // NewLoader creates a Loader that resolves ~ to the given homeDir.
@@ -82,6 +96,12 @@ func (l *Loader) Load(project string) (*Credentials, error) {
 	credPath := filepath.Join(l.homeDir, ".golemic", project, "credentials.json")
 
 	creds := &Credentials{}
+
+	// Use default resolver if none was injected
+	resolver := l.Resolver
+	if resolver == nil {
+		resolver = template.NewEnvResolver()
+	}
 
 	// TOCTOU-safe read: open, stat the descriptor, then read
 	f, err := os.OpenFile(credPath, os.O_RDONLY, 0)
@@ -124,6 +144,8 @@ func (l *Loader) Load(project string) (*Credentials, error) {
 		}
 		creds.devToken = fc.DevToken
 		creds.reviewerToken = fc.ReviewerToken
+		creds.devSource = template.SourceFileLiteral
+		creds.reviewerSource = template.SourceFileLiteral
 	} else if errors.Is(err, os.ErrNotExist) {
 		// Save the original error so it can be wrapped in the final missing-credentials error
 		// for errors.Is matching.
@@ -132,18 +154,38 @@ func (l *Loader) Load(project string) (*Credentials, error) {
 		return nil, fmt.Errorf("failed to open credentials file %s: %w", credPath, err)
 	}
 
-	// Environment variables override file values per token
+	// Environment variables override file values per token.
+	// If a GOLEMIC_* env var is set, skip template resolution for that field
+	// and use the env value directly.
 	// Track whether each was explicitly set (not just its value) — needed for
 	// determining whether the missing file is the root cause (F1).
 	envDevSet := false
 	envRevSet := false
 	if envDev, ok := os.LookupEnv("GOLEMIC_DEV_TOKEN"); ok {
 		creds.devToken = envDev
+		creds.devSource = "direct_env"
 		envDevSet = true
+	} else if creds.devSource == template.SourceFileLiteral {
+		// File was read; resolve templates for dev_token
+		resolved, source, err := resolver.Resolve(creds.devToken)
+		if err != nil {
+			return nil, fmt.Errorf("dev_token: %w", err)
+		}
+		creds.devToken = resolved
+		creds.devSource = source
 	}
 	if envRev, ok := os.LookupEnv("GOLEMIC_REVIEWER_TOKEN"); ok {
 		creds.reviewerToken = envRev
+		creds.reviewerSource = "direct_env"
 		envRevSet = true
+	} else if creds.reviewerSource == template.SourceFileLiteral {
+		// File was read; resolve templates for reviewer_token
+		resolved, source, err := resolver.Resolve(creds.reviewerToken)
+		if err != nil {
+			return nil, fmt.Errorf("reviewer_token: %w", err)
+		}
+		creds.reviewerToken = resolved
+		creds.reviewerSource = source
 	}
 
 	// Validate that both tokens are present — collect all missing tokens before failing
