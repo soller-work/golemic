@@ -1,0 +1,387 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "process",
+  "decision_tables": [],
+  "read_models": [],
+  "integration_contracts": [],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": [],
+  "slice_id": "e2e-test-happy-path-all-steps-succeed",
+  "title": "E2E Test: Happy Path - All steps succeed",
+  "summary": "Verify that golemic run completes successfully: preflight passes, issue loads, dev creates PR, reviewer submits review, exit code 0",
+  "stakeholder_intent": {
+    "actor": "Test engineer or CI/CD pipeline",
+    "goal": "Validate golemic's full orchestration works end-to-end",
+    "business_value": "Confidence in automated code review before production",
+    "trigger": "Execute golemic run --issue N in clean sandbox",
+    "success_outcome": "Exit 0; PR created by dev bot; formal review by reviewer bot (different identity)"
+  },
+  "scope": {
+    "in_scope": [
+      "Preflight: all 6 checks pass",
+      "Issue load from GitHub",
+      "Collision detection",
+      "Dev role: PR creation",
+      "Reviewer role: review submission",
+      "Exit code 0 and event logging"
+    ],
+    "out_of_scope": [
+      "Agent prompt quality",
+      "PR merge or branch cleanup (teardown)"
+    ]
+  },
+  "preconditions": [
+    "golemic_e2e sandbox with valid config.json",
+    "Two distinct bot tokens (dev \u2260 reviewer)",
+    "Fresh GitHub issue without dependencies",
+    "No stale branches/PRs/worktrees"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Preflight must pass before GitHub access",
+      "applies_when": "Run starts",
+      "outcome": "All 6 checks OK; run proceeds"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Dev and reviewer must be different bot identities",
+      "applies_when": "PR and review submitted",
+      "outcome": "PR author \u2260 review author"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Exit 0 only if both pr_opened and review_submitted events logged",
+      "applies_when": "Run finishes",
+      "outcome": "Success iff both events present"
+    }
+  ],
+  "process_steps": [
+    {
+      "id": "PS-001",
+      "order": 1,
+      "name": "Preflight checks",
+      "trigger": "golemic run --issue N",
+      "action": "Validate 6 prerequisites",
+      "state_before": "golemic run invoked",
+      "state_after": "All checks pass",
+      "outcome": "Preflight OK",
+      "failure_behavior": "Exit 1 if any check fails",
+      "terminal": false
+    },
+    {
+      "id": "PS-002",
+      "order": 2,
+      "name": "Load issue",
+      "trigger": "Preflight passed",
+      "action": "Fetch issue via GitHub API",
+      "state_before": "Issue number provided",
+      "state_after": "Issue data loaded; run_started event logged",
+      "outcome": "Issue in memory",
+      "failure_behavior": "Exit 1 if not found",
+      "terminal": false
+    },
+    {
+      "id": "PS-003",
+      "order": 3,
+      "name": "Collision check",
+      "trigger": "Issue loaded",
+      "action": "Verify no stale worktrees/branches/PRs",
+      "state_before": "Git/GitHub accessible",
+      "state_after": "No collisions",
+      "outcome": "Collision check passes",
+      "failure_behavior": "Exit 1 with cleanup commands",
+      "terminal": false
+    },
+    {
+      "id": "PS-004",
+      "order": 4,
+      "name": "Dev role",
+      "trigger": "Collision check passed",
+      "action": "Create worktree, invoke agent, commit, push, open PR",
+      "state_before": "Repo clean",
+      "state_after": "PR on GitHub; pr_opened event logged",
+      "outcome": "PR created",
+      "failure_behavior": "Exit 1 if PR fails",
+      "terminal": false
+    },
+    {
+      "id": "PS-005",
+      "order": 5,
+      "name": "Reviewer role",
+      "trigger": "PR opened",
+      "action": "Create worktree, invoke agent, verify, submit review",
+      "state_before": "PR exists",
+      "state_after": "Review submitted; review_submitted event logged",
+      "outcome": "Review exists",
+      "failure_behavior": "Exit 1 if review fails",
+      "terminal": false
+    },
+    {
+      "id": "PS-006",
+      "order": 6,
+      "name": "Finish",
+      "trigger": "Both events logged",
+      "action": "Determine outcome, write run_finished, cleanup",
+      "state_before": "All roles complete",
+      "state_after": "Exit 0",
+      "outcome": "Success",
+      "failure_behavior": "Only if both pr_opened and review_submitted events",
+      "terminal": true
+    }
+  ],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "cli",
+      "name": "golemic run",
+      "operation": "golemic run --issue <N>",
+      "inputs": [
+        {
+          "name": "--issue",
+          "type": "int",
+          "required": true,
+          "constraints": [
+            "positive"
+          ],
+          "source": "command line"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "success",
+          "status": "exit 0",
+          "body": "stdout: run ID (e.g., issue-42-20260716T...)"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "preflight fails",
+          "code": "1",
+          "status": "exit 1",
+          "message": "stderr: reason (e.g., gh not found)"
+        },
+        {
+          "condition": "collision",
+          "code": "1",
+          "status": "exit 1",
+          "message": "stderr: collision message with cleanup command"
+        },
+        {
+          "condition": "dev fails",
+          "code": "1",
+          "status": "exit 1",
+          "message": "stderr: dev_failed; log path"
+        },
+        {
+          "condition": "review fails",
+          "code": "1",
+          "status": "exit 1",
+          "message": "stderr: review_failed; log path"
+        }
+      ]
+    }
+  ],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "GitHub repo: golemic_e2e",
+      "precondition": "Dev role succeeds",
+      "changes": [
+        {
+          "field": "branch golemic/issue-N",
+          "operation": "create",
+          "value_source": "Dev agent commits"
+        },
+        {
+          "field": "PR for branch",
+          "operation": "create",
+          "value_source": "golemic open-pr"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "GitHub PR",
+      "precondition": "Reviewer role succeeds",
+      "changes": [
+        {
+          "field": "formal review",
+          "operation": "create",
+          "value_source": "golemic submit-review (APPROVE or REQUEST_CHANGES)"
+        }
+      ]
+    }
+  ],
+  "side_effects": [
+    {
+      "id": "SE-001",
+      "type": "external_call",
+      "description": "Git worktrees created and destroyed",
+      "delivery": "synchronous",
+      "idempotency": "Run ID ensures unique name",
+      "failure_policy": "Cleanup after run"
+    },
+    {
+      "id": "SE-002",
+      "type": "audit",
+      "description": "Events logged to ~/.golemic/golemic_e2e/runs/<run-id>/events.jsonl",
+      "delivery": "synchronous",
+      "idempotency": "One log per run ID",
+      "failure_policy": "Retained for forensics"
+    }
+  ],
+  "security": {
+    "authentication": "Dev token (GOLEMIC_DEV_TOKEN) and reviewer token (GOLEMIC_REVIEWER_TOKEN); must be valid GitHub personal access tokens",
+    "authorization_rules": [
+      "Tokens must have repo/public_repo scope",
+      "Tokens must be different GitHub accounts"
+    ],
+    "data_classification": "Test infrastructure; non-sensitive sandbox",
+    "audit_requirements": [
+      "All events logged with timestamp"
+    ]
+  },
+  "implementation_context": {
+    "target_modules": [
+      "test/e2e/ (new test runner)"
+    ],
+    "integration_points": [
+      "GitHub API via gh CLI",
+      "pi CLI for agent invocation",
+      "Local git"
+    ],
+    "architecture_constraints": [
+      "No production code changes",
+      "Run isolation per issue number"
+    ],
+    "allowed_changes": [
+      "Add test fixtures and runner in golemic_e2e or test/e2e"
+    ],
+    "forbidden_changes": [
+      "Do not modify cmd/golemic or internal/runner"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Test is additive; no existing changes",
+    "consistency_and_concurrency": "Each run uses unique branch; parallel runs on different issues safe"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Full run succeeds",
+      "given": [
+        "Clean sandbox",
+        "Valid tokens",
+        "Fresh issue"
+      ],
+      "when": [
+        "golemic run --issue N"
+      ],
+      "then": [
+        "All 6 steps complete",
+        "PR visible",
+        "Review visible",
+        "Exit 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "BR-003",
+        "PS-001",
+        "PS-002",
+        "PS-003",
+        "PS-004",
+        "PS-005",
+        "PS-006",
+        "SC-001",
+        "SC-002",
+        "IF-001",
+        "SE-001",
+        "SE-002"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Dev and reviewer are different accounts",
+      "given": [
+        "Run AC-001 succeeded"
+      ],
+      "when": [
+        "gh pr view <pr-num> --json author,reviews"
+      ],
+      "then": [
+        "author.login \u2260 reviews[0].author.login"
+      ],
+      "traces_to": [
+        "BR-002",
+        "SC-001",
+        "SC-002",
+        "IF-001",
+        "BR-001",
+        "BR-003",
+        "PS-001",
+        "PS-002",
+        "PS-003",
+        "PS-004",
+        "PS-005",
+        "PS-006",
+        "SE-001",
+        "SE-002"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "integration"
+    ],
+    "test_cases": [
+      "AC-001: full happy path",
+      "AC-002: distinct bot identities"
+    ],
+    "quality_commands": [
+      "go test ./test/e2e -run TestE2EHappyPath"
+    ],
+    "non_functional_requirements": [
+      "Runtime: 2-10 min",
+      "Network resilience"
+    ],
+    "definition_of_done": [
+      "Tests pass and logs available",
+      "PR/review visible on GitHub",
+      "Cleanup succeeds"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Baseline scope",
+      "decision": "Focus on success case; failures are separate issues",
+      "source": "user",
+      "evidence_ids": [
+        "EV-001",
+        "EV-002"
+      ],
+      "rationale": "Establishes baseline before testing failures"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/runner/runner.go",
+      "symbol": "Runner.Run",
+      "location": "func (r *Runner) Run()",
+      "finding": "6-step orchestration",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "docs/e2e.md",
+      "symbol": null,
+      "location": "Part 1-3",
+      "finding": "Manual smoke test procedure",
+      "verified": true
+    }
+  ]
+}
