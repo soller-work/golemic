@@ -95,13 +95,14 @@ type ghUserLogin struct {
 	Login string `json:"login"`
 }
 
-// RunAll runs all six checks in order, prints results to stdout, and returns them.
+// RunAll runs all seven checks in order, prints results to stdout, and returns them.
 func (p *Preflight) RunAll() Results {
 	results := Results{
 		p.checkGhVersion(),
 		p.checkPiVersion(),
 		p.checkGit(),
 		p.checkScaffolding(),
+		p.checkCredentialsScaffolding(),
 		p.checkConfig(),
 		p.checkCredentials(),
 	}
@@ -205,6 +206,34 @@ func maskURL(url string) string {
 	return "https://***@" + rest[atIdx+1:]
 }
 
+// writeFileAtomic creates a file with the given content and permissions.
+// It creates parent directories with 0755 if they don't exist.
+// Returns fs.ErrExist if the file already exists (idempotency).
+func writeFileAtomic(path string, content []byte, perms os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+
+	// Idempotency: never overwrite existing file
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("file %s already exists: %w", path, fs.ErrExist)
+	}
+
+	// Write to temp file, then rename for atomicity
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, content, perms); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath) // best-effort cleanup
+		return fmt.Errorf("rename %s: %w", path, err)
+	}
+
+	return nil
+}
+
 // checkScaffolding checks if .golemic/ exists; if missing, creates it from templates.
 // Creating the scaffolding counts as FEHLT so the human fills in the templates.
 // Existing files are never overwritten (idempotency).
@@ -252,25 +281,82 @@ func (p *Preflight) checkScaffolding() Result {
 	return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "wurde angelegt — bitte config.json und Guidelines ausfüllen"}
 }
 
-// createConfig marshals a config.Config with defaults and writes it to configPath.
-// It does not overwrite an existing file (checked by caller).
+// createConfig marshals a config.Config with defaults and writes it to configPath
+// using the shared writeFileAtomic helper. Idempotent: does not overwrite.
 func (p *Preflight) createConfig(golemicDir, configPath, projectName string) error {
-	if err := os.MkdirAll(golemicDir, 0755); err != nil {
-		return err
-	}
-
-	// Second stat after MkdirAll — test-visibility only, not race-safe.
-	if _, err := os.Stat(configPath); err == nil {
-		return nil // already exists, idempotent
-	}
-
 	cfg := config.DefaultConfig(projectName)
 	data, err := json.MarshalIndent(cfg, "", "    ")
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 
-	return os.WriteFile(configPath, data, 0644)
+	// writeFileAtomic creates parent dirs and enforces idempotency
+	err = writeFileAtomic(configPath, data, 0644)
+	if errors.Is(err, fs.ErrExist) {
+		return nil // already exists, idempotent
+	}
+	return err
+}
+
+// credentialsSkeleton mirrors credentials.credentialsFile for scaffolding.
+type credentialsSkeleton struct {
+	DevToken      string `json:"dev_token"`
+	ReviewerToken string `json:"reviewer_token"`
+}
+
+// createCredentialsSkeleton writes the credentials.json skeleton file.
+// Idempotent: does not overwrite existing file.
+func (p *Preflight) createCredentialsSkeleton() error {
+	projectName := filepath.Base(p.repoRoot)
+	if err := credentials.ValidateProjectName(projectName); err != nil {
+		return fmt.Errorf("invalid project name: %w", err)
+	}
+
+	credPath := filepath.Join(p.homeDir, ".golemic", projectName, "credentials.json")
+
+	skeleton := credentialsSkeleton{
+		DevToken:      "",
+		ReviewerToken: "",
+	}
+	data, err := json.MarshalIndent(skeleton, "", "    ")
+	if err != nil {
+		return fmt.Errorf("marshal credentials: %w", err)
+	}
+
+	err = writeFileAtomic(credPath, data, 0600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil // already exists, idempotent
+	}
+	return err
+}
+
+// checkCredentialsScaffolding creates the ~/.golemic/<project>/credentials.json
+// skeleton if it doesn't exist. Idempotent: never overwrites.
+func (p *Preflight) checkCredentialsScaffolding() Result {
+	projectName := filepath.Base(p.repoRoot)
+	if projectName == "" || projectName == "." {
+		return Result{Name: "Credentials Scaffolding", Ok: false,
+			Details: "cannot determine project name from repo root"}
+	}
+	if err := credentials.ValidateProjectName(projectName); err != nil {
+		return Result{Name: "Credentials Scaffolding", Ok: false,
+			Details: "invalid project name: " + err.Error()}
+	}
+
+	credPath := filepath.Join(p.homeDir, ".golemic", projectName, "credentials.json")
+
+	// If file already exists, skip creation (idempotent — never overwrite)
+	if _, err := os.Stat(credPath); err == nil {
+		return Result{Name: "Credentials Scaffolding", Ok: true}
+	}
+
+	if err := p.createCredentialsSkeleton(); err != nil {
+		return Result{Name: "Credentials Scaffolding", Ok: false,
+			Details: "failed to create credentials.json: " + err.Error()}
+	}
+
+	return Result{Name: "Credentials Scaffolding", Ok: false,
+		Details: fmt.Sprintf("created %s — fill in dev_token and reviewer_token", credPath)}
 }
 
 // copyFromTemplate copies an embedded template file to the target directory.

@@ -3,7 +3,9 @@ package preflight
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1080,8 +1082,15 @@ func TestCheckCredentialsSanitizeErr(t *testing.T) {
 }
 
 func TestRunAllAllChecksPass(t *testing.T) {
+	// Ensure env vars match mock-recognizable tokens (env vars take precedence
+	// over file values in credentials.Loader)
+	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
+
 	exec := fakeExecutorOK()
 	p, homeDir, repoRoot := setupPreflight(t, exec)
+
+	projectName := filepath.Base(repoRoot)
 
 	// Create valid config.json
 	golemicDir := filepath.Join(repoRoot, ".golemic")
@@ -1089,14 +1098,15 @@ func TestRunAllAllChecksPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{
-		"project": "test-project",
+		"project": "`+projectName+`",
 		"verify_command": "go test"
 	}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create valid credentials
-	credDir := filepath.Join(homeDir, ".golemic", "test-project")
+	// Create valid credentials (so both checkCredentialsScaffolding finds it
+	// and checkCredentials validates it)
+	credDir := filepath.Join(homeDir, ".golemic", projectName)
 	if err := os.MkdirAll(credDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -1122,24 +1132,19 @@ func TestRunAllAllChecksPass(t *testing.T) {
 	}
 
 	output := buf.String()
-	// Check output format
-	if !strings.Contains(output, "OK: gh installiert") {
-		t.Errorf("output missing 'OK: gh installiert', got: %s", output)
-	}
-	if !strings.Contains(output, "OK: pi installiert") {
-		t.Errorf("output missing 'OK: pi installiert', got: %s", output)
-	}
-	if !strings.Contains(output, "OK: git") {
-		t.Errorf("output missing 'OK: git', got: %s", output)
-	}
-	if !strings.Contains(output, "OK: .golemic/ Scaffolding") {
-		t.Errorf("output missing 'OK: .golemic/ Scaffolding', got: %s", output)
-	}
-	if !strings.Contains(output, "OK: config.json valide") {
-		t.Errorf("output missing 'OK: config.json valide', got: %s", output)
-	}
-	if !strings.Contains(output, "OK: Credentials") {
-		t.Errorf("output missing 'OK: Credentials', got: %s", output)
+	// Check output format — 7 checks
+	for _, expected := range []string{
+		"OK: gh installiert",
+		"OK: pi installiert",
+		"OK: git",
+		"OK: .golemic/ Scaffolding",
+		"OK: Credentials Scaffolding",
+		"OK: config.json valide",
+		"OK: Credentials",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("output missing %q, got: %s", expected, output)
+		}
 	}
 }
 
@@ -1161,9 +1166,9 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 
 	results := p.RunAll()
 
-	// Should have exactly 6 results
-	if len(results) != 6 {
-		t.Errorf("RunAll() returned %d results, want 6", len(results))
+	// Should have exactly 7 results (gh, pi, git, scaffolding, cred scaffolding, config, credentials)
+	if len(results) != 7 {
+		t.Errorf("RunAll() returned %d results, want 7", len(results))
 	}
 
 	// All should fail
@@ -1172,12 +1177,13 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 	}
 
 	output := buf.String()
-	// All 6 checks should appear in output
+	// All 7 checks should appear in output
 	for _, expected := range []string{
 		"FEHLT: gh installiert",
 		"FEHLT: pi installiert",
 		"FEHLT: git",
 		"FEHLT: .golemic/ Scaffolding",
+		"FEHLT: Credentials Scaffolding",
 		"FEHLT: config.json valide",
 		"FEHLT: Credentials",
 	} {
@@ -1193,9 +1199,16 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 }
 
 func TestRunAllScaffoldingFailThenFix(t *testing.T) {
+	// Ensure env vars match mock-recognizable tokens (env vars take precedence
+	// over file values in credentials.Loader)
+	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
+
 	// Simulate a repo without .golemic/ and without config
 	exec := fakeExecutorOK()
 	p, homeDir, repoRoot := setupPreflight(t, exec)
+
+	projectName := filepath.Base(repoRoot)
 
 	// No .golemic/ directory, no config, no credentials
 	// All checks except gh, pi, git should fail
@@ -1203,28 +1216,32 @@ func TestRunAllScaffoldingFailThenFix(t *testing.T) {
 	p.SetStdout(&buf)
 	results := p.RunAll()
 
-	// Check scaffolding was created
+	// results[3] = checkScaffolding (should be FEHLT — created)
 	if results[3].Ok {
 		t.Errorf("scaffolding check should report FEHLT (created), got OK")
 	}
 
-	// Check that config validation fails (config was just created but may be
-	// invalid because verify_command is empty)
+	// results[4] = checkCredentialsScaffolding (should be FEHLT — created)
 	if results[4].Ok {
+		t.Errorf("credentials scaffolding check should report FEHLT (created), got OK")
+	}
+
+	// results[5] = checkConfig (should be FEHLT — empty verify_command in template)
+	if results[5].Ok {
 		t.Errorf("config check should fail (empty verify_command in template), got OK")
 	}
 
-	// Now fix config.json
+	// Now fix config.json with proper project name
 	golemicDir := filepath.Join(repoRoot, ".golemic")
 	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{
-		"project": "test-project",
+		"project": "`+projectName+`",
 		"verify_command": "go test"
 	}`), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	// Create valid credentials
-	credDir := filepath.Join(homeDir, ".golemic", "test-project")
+	// Create valid credentials (checked by checkCredentialsScaffolding AND checkCredentials)
+	credDir := filepath.Join(homeDir, ".golemic", projectName)
 	if err := os.MkdirAll(credDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -1302,5 +1319,378 @@ func TestErrExit(t *testing.T) {
 	msg2 := err2.Error()
 	if !strings.Contains(msg2, "exit code 127") {
 		t.Errorf("ErrExit.Error() should contain 'exit code 127', got: %s", msg2)
+	}
+}
+
+// =============================================================================
+// writeFileAtomic tests (shared helper)
+// =============================================================================
+
+func TestWriteFileAtomicCreatesFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.json")
+	content := []byte(`{"key": "value"}`)
+
+	if err := writeFileAtomic(path, content, 0644); err != nil {
+		t.Fatalf("writeFileAtomic() unexpected error: %v", err)
+	}
+
+	// Verify file exists with correct content
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read created file: %v", err)
+	}
+	if string(got) != string(content) {
+		t.Errorf("file content = %q, want %q", string(got), string(content))
+	}
+}
+
+func TestWriteFileAtomicDoesNotOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.json")
+	original := []byte(`"original content"`)
+
+	if err := os.WriteFile(path, original, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second write should fail with fs.ErrExist
+	err := writeFileAtomic(path, []byte(`"new content"`), 0644)
+	if err == nil {
+		t.Fatal("writeFileAtomic() should fail when file exists")
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		t.Errorf("writeFileAtomic() error should wrap fs.ErrExist, got: %v", err)
+	}
+
+	// Verify original content was not overwritten
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Errorf("file was overwritten: got %q, want %q", string(got), string(original))
+	}
+}
+
+func TestWriteFileAtomicPermissions(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.json")
+
+	if err := writeFileAtomic(path, []byte(`{}`), 0600); err != nil {
+		t.Fatalf("writeFileAtomic() unexpected error: %v", err)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	perm := fi.Mode().Perm()
+	if perm != 0600 {
+		t.Errorf("file permissions = 0%o, want 0600", perm)
+	}
+}
+
+func TestWriteFileAtomicCreatesMissingParent(t *testing.T) {
+	tmpDir := t.TempDir()
+	nestedDir := filepath.Join(tmpDir, "a", "b", "c")
+	path := filepath.Join(nestedDir, "test.json")
+
+	// Verify parent does NOT exist before write
+	if _, err := os.Stat(nestedDir); err == nil {
+		t.Fatal("nested dir should not exist before write")
+	}
+
+	if err := writeFileAtomic(path, []byte(`{}`), 0600); err != nil {
+		t.Fatalf("writeFileAtomic() unexpected error: %v", err)
+	}
+
+	// Verify parent directories were created with 0755
+	dirInfo, err := os.Stat(nestedDir)
+	if err != nil {
+		t.Fatalf("parent directory should exist after write: %v", err)
+	}
+	if !dirInfo.IsDir() {
+		t.Errorf("parent path should be a directory")
+	}
+	// 0755 on macOS often reports as drwxr-xr-x; check the permission bits
+	if dirInfo.Mode().Perm()&0755 != 0755 {
+		t.Errorf("parent directory permissions too restrictive: 0%o", dirInfo.Mode().Perm())
+	}
+
+	// Verify file exists
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("created file should exist: %v", err)
+	}
+}
+
+func TestWriteFileAtomicReused(t *testing.T) {
+	// AC-007: Both config and credentials scaffolding use the shared helper.
+	// We verify by checking that createConfig and createCredentialsSkeleton
+	// both delegate to writeFileAtomic (indirectly via refactored code).
+
+	exec := fakeExecutorOK()
+	p, homeDir, repoRoot := setupPreflight(t, exec)
+
+	// ===== config.json via createConfig (uses writeFileAtomic with 0644) =====
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	configPath := filepath.Join(golemicDir, "config.json")
+	projectName := filepath.Base(repoRoot)
+
+	if err := p.createConfig(golemicDir, configPath, projectName); err != nil {
+		t.Fatalf("createConfig() unexpected error: %v", err)
+	}
+
+	// Verify config.json permissions are 0644
+	cfgFi, err := os.Stat(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfgFi.Mode().Perm() != 0644 {
+		t.Errorf("config.json perms = 0%o, want 0644", cfgFi.Mode().Perm())
+	}
+
+	// ===== credentials.json via createCredentialsSkeleton (uses writeFileAtomic with 0600) =====
+	if err := p.createCredentialsSkeleton(); err != nil {
+		t.Fatalf("createCredentialsSkeleton() unexpected error: %v", err)
+	}
+
+	credPath := filepath.Join(homeDir, ".golemic", projectName, "credentials.json")
+	credFi, err := os.Stat(credPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credFi.Mode().Perm() != 0600 {
+		t.Errorf("credentials.json perms = 0%o, want 0600", credFi.Mode().Perm())
+	}
+
+	// Verify both files are idempotent (second call should not overwrite)
+	if err := p.createConfig(golemicDir, configPath, projectName); err != nil {
+		t.Errorf("createConfig() second call (idempotent) should succeed, got: %v", err)
+	}
+	if err := p.createCredentialsSkeleton(); err != nil {
+		t.Errorf("createCredentialsSkeleton() second call (idempotent) should succeed, got: %v", err)
+	}
+}
+
+// =============================================================================
+// checkCredentialsScaffolding tests
+// =============================================================================
+
+func TestCheckCredentialsScaffoldingCreatesFile(t *testing.T) {
+	// AC-001: First run creates skeleton with correct JSON and 0600 perms
+	exec := fakeExecutorOK()
+	p, homeDir, repoRoot := setupPreflight(t, exec)
+
+	// Verify file does not exist before
+	projectName := filepath.Base(repoRoot)
+	credPath := filepath.Join(homeDir, ".golemic", projectName, "credentials.json")
+	if _, err := os.Stat(credPath); err == nil {
+		t.Fatal("credentials.json should not exist before check")
+	}
+
+	result := p.checkCredentialsScaffolding()
+
+	// Should report FEHLT (created)
+	if result.Ok {
+		t.Errorf("checkCredentialsScaffolding() should report FEHLT (file created), got OK")
+	}
+	if !strings.Contains(result.Details, "fill in dev_token and reviewer_token") {
+		t.Errorf("details should guide user, got: %s", result.Details)
+	}
+	if !strings.Contains(result.Details, credPath) {
+		t.Errorf("details should contain path, got: %s", result.Details)
+	}
+
+	// Verify file exists with correct structure
+	data, err := os.ReadFile(credPath)
+	if err != nil {
+		t.Fatalf("credentials.json should exist after check: %v", err)
+	}
+
+	// Verify JSON content
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Errorf("credentials.json is not valid JSON: %v\ncontent: %s", err, string(data))
+	}
+	devToken, devOk := parsed["dev_token"]
+	revToken, revOk := parsed["reviewer_token"]
+	if !devOk || devToken != "" {
+		t.Errorf("dev_token should be empty string, got: %v", devToken)
+	}
+	if !revOk || revToken != "" {
+		t.Errorf("reviewer_token should be empty string, got: %v", revToken)
+	}
+
+	// Verify permissions are 0600
+	fi, err := os.Stat(credPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0600 {
+		t.Errorf("credentials.json permissions = 0%o, want 0600", fi.Mode().Perm())
+	}
+}
+
+func TestCheckCredentialsScaffoldingIdempotent(t *testing.T) {
+	// AC-002: Repeated runs don't overwrite existing file
+	exec := fakeExecutorOK()
+	p, homeDir, repoRoot := setupPreflight(t, exec)
+
+	projectName := filepath.Base(repoRoot)
+	credDir := filepath.Join(homeDir, ".golemic", projectName)
+	credPath := filepath.Join(credDir, "credentials.json")
+
+	// Pre-create credentials.json with custom content
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	originalContent := `{"dev_token": "ghp_custom", "reviewer_token": "ghp_custom_rev"}`
+	if err := os.WriteFile(credPath, []byte(originalContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// First check: should find existing file, report OK
+	result := p.checkCredentialsScaffolding()
+	if !result.Ok {
+		t.Errorf("checkCredentialsScaffolding() should report OK when file exists, got: %s", result.Details)
+	}
+
+	// Verify file was NOT overwritten
+	data, err := os.ReadFile(credPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != originalContent {
+		t.Errorf("credentials.json was overwritten:\noriginal: %s\nnow: %s", originalContent, string(data))
+	}
+
+	// Second check: still OK
+	result2 := p.checkCredentialsScaffolding()
+	if !result2.Ok {
+		t.Errorf("second check should still be OK, got: %s", result2.Details)
+	}
+}
+
+func TestCheckCredentialsScaffoldingInvalidProjectName(t *testing.T) {
+	// AC-006: Invalid project names rejected
+	tests := []struct {
+		name       string
+		repoRoot   string
+		wantDetail string
+	}{
+		{name: "empty name", repoRoot: "", wantDetail: "cannot determine project name"},
+		{name: "leading dot", repoRoot: "/tmp/.foo", wantDetail: "invalid project name"},
+		{name: "space in name", repoRoot: "/tmp/my repo", wantDetail: "invalid project name"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exec := fakeExecutorOK()
+			homeDir := t.TempDir()
+
+			p := New(exec, homeDir, tt.repoRoot)
+			result := p.checkCredentialsScaffolding()
+			if result.Ok {
+				t.Errorf("checkCredentialsScaffolding() should fail for repo root %q", tt.repoRoot)
+			}
+			if !strings.Contains(result.Details, tt.wantDetail) {
+				t.Errorf("details = %q, want to contain %q", result.Details, tt.wantDetail)
+			}
+
+			// Verify no directory or file was created (for the non-empty-root cases)
+			if tt.repoRoot != "" {
+				credDir := filepath.Join(homeDir, ".golemic")
+				if entries, err := os.ReadDir(credDir); err == nil && len(entries) > 0 {
+					t.Errorf("no credentials directory should be created for invalid project name, got: %v", entries)
+				}
+			}
+		})
+	}
+}
+
+func TestPreflightCheckOrder(t *testing.T) {
+	// AC-005: checkCredentialsScaffolding runs before checkCredentials
+	// Ensure env vars match mock-recognizable tokens
+	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
+
+	exec := fakeExecutorOK()
+	p, homeDir, repoRoot := setupPreflight(t, exec)
+
+	projectName := filepath.Base(repoRoot)
+
+	// Create config.json and credentials so all checks pass
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{
+		"project": "`+projectName+`",
+		"verify_command": "go test"
+	}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	credDir := filepath.Join(homeDir, ".golemic", projectName)
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(`{
+		"dev_token": "ghp_dev_token",
+		"reviewer_token": "ghp_rev_token"
+	}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	p.SetStdout(&buf)
+	results := p.RunAll()
+
+	if len(results) != 7 {
+		t.Fatalf("expected 7 results, got %d", len(results))
+	}
+
+	// Verify exact order
+	expectedNames := []string{
+		"gh installiert",
+		"pi installiert",
+		"git",
+		".golemic/ Scaffolding",
+		"Credentials Scaffolding",
+		"config.json valide",
+		"Credentials",
+	}
+
+	for i, expected := range expectedNames {
+		if results[i].Name != expected {
+			t.Errorf("result[%d].Name = %q, want %q", i, results[i].Name, expected)
+		}
+	}
+
+	// Verify output order matches
+	output := buf.String()
+	prevIdx := -1
+	for _, expected := range expectedNames {
+		// Search for exact line: "OK: <name>\n" or "FEHLT: <name> —"
+		// Using " —" suffix for FEHLT avoids "Credentials" matching
+		// inside "Credentials Scaffolding".
+		okLine := "OK: " + expected + "\n"
+		fehltLine := "FEHLT: " + expected + " —"
+		idxOK := strings.Index(output, okLine)
+		idxFEHLT := strings.Index(output, fehltLine)
+		idx := idxOK
+		if idx < 0 || (idxFEHLT >= 0 && idxFEHLT < idx) {
+			idx = idxFEHLT
+		}
+		if idx < 0 {
+			t.Errorf("output missing %q", expected)
+			continue
+		}
+		if idx <= prevIdx {
+			t.Errorf("output order violation: %q appears before previous check", expected)
+		}
+		prevIdx = idx
 	}
 }
