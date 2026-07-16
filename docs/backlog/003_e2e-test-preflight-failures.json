@@ -10,7 +10,8 @@
   "blockers": [],
   "slice_id": "e2e-test-preflight-failures",
   "depends_on": [
-    "e2e-test-happy-path-all-steps-succeed"
+    "e2e-test-happy-path-all-steps-succeed",
+    "preflight-run-gate"
   ],
   "title": "E2E Test: Preflight failures",
   "summary": "Verify that each preflight check failure is caught: gh/pi missing, .golemic/ missing, config invalid, tokens identical/missing. Exit code 1 before GitHub access.",
@@ -113,25 +114,25 @@
           "condition": "gh missing",
           "code": "1",
           "status": "exit 1",
-          "message": "FEHLT: gh installiert"
+          "message": "FAILED: gh installiert"
         },
         {
           "condition": "pi missing",
           "code": "1",
           "status": "exit 1",
-          "message": "FEHLT: pi installiert"
+          "message": "FAILED: pi installiert"
         },
         {
           "condition": "config invalid",
           "code": "1",
           "status": "exit 1",
-          "message": "FEHLT: config.json valide"
+          "message": "FAILED: config.json valide"
         },
         {
           "condition": "tokens identical",
           "code": "1",
           "status": "exit 1",
-          "message": "FEHLT: Credentials — tokens identical"
+          "message": "FAILED: Credentials — tokens identical"
         }
       ]
     }
@@ -179,7 +180,7 @@
       ],
       "then": [
         "Fails at gh check",
-        "stderr contains 'FEHLT: gh'",
+        "stderr contains 'FAILED: gh'",
         "Exit 1",
         "No GitHub access"
       ],
