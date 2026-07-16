@@ -27,7 +27,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		},
 		r.branchName,
 		r.cfg.VerifyCommand,
-		filepath.Join(r.repoRoot, "guidelines.md"),
+		filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to render dev prompt: %v\n", err) //nolint:errcheck

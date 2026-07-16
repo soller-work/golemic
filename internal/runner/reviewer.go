@@ -36,7 +36,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 			Body:   r.issue.Body,
 		},
 		r.cfg.VerifyCommand,
-		filepath.Join(r.repoRoot, "guidelines.md"),
+		filepath.Join(r.repoRoot, ".golemic", "guidelines", "reviewer.md"),
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to render reviewer prompt: %v\n", err) //nolint:errcheck

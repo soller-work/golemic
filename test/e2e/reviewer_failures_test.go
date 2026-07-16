@@ -164,8 +164,8 @@ func rfInvoke(t *testing.T, binary, workDir, binDir, homeDir string, extraEnv ma
 // rfSetupSandbox creates:
 //   - a local bare git repo (the "origin")
 //   - a working git repo with origin pointing to the bare repo
-//   - guidelines.md and prompts/dev.md + prompts/reviewer.md (required by the
-//     runner's prompt renderer and agent.RunRole system-prompt validation)
+//   - .golemic/guidelines/dev.md, .golemic/guidelines/reviewer.md and prompts/dev.md +
+//     prompts/reviewer.md (required by the runner's prompt renderer and agent.RunRole system-prompt validation)
 //
 // Returns (bareRepoPath, sandboxRepoPath).
 func rfSetupSandbox(t *testing.T, realGit string) (string, string) {
@@ -223,7 +223,15 @@ func rfSetupSandbox(t *testing.T, realGit string) (string, string) {
 		[]byte("You are a reviewer agent."), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "guidelines.md"),
+	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"),
+		[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"),
 		[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
 		t.Fatal(err)
 	}

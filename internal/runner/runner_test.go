@@ -10,9 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
+	"golemic/internal/prompt"
 )
 
 // ---------------------------------------------------------------------------
@@ -218,7 +220,10 @@ func SkipTestRun_HappyPath_AC001(t *testing.T) {
 	os.MkdirAll(promptsDir, 0755)
 	os.WriteFile(filepath.Join(promptsDir, "dev.md"), []byte("# Dev"), 0644)
 	os.WriteFile(filepath.Join(promptsDir, "reviewer.md"), []byte("# Reviewer"), 0644)
-	os.WriteFile(filepath.Join(repoRoot, "guidelines.md"), []byte("# Guidelines"), 0644)
+	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	os.MkdirAll(guidelinesDir, 0755)                                                       //nolint:errcheck
+	os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644)      //nolint:errcheck
+	os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("# Guidelines"), 0644) //nolint:errcheck
 	exec := setupHappyExecutor(repoRoot)
 
 	var stdout, stderr bytes.Buffer
@@ -616,7 +621,10 @@ func SkipTestRun_RunIDFormat(t *testing.T) {
 	os.MkdirAll(promptsDir, 0755)
 	os.WriteFile(filepath.Join(promptsDir, "dev.md"), []byte("# Dev"), 0644)
 	os.WriteFile(filepath.Join(promptsDir, "reviewer.md"), []byte("# Reviewer"), 0644)
-	os.WriteFile(filepath.Join(repoRoot, "guidelines.md"), []byte("# Guidelines"), 0644)
+	guidelinesDir2 := filepath.Join(repoRoot, ".golemic", "guidelines")
+	os.MkdirAll(guidelinesDir2, 0755)                                                        //nolint:errcheck
+	os.WriteFile(filepath.Join(guidelinesDir2, "dev.md"), []byte("# Guidelines"), 0644)      //nolint:errcheck
+	os.WriteFile(filepath.Join(guidelinesDir2, "reviewer.md"), []byte("# Guidelines"), 0644) //nolint:errcheck
 	exec := setupHappyExecutor(repoRoot)
 
 	var stdout, stderr bytes.Buffer
@@ -1206,5 +1214,93 @@ func TestRun_PreflightGate_PassProceedsNormally_AC003(t *testing.T) {
 	}
 	if events[0].Type != eventlog.EventRunStarted {
 		t.Errorf("first event should be run_started, got: %q", events[0].Type)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-001/AC-002/AC-003: Role-specific guidelines path selection
+// ---------------------------------------------------------------------------
+
+// TestDevGuidelinesPath_AC001 verifies that the dev role reads its guidelines
+// from .golemic/guidelines/dev.md and not from the reviewer file.
+func TestDevGuidelinesPath_AC001(t *testing.T) {
+	_, repoRoot, _ := setupRunnerTest(t)
+	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("DEV-MARKER"), 0644)      //nolint:errcheck
+	os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("REV-MARKER"), 0644) //nolint:errcheck
+
+	devPath := filepath.Join(repoRoot, ".golemic", "guidelines", "dev.md")
+	_, userPrompt, err := prompt.RenderDev(
+		prompt.Issue{Number: 1, Title: "t", Body: "b"},
+		"golemic-dev-1",
+		"go test",
+		devPath,
+	)
+	if err != nil {
+		t.Fatalf("RenderDev failed: %v", err)
+	}
+	if !strings.Contains(userPrompt, "DEV-MARKER") {
+		t.Error("dev prompt does not contain DEV-MARKER")
+	}
+	if strings.Contains(userPrompt, "REV-MARKER") {
+		t.Error("dev prompt must not contain REV-MARKER")
+	}
+}
+
+// TestReviewerGuidelinesPath_AC002 verifies that the reviewer role reads its
+// guidelines from .golemic/guidelines/reviewer.md and not from the dev file.
+func TestReviewerGuidelinesPath_AC002(t *testing.T) {
+	_, repoRoot, _ := setupRunnerTest(t)
+	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("DEV-MARKER"), 0644)      //nolint:errcheck
+	os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("REV-MARKER"), 0644) //nolint:errcheck
+
+	reviewerPath := filepath.Join(repoRoot, ".golemic", "guidelines", "reviewer.md")
+	_, userPrompt, err := prompt.RenderReviewer(
+		99,
+		prompt.Issue{Number: 1, Title: "t", Body: "b"},
+		"go test",
+		reviewerPath,
+	)
+	if err != nil {
+		t.Fatalf("RenderReviewer failed: %v", err)
+	}
+	if !strings.Contains(userPrompt, "REV-MARKER") {
+		t.Error("reviewer prompt does not contain REV-MARKER")
+	}
+	if strings.Contains(userPrompt, "DEV-MARKER") {
+		t.Error("reviewer prompt must not contain DEV-MARKER")
+	}
+}
+
+// TestRunDevAgent_MissingGuidelines_AC003 verifies that runDevAgent fails
+// closed when .golemic/guidelines/dev.md is absent, reporting the expected path.
+func TestRunDevAgent_MissingGuidelines_AC003(t *testing.T) {
+	homeDir, repoRoot, project := setupRunnerTest(t)
+
+	r := New(nil, homeDir, repoRoot, 42)
+	r.repoRoot = repoRoot
+	r.project = project
+	r.issue = &issueData{Number: 42, Title: "t", Body: "b"}
+	r.cfg = &config.Config{VerifyCommand: "go test"}
+	r.branchName = "golemic-dev-42"
+
+	var stderr bytes.Buffer
+	r.SetStderr(&stderr)
+
+	outcome := r.runDevAgent(filepath.Join(repoRoot, ".golemic"), "/tmp/events.jsonl", 5*time.Minute)
+
+	if outcome != outcomeDevFailed {
+		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
+	}
+	expectedPath := filepath.Join(repoRoot, ".golemic", "guidelines", "dev.md")
+	if !strings.Contains(stderr.String(), expectedPath) {
+		t.Errorf("stderr should contain %q, got: %s", expectedPath, stderr.String())
 	}
 }

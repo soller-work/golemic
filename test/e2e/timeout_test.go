@@ -211,7 +211,15 @@ func toSetupSandbox(t *testing.T, realGit string) (bareRepo, workDir string) {
 		[]byte("You are a reviewer agent."), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workDir, "guidelines.md"),
+	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"),
+		[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"),
 		[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
