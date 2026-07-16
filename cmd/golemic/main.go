@@ -14,6 +14,7 @@ import (
 
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
+	"golemic/internal/repo"
 	"golemic/internal/runner"
 )
 
@@ -59,11 +60,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 
-		// Try to find git root; fall back to cwd
-		gitRoot, err := osExecutor{}.Run("git", "rev-parse", "--show-toplevel")
-		repoRoot := cwd
-		if err == nil && gitRoot != "" {
-			repoRoot = strings.TrimSpace(gitRoot)
+		// Resolve host repo (handles symlinked golemic)
+		repoRoot, err := repo.ResolveHostRepo(osExecutor{}, cwd)
+		if err != nil {
+			fmt.Fprintf(stderr, "failed to resolve host repo: %v\n", err)
+			return 1
 		}
 
 		return runPreflight(osExecutor{}, homeDir, repoRoot, stdout, stderr)

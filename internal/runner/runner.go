@@ -29,6 +29,7 @@ import (
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
 	"golemic/internal/prompt"
+	"golemic/internal/repo"
 	"golemic/internal/worktree"
 )
 
@@ -123,32 +124,10 @@ func (r *Runner) SetStderr(w io.Writer) { r.stderr = w }
 // Host repo resolution
 // ---------------------------------------------------------------------------
 
-// resolveHostRepo determines the host repository root.
-//
-// BR-001: Host repo is determined by walking up from cwd; if cwd contains
-// "tools/golemic" in its path, resolve to the enclosing git root.
+// resolveHostRepo determines the host repository root by delegating to repo.ResolveHostRepo.
+// This handles the case where golemic is symlinked into a host repo.
 func resolveHostRepo(exec preflight.Executor, cwd string) (string, error) {
-	gitRoot, err := exec.Run("git", "rev-parse", "--show-toplevel")
-	if err != nil {
-		return "", fmt.Errorf("not in a git repository: %w", err)
-	}
-	gitRoot = strings.TrimSpace(gitRoot)
-	if gitRoot == "" {
-		return "", fmt.Errorf("not in a git repository")
-	}
-
-	// BR-001: If we are inside tools/golemic (golemic as submodule or dropped dir),
-	// resolve the enclosing repo as the host repo.
-	if strings.Contains(cwd, "/tools/golemic") || strings.HasSuffix(gitRoot, "/tools/golemic") {
-		parent := filepath.Dir(gitRoot)
-		out, err := exec.Run("git", "-C", parent, "rev-parse", "--show-toplevel")
-		if err == nil && strings.TrimSpace(out) != "" {
-			return strings.TrimSpace(out), nil
-		}
-		// No enclosing git repo; fall through and return gitRoot as-is.
-	}
-
-	return gitRoot, nil
+	return repo.ResolveHostRepo(exec, cwd)
 }
 
 // ---------------------------------------------------------------------------
