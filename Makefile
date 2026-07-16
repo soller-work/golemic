@@ -1,8 +1,9 @@
 LINT_BASE_REF ?= origin/main
 
 .PHONY: lint
-lint: ## Run golangci-lint against lines changed since LINT_BASE_REF
+lint: ## Run golangci-lint: changed-lines (complexity/standard) + repo-wide architecture rules
 	golangci-lint run --new-from-rev=$(LINT_BASE_REF)
+	golangci-lint run -c .golangci-arch.yml
 
 .PHONY: help
 help: ## Show available targets

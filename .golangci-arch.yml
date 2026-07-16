@@ -1,0 +1,37 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+
+  settings:
+    depguard:
+      rules:
+        # internal packages must never reach up into cmd — cmd is the composition root
+        no-cmd-from-internal:
+          files:
+            - "**/internal/**"
+          deny:
+            - pkg: "golemic/cmd"
+              desc: "internal packages must not import cmd (cmd is the composition root)"
+
+        # leaf packages must stay leaves — no back-edges into higher-layer orchestrators
+        leaves-no-orchestrator:
+          files:
+            - "**/internal/agent/**"
+            - "**/internal/config/**"
+            - "**/internal/eventlog/**"
+            - "**/internal/prompt/**"
+            - "**/internal/template/**"
+          deny:
+            - pkg: "golemic/internal/runner"
+              desc: "leaf packages must not import runner (would create a back-edge)"
+            - pkg: "golemic/internal/worktree"
+              desc: "leaf packages must not import worktree (higher orchestration layer)"
+            - pkg: "golemic/internal/repo"
+              desc: "leaf packages must not import repo (higher orchestration layer)"
+            - pkg: "golemic/internal/preflight"
+              desc: "leaf packages must not import preflight (higher orchestration layer)"
+            - pkg: "golemic/internal/credentials"
+              desc: "leaf packages must not import credentials (credentials is a higher layer that imports template)"
