@@ -288,6 +288,50 @@ func CreateTestPR(repo string, repoPath string, issueNum int) (int, error) {
 	return num, nil
 }
 
+// PRAuthor returns the login of the PR author (BR-002: used to verify dev ≠ reviewer).
+func PRAuthor(repo string, prNum int) (string, error) {
+	if err := checkGhAvailable(); err != nil {
+		return "", err
+	}
+	out, err := retryGhCmd(
+		"pr", "view",
+		fmt.Sprintf("%d", prNum),
+		"--repo", repo,
+		"--json", "author",
+		"--jq", ".author.login",
+	)
+	if err != nil {
+		return "", fmt.Errorf("PRAuthor PR %d: %w", prNum, err)
+	}
+	login := strings.TrimSpace(out)
+	if login == "" || login == "null" {
+		return "", fmt.Errorf("no author found for PR %d", prNum)
+	}
+	return login, nil
+}
+
+// FirstReviewAuthor returns the login of the first formal reviewer (BR-002).
+func FirstReviewAuthor(repo string, prNum int) (string, error) {
+	if err := checkGhAvailable(); err != nil {
+		return "", err
+	}
+	out, err := retryGhCmd(
+		"pr", "view",
+		fmt.Sprintf("%d", prNum),
+		"--repo", repo,
+		"--json", "reviews",
+		"--jq", ".reviews[0].author.login",
+	)
+	if err != nil {
+		return "", fmt.Errorf("FirstReviewAuthor PR %d: %w", prNum, err)
+	}
+	login := strings.TrimSpace(out)
+	if login == "" || login == "null" {
+		return "", fmt.Errorf("no review author found for PR %d", prNum)
+	}
+	return login, nil
+}
+
 // CloseTestPR closes a PR. Safe to call multiple times (idempotent) —
 // only swallows "not found" errors; returns all others.
 func CloseTestPR(repo string, prNum int) error {
