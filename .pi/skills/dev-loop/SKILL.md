@@ -15,17 +15,37 @@ approves. Once golemic self-hosts (post-I1.11), this skill becomes redundant.
 
 Open issues are implementation-slice JSON files (grill-me schema) at
 `docs/backlog/NNN_<slug>.json`. The numeric prefix is the processing order.
+Each issue declares `depends_on` (slice_ids that must be completed first); an
+issue is only *takeable* once those dependencies are done. Issue lifecycle:
 
-Unless the user names a specific issue, pick the next one:
+- `docs/backlog/NNN_*.json` — **open**, unclaimed, available
+- `docs/backlog/working/NNN_*.json` — **claimed**, being worked on now
+- deleted — **done** (delete = done)
+
+A claimed issue still blocks its dependents (it is not done yet).
+
+Unless the user names a specific issue, claim the next takeable one:
 
 ```bash
-python3 .pi/skills/dev-loop/scripts/next_issue.py
+python3 .pi/skills/dev-loop/scripts/next_issue.py --claim
 ```
 
-It prints the file path, `slice_id`, `title`, and `readiness`. If `readiness`
-is not `ready`, stop and escalate to the maintainer instead of starting the
-loop. Read the full JSON before briefing the dev — it is the authoritative
-spec (scope, business rules, interfaces, acceptance scenarios, quality gates).
+`--claim` atomically moves the file into `docs/backlog/working/` so no other
+agent picks it — this is what makes parallel dev loops safe. Without `--claim`
+the script only previews the next takeable issue (read-only). It prints the
+(new) file path, `slice_id`, `title`, `readiness`, and `depends_on`. If
+`readiness` is not `ready`, move the file back and escalate to the maintainer
+instead of starting the loop. Read the full JSON before briefing the dev — it
+is the authoritative spec (scope, business rules, interfaces, acceptance
+scenarios, quality gates).
+
+The issue file stays in `working/` for the rest of the loop. On abandonment
+(escalation without approval, aborted run), **release** it by moving it back to
+`docs/backlog/` so it becomes takeable again:
+
+```bash
+git mv docs/backlog/working/NNN_<slug>.json docs/backlog/NNN_<slug>.json
+```
 
 ## Language
 
@@ -93,9 +113,10 @@ Then re-run the reviewer in the same session with a short delta brief:
 ## Handling artifacts
 
 After approval, before reporting done:
-- **Delete the issue file** (`docs/backlog/NNN_<slug>.json`). The deletion goes
-  into the **same commit** as the implementation — issue implemented = issue
-  gone, no in-between state.
+- **Delete the claimed issue file** (`docs/backlog/working/NNN_<slug>.json` —
+  it was moved there at claim time). The deletion goes into the **same commit**
+  as the implementation — issue implemented = issue gone, no in-between state.
+  This also releases the dependency: its dependents become takeable.
 - `git status` — check for stray files (manual test runs, `.golemic/` created during preflight testing, etc.). Remove or `.gitignore` them.
 - Do NOT commit without maintainer approval, and do NOT push without explicit maintainer approval (per global orchestrator rules — pushes are shared-state actions).
 

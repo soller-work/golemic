@@ -8,6 +8,7 @@
     "schema_version",
     "slice_type",
     "slice_id",
+    "depends_on",
     "title",
     "summary",
     "readiness",
@@ -46,6 +47,14 @@
     },
     "slice_id": {
       "$ref": "#/$defs/kebabId"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/kebabId"
+      },
+      "uniqueItems": true,
+      "description": "slice_ids of other backlog issues that must be completed (deleted from the backlog) before this issue is takeable. Machine-readable dependency graph; empty array means no dependencies."
     },
     "title": {
       "$ref": "#/$defs/nonEmptyString"

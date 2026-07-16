@@ -9,6 +9,9 @@
   "assumptions_requiring_confirmation": [],
   "blockers": [],
   "slice_id": "e2e-test-reviewer-role-failures",
+  "depends_on": [
+    "e2e-test-happy-path-all-steps-succeed"
+  ],
   "title": "E2E Test: Reviewer role failures",
   "summary": "Verify reviewer failures (verify_command fails, token invalid, review submission fails). Exit code 1, outcome=review_failed, PR without review.",
   "stakeholder_intent": {
@@ -162,9 +165,7 @@
       "Test fixtures"
     ],
     "forbidden_changes": [],
-    "dependencies": [
-      "Depends on 002"
-    ],
+    "dependencies": [],
     "migration_strategy": "Additive",
     "consistency_and_concurrency": "Serial"
   },

@@ -9,6 +9,9 @@
   "assumptions_requiring_confirmation": [],
   "blockers": [],
   "slice_id": "e2e-test-collision-detection",
+  "depends_on": [
+    "e2e-test-happy-path-all-steps-succeed"
+  ],
   "title": "E2E Test: Collision detection",
   "summary": "Verify collision detection catches stale artifacts: worktree/branch/PR exists. Each failure scenario exits 1 with cleanup command.",
   "stakeholder_intent": {
@@ -151,9 +154,7 @@
     "forbidden_changes": [
       "Do not modify collision detection logic"
     ],
-    "dependencies": [
-      "Depends on 002 (Happy Path)"
-    ],
+    "dependencies": [],
     "migration_strategy": "Additive",
     "consistency_and_concurrency": "Serial; each test cleans up"
   },

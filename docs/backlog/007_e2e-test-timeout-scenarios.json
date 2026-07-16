@@ -9,6 +9,9 @@
   "assumptions_requiring_confirmation": [],
   "blockers": [],
   "slice_id": "e2e-test-timeout-scenarios",
+  "depends_on": [
+    "e2e-test-happy-path-all-steps-succeed"
+  ],
   "title": "E2E Test: Timeout scenarios",
   "summary": "Verify timeout enforcement: dev role timeout kills process, reviewer role timeout kills process. Exit code 1, outcome=timeout.",
   "stakeholder_intent": {
@@ -140,9 +143,7 @@
       "Test config with short timeout"
     ],
     "forbidden_changes": [],
-    "dependencies": [
-      "Depends on 002"
-    ],
+    "dependencies": [],
     "migration_strategy": "Additive",
     "consistency_and_concurrency": "Serial"
   },

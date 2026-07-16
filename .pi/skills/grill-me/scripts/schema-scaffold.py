@@ -194,6 +194,7 @@ def scaffold_from_schema(schema_path, slice_type, output_path):
         "schema_version": "1.1.0",
         "slice_type": slice_type,
         "slice_id": "FILL_IN_ID",
+        "depends_on": [],
         "title": "FILL_IN",
         "summary": "FILL_IN",
         "readiness": "blocked",

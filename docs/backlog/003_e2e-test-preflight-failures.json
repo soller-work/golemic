@@ -9,6 +9,9 @@
   "assumptions_requiring_confirmation": [],
   "blockers": [],
   "slice_id": "e2e-test-preflight-failures",
+  "depends_on": [
+    "e2e-test-happy-path-all-steps-succeed"
+  ],
   "title": "E2E Test: Preflight failures",
   "summary": "Verify that each preflight check failure is caught: gh/pi missing, .golemic/ missing, config invalid, tokens identical/missing. Exit code 1 before GitHub access.",
   "stakeholder_intent": {
@@ -128,7 +131,7 @@
           "condition": "tokens identical",
           "code": "1",
           "status": "exit 1",
-          "message": "FEHLT: Credentials \u2014 tokens identical"
+          "message": "FEHLT: Credentials — tokens identical"
         }
       ]
     }
@@ -160,9 +163,7 @@
     "forbidden_changes": [
       "Do not modify internal/preflight"
     ],
-    "dependencies": [
-      "Depends on 002 (Happy Path)"
-    ],
+    "dependencies": [],
     "migration_strategy": "Additive",
     "consistency_and_concurrency": "Tests run serially"
   },

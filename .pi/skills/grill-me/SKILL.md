@@ -59,7 +59,8 @@ If the estimate changes, state the new range and one concrete reason before the 
 Walk dependencies in this order unless the feature requires a different dependency order:
 
 1. stakeholder, goal, value, and trigger;
-2. in-scope outcome and explicit non-goals;
+2. issue dependencies: which other backlog issues (by `slice_id`) must be completed before this one is takeable;
+3. in-scope outcome and explicit non-goals;
 3. actors, authorization, and ownership;
 4. preconditions and relevant existing state;
 5. happy-path behavior;
@@ -116,6 +117,7 @@ expected.) Follow `schema.json` exactly. Use JSON values, not Markdown, Gherkin 
 Requirements:
 
 - Keep identifiers stable and unique.
+- Populate `depends_on` with the `slice_id`s of backlog issues that must be completed first (empty array if none). This is the machine-readable dependency graph the dev loop uses to decide takeability — reference `slice_id`s, never numeric filename prefixes. Do not reference an issue's own `slice_id`. A dependency on already-completed work is a precondition, not a `depends_on` entry (completed issues are deleted from the backlog, so they resolve as satisfied).
 - Use `BR-*` for business rules, `DT-*` for decision tables, `IF-*` for interfaces, `RM-*` for read models, `PS-*` for process steps, `IC-*` for integration contracts, `SC-*` for state changes, `SE-*` for side effects, `AC-*` for acceptance scenarios, `EV-*` for codebase evidence, and `D-*` for decisions.
 - Trace acceptance scenarios to every relevant rule, interface, read model, process step, integration contract, state change, and side effect.
 - Use empty arrays instead of omitting required collections.
@@ -131,6 +133,14 @@ python scripts/validate_slice.py schema.json <target-path-from-step-5>
 ```
 
 If validation fails, repair the JSON and rerun the validator. Do not present an invalid artifact as complete.
+
+Then verify the dependency graph over the whole backlog directory:
+
+```bash
+python3 scripts/issue_graph.py verify docs/backlog
+```
+
+Self-dependencies and cycles are hard errors (exit 2) and must be repaired. A warning that a dependency is "not an existing issue (assumed completed)" is expected when the dependency has already been implemented. `issue_graph.py takeable docs/backlog` lists every currently-unblocked issue; `issue_graph.py check docs/backlog <slice_id>` reports whether one specific issue is takeable. Claimed issues (moved to `docs/backlog/working/` by the dev loop) still count as existing and still block their dependents until deleted.
 
 The validator performs:
 

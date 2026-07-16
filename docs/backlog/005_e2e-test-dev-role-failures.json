@@ -9,6 +9,9 @@
   "assumptions_requiring_confirmation": [],
   "blockers": [],
   "slice_id": "e2e-test-dev-role-failures",
+  "depends_on": [
+    "e2e-test-happy-path-all-steps-succeed"
+  ],
   "title": "E2E Test: Dev role failures",
   "summary": "Verify dev role failures (verify_command fails, token invalid, PR creation fails). Exit code 1, outcome=dev_failed, no PR created.",
   "stakeholder_intent": {
@@ -164,9 +167,7 @@
     "forbidden_changes": [
       "Do not modify internal/runner"
     ],
-    "dependencies": [
-      "Depends on 002"
-    ],
+    "dependencies": [],
     "migration_strategy": "Additive",
     "consistency_and_concurrency": "Serial"
   },

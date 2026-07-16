@@ -267,6 +267,7 @@ def base_scaffold(slice_type: str, title: str) -> dict[str, Any]:
         "schema_version": "1.1.0",
         "slice_type": slice_type,
         "slice_id": slice_id,
+        "depends_on": [],
         "title": title,
         "summary": "FILL_IN",
         "readiness": "blocked",
