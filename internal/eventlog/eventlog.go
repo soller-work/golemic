@@ -57,6 +57,26 @@ type Event struct {
 // Payload helpers
 // ---------------------------------------------------------------------------
 
+// prOpenedData is the expected payload shape for pr_opened events.
+type prOpenedData struct {
+	PRNumber string `json:"prNumber"`
+}
+
+// ValidatePROpenedPayload checks that payload decodes to an object with prNumber field.
+func ValidatePROpenedPayload(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("pr_opened payload is empty")
+	}
+	var d prOpenedData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return fmt.Errorf("pr_opened payload: invalid JSON: %w", err)
+	}
+	if d.PRNumber == "" {
+		return fmt.Errorf("pr_opened payload: prNumber field is required")
+	}
+	return nil
+}
+
 // reviewSubmittedData is the expected payload shape for review_submitted events.
 type reviewSubmittedData struct {
 	Verdict string `json:"verdict"`
@@ -111,6 +131,12 @@ func NewWriter(path string) (*Writer, error) {
 // Write appends one event to the log. It validates event payload constraints
 // (e.g. review_submitted verdict) before writing.
 func (w *Writer) Write(event Event) error {
+	// Validate payload for pr_opened.
+	if event.Type == EventPROpened {
+		if err := ValidatePROpenedPayload(event.Payload); err != nil {
+			return err
+		}
+	}
 	// Validate payload for review_submitted.
 	if event.Type == EventReviewSubmitted {
 		if err := ValidateReviewSubmittedPayload(event.Payload); err != nil {

@@ -1,16 +1,21 @@
 // Package runner orchestrates a golemic run: host-repo resolution, config/credentials
-// loading, runId generation, event log creation, issue loading via gh, and collision checks.
+// loading, runId generation, event log creation, issue loading via gh, collision checks,
+// dev/reviewer worktrees, agent execution, event reading, outcome determination,
+// run_finished writing, and cleanup.
 //
-// Process steps (PS-001–PS-005 per spec):
+// Process steps (PS-001–PS-006 per spec):
 //   1. Resolve host repo (git root; if under tools/golemic, find enclosing repo)
 //   2. Load config and credentials (fail-closed before any GitHub access)
 //   3. Generate runId, create event log, write run_started
 //   4. Load issue from GitHub via gh issue view
 //   5. Collision check (worktree, local/remote branch, open PR)
+//   6. Full orchestration: dev worktree → dev agent → pr_opened → reviewer worktree → reviewer agent → dirty check → review_submitted → outcome determination → run_finished → cleanup
 package runner
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,10 +23,13 @@ import (
 	"strings"
 	"time"
 
+	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
+	"golemic/internal/prompt"
+	"golemic/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,8 +37,12 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	runFinishedOutcomeAborted = "aborted"
-	branchPrefix              = "golemic/issue-"
+	outcomeSuccess      = "success"
+	outcomeDevFailed    = "dev_failed"
+	outcomeReviewFailed = "review_failed"
+	outcomeTimeout      = "timeout"
+	outcomeAborted      = "aborted"
+	branchPrefix        = "golemic/issue-"
 )
 
 // ---------------------------------------------------------------------------
@@ -285,6 +297,7 @@ func (r *Runner) checkAllCollisions() (*Collision, error) {
 //	PS-003: Generate runId, create event log, write run_started
 //	PS-004: Load issue from GitHub
 //	PS-005: Collision check
+//	PS-006: Full orchestration
 func (r *Runner) Run() int {
 	// ---- PS-001: Resolve host repo ----
 	repoRoot, err := resolveHostRepo(r.executor, r.cwd)
@@ -353,29 +366,289 @@ func (r *Runner) Run() int {
 	if err != nil {
 		fmt.Fprintln(r.stderr, err.Error())
 		// Write run_finished with outcome aborted
-		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: runFinishedOutcomeAborted})
+		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
 		_ = writer.Write(eventlog.Event{
 			Type:    eventlog.EventRunFinished,
 			Ts:      time.Now().Format(time.RFC3339),
 			RunID:   r.runID,
 			Payload: finishedPayload,
 		})
+		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
 		return 1
 	}
 	if collision != nil {
 		fmt.Fprintln(r.stderr, collision.Message)
 		// Write run_finished with outcome aborted
-		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: runFinishedOutcomeAborted})
+		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
 		_ = writer.Write(eventlog.Event{
 			Type:    eventlog.EventRunFinished,
 			Ts:      time.Now().Format(time.RFC3339),
 			RunID:   r.runID,
 			Payload: finishedPayload,
 		})
+		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
 		return 1
 	}
 
-	// Success: print runId to stdout
-	fmt.Fprintln(r.stdout, r.runID)
-	return 0
+	// ---- PS-006: Full orchestration ----
+	finalOutcome := r.orchestrate(writer, eventLogPath)
+
+	// Write run_finished with final outcome (BR-001: always the last event)
+	finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: finalOutcome})
+	_ = writer.Write(eventlog.Event{
+		Type:    eventlog.EventRunFinished,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   r.runID,
+		Payload: finishedPayload,
+	})
+
+	// BR-006: Cleanup (worktree removal) only on success
+	if finalOutcome == outcomeSuccess {
+		golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+		if err := worktree.Cleanup(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: dev worktree cleanup failed: %v\n", err)
+		}
+		if err := worktree.CleanupReviewer(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", err)
+		}
+	}
+
+	// BR-007: Exit 0 only for success; exit != 0 otherwise
+	if finalOutcome == outcomeSuccess {
+		fmt.Fprintln(r.stdout, r.runID)
+		return 0
+	}
+
+	fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
+	return 1
+}
+
+// orchestrate implements the full dev→reviewer loop after collision check passes.
+// Returns final outcome.
+func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) string {
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	timeoutDuration := time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+
+	// PS-002: Create dev worktree
+	if err := worktree.Create(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer); err != nil {
+		fmt.Fprintf(r.stderr, "Failed to create dev worktree: %v\n", err)
+		return outcomeDevFailed
+	}
+
+	// PS-003: Run dev agent
+	devOutcome := r.runDevAgent(golemicDir, eventLogPath, timeoutDuration)
+	if devOutcome != outcomeSuccess {
+		return devOutcome
+	}
+
+	// Check if pr_opened event exists and is valid
+	if !r.hasPROpenedEvent(eventLogPath) {
+		fmt.Fprintf(r.stderr, "dev_failed: pr_opened event missing or invalid\n")
+		return outcomeDevFailed
+	}
+
+	// PS-004: Create reviewer worktree
+	if err := worktree.CreateForReviewer(r.repoRoot, golemicDir, r.runID, r.issueNum, r.branchName, "golemic-reviewer", r.executor, writer); err != nil {
+		fmt.Fprintf(r.stderr, "Failed to create reviewer worktree: %v\n", err)
+		return outcomeReviewFailed
+	}
+
+	// PS-005: Run reviewer agent
+	reviewerOutcome := r.runReviewerAgent(golemicDir, eventLogPath, timeoutDuration)
+	if reviewerOutcome != outcomeSuccess {
+		return reviewerOutcome
+	}
+
+	// Dirty check
+	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+	isDirty, err := worktree.IsDirty(reviewerWorktreePath, r.executor)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "review_failed: failed to check dirty status: %v\n", err)
+		return outcomeReviewFailed
+	}
+	if isDirty {
+		fmt.Fprintf(r.stderr, "review_failed: reviewer worktree has uncommitted changes\n")
+		return outcomeReviewFailed
+	}
+
+	// Check if review_submitted event exists and is valid
+	if !r.hasReviewSubmittedEvent(eventLogPath) {
+		fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n")
+		return outcomeReviewFailed
+	}
+
+	return outcomeSuccess
+}
+
+// runDevAgent runs the dev agent and returns the outcome.
+func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Duration) string {
+	golemicBinaryPath, _ := os.Executable()
+	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
+	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	// Render dev prompt
+	systemPromptFile, userPrompt, err := prompt.RenderDev(
+		prompt.Issue{
+			Number: r.issue.Number,
+			Title:  r.issue.Title,
+			Body:   r.issue.Body,
+		},
+		r.branchName,
+		r.cfg.VerifyCommand,
+		filepath.Join(r.repoRoot, "guidelines.md"),
+	)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Failed to render dev prompt: %v\n", err)
+		return outcomeDevFailed
+	}
+
+	// Run dev agent
+	_, _, err = agent.RunRole(context.Background(), agent.RoleConfig{
+		Role:              "dev",
+		SystemPromptFile:  filepath.Join(r.repoRoot, systemPromptFile),
+		UserPrompt:        userPrompt,
+		WorktreeDir:       devWorktreePath,
+		RunID:             r.runID,
+		EventLogPath:      eventLogPath,
+		GHToken:           r.creds.DevToken(),
+		GolemicBinaryPath: golemicBinaryPath,
+		Model:             r.cfg.Models.Dev,
+		Timeout:           timeout,
+		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		RunsDir:           runsDir,
+	})
+
+	if err != nil {
+		if errors.Is(err, agent.ErrTimeout) {
+			fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n")
+			return outcomeTimeout
+		}
+		fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err)
+		return outcomeDevFailed
+	}
+
+	return outcomeSuccess
+}
+
+// runReviewerAgent runs the reviewer agent and returns the outcome.
+func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration) string {
+	golemicBinaryPath, _ := os.Executable()
+	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	// Get PR number from pr_opened event
+	prNumber, err := r.getPRNumber(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Failed to get PR number: %v\n", err)
+		return outcomeReviewFailed
+	}
+
+	// Render reviewer prompt
+	systemPromptFile, userPrompt, err := prompt.RenderReviewer(
+		prNumber,
+		prompt.Issue{
+			Number: r.issue.Number,
+			Title:  r.issue.Title,
+			Body:   r.issue.Body,
+		},
+		r.cfg.VerifyCommand,
+		filepath.Join(r.repoRoot, "guidelines.md"),
+	)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Failed to render reviewer prompt: %v\n", err)
+		return outcomeReviewFailed
+	}
+
+	// Run reviewer agent
+	_, _, err = agent.RunRole(context.Background(), agent.RoleConfig{
+		Role:              "reviewer",
+		SystemPromptFile:  filepath.Join(r.repoRoot, systemPromptFile),
+		UserPrompt:        userPrompt,
+		WorktreeDir:       reviewerWorktreePath,
+		RunID:             r.runID,
+		EventLogPath:      eventLogPath,
+		GHToken:           r.creds.ReviewerToken(),
+		GolemicBinaryPath: golemicBinaryPath,
+		Model:             r.cfg.Models.Reviewer,
+		Timeout:           timeout,
+		ToolAllowlist:     []string{"read", "bash"},
+		RunsDir:           runsDir,
+	})
+
+	if err != nil {
+		if errors.Is(err, agent.ErrTimeout) {
+			fmt.Fprintf(r.stderr, "review_failed: reviewer agent exceeded timeout\n")
+			return outcomeTimeout
+		}
+		fmt.Fprintf(r.stderr, "review_failed: agent failed: %v\n", err)
+		return outcomeReviewFailed
+	}
+
+	return outcomeSuccess
+}
+
+// hasPROpenedEvent checks if a valid pr_opened event exists in the log.
+func (r *Runner) hasPROpenedEvent(eventLogPath string) bool {
+	reader := eventlog.Reader{}
+	events, err := reader.Read(eventLogPath)
+	if err != nil {
+		return false
+	}
+
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == eventlog.EventPROpened {
+			if err := eventlog.ValidatePROpenedPayload(events[i].Payload); err != nil {
+				return false
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// hasReviewSubmittedEvent checks if a valid review_submitted event exists in the log.
+func (r *Runner) hasReviewSubmittedEvent(eventLogPath string) bool {
+	reader := eventlog.Reader{}
+	events, err := reader.Read(eventLogPath)
+	if err != nil {
+		return false
+	}
+
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == eventlog.EventReviewSubmitted {
+			if err := eventlog.ValidateReviewSubmittedPayload(events[i].Payload); err != nil {
+				return false
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// getPRNumber extracts the PR number from the pr_opened event in the log.
+func (r *Runner) getPRNumber(eventLogPath string) (int, error) {
+	reader := eventlog.Reader{}
+	events, err := reader.Read(eventLogPath)
+	if err != nil {
+		return 0, err
+	}
+
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == eventlog.EventPROpened {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(events[i].Payload, &payload); err != nil {
+				return 0, err
+			}
+			prNumStr, ok := payload["prNumber"].(string)
+			if !ok {
+				return 0, fmt.Errorf("prNumber field not a string in pr_opened event")
+			}
+			var prNum int
+			if _, err := fmt.Sscanf(prNumStr, "%d", &prNum); err != nil {
+				return 0, err
+			}
+			return prNum, nil
+		}
+	}
+	return 0, fmt.Errorf("pr_opened event not found")
 }
