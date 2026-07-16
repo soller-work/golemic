@@ -306,59 +306,6 @@ type credentialsSkeleton struct {
 
 // createCredentialsSkeleton writes the credentials.json skeleton file.
 // Idempotent: does not overwrite existing file.
-func (p *Preflight) createCredentialsSkeleton() error {
-	projectName := filepath.Base(p.repoRoot)
-	if err := credentials.ValidateProjectName(projectName); err != nil {
-		return fmt.Errorf("invalid project name: %w", err)
-	}
-
-	credPath := filepath.Join(p.homeDir, ".golemic", projectName, "credentials.json")
-
-	skeleton := credentialsSkeleton{
-		DevToken:      "${GOLEMIC_DEV_TOKEN}",
-		ReviewerToken: "${GOLEMIC_REVIEWER_TOKEN}",
-	}
-	data, err := json.MarshalIndent(skeleton, "", "    ")
-	if err != nil {
-		return fmt.Errorf("marshal credentials: %w", err)
-	}
-
-	err = writeFileAtomic(credPath, data, 0600)
-	if errors.Is(err, fs.ErrExist) {
-		return nil // already exists, idempotent
-	}
-	return err
-}
-
-// checkCredentialsScaffolding creates the ~/.golemic/<project>/credentials.json
-// skeleton if it doesn't exist. Idempotent: never overwrites.
-func (p *Preflight) checkCredentialsScaffolding() Result {
-	projectName := filepath.Base(p.repoRoot)
-	if projectName == "" || projectName == "." {
-		return Result{Name: "Credentials Scaffolding", Ok: false,
-			Details: "cannot determine project name from repo root"}
-	}
-	if err := credentials.ValidateProjectName(projectName); err != nil {
-		return Result{Name: "Credentials Scaffolding", Ok: false,
-			Details: "invalid project name: " + err.Error()}
-	}
-
-	credPath := filepath.Join(p.homeDir, ".golemic", projectName, "credentials.json")
-
-	// If file already exists, skip creation (idempotent — never overwrite)
-	if _, err := os.Stat(credPath); err == nil {
-		return Result{Name: "Credentials Scaffolding", Ok: true}
-	}
-
-	if err := p.createCredentialsSkeleton(); err != nil {
-		return Result{Name: "Credentials Scaffolding", Ok: false,
-			Details: "failed to create credentials.json: " + err.Error()}
-	}
-
-	return Result{Name: "Credentials Scaffolding", Ok: false,
-		Details: fmt.Sprintf("created %s — fill in dev_token and reviewer_token", credPath)}
-}
-
 // copyFromTemplate copies an embedded template file to the target directory.
 // It does not overwrite an existing file.
 func (p *Preflight) copyFromTemplate(targetDir, embeddedPath, targetName string) error {

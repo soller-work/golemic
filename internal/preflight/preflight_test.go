@@ -971,6 +971,10 @@ func TestCheckCredentials(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Isolate from environment: env vars take precedence over file values.
+			t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
+			t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
+
 			exec := tt.setupExec()
 			homeDir := t.TempDir()
 			repoRoot := t.TempDir()
@@ -1431,12 +1435,12 @@ func TestWriteFileAtomicCreatesMissingParent(t *testing.T) {
 }
 
 func TestWriteFileAtomicReused(t *testing.T) {
-	// AC-007: Both config and credentials scaffolding use the shared helper.
-	// We verify by checking that createConfig and createCredentialsSkeleton
-	// both delegate to writeFileAtomic (indirectly via refactored code).
+	// AC-007: createConfig uses the shared writeFileAtomic helper.
+	// Credentials scaffolding is now inline in checkCredentials (transparent side effect),
+	// no longer a separate function to test here.
 
 	exec := fakeExecutorOK()
-	p, homeDir, repoRoot := setupPreflight(t, exec)
+	p, _, repoRoot := setupPreflight(t, exec)
 
 	// ===== config.json via createConfig (uses writeFileAtomic with 0644) =====
 	golemicDir := filepath.Join(repoRoot, ".golemic")
@@ -1456,162 +1460,9 @@ func TestWriteFileAtomicReused(t *testing.T) {
 		t.Errorf("config.json perms = 0%o, want 0644", cfgFi.Mode().Perm())
 	}
 
-	// ===== credentials.json via createCredentialsSkeleton (uses writeFileAtomic with 0600) =====
-	if err := p.createCredentialsSkeleton(); err != nil {
-		t.Fatalf("createCredentialsSkeleton() unexpected error: %v", err)
-	}
-
-	credPath := filepath.Join(homeDir, ".golemic", projectName, "credentials.json")
-	credFi, err := os.Stat(credPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if credFi.Mode().Perm() != 0600 {
-		t.Errorf("credentials.json perms = 0%o, want 0600", credFi.Mode().Perm())
-	}
-
-	// Verify both files are idempotent (second call should not overwrite)
+	// Verify idempotency: second call should not overwrite
 	if err := p.createConfig(golemicDir, configPath, projectName); err != nil {
 		t.Errorf("createConfig() second call (idempotent) should succeed, got: %v", err)
-	}
-	if err := p.createCredentialsSkeleton(); err != nil {
-		t.Errorf("createCredentialsSkeleton() second call (idempotent) should succeed, got: %v", err)
-	}
-}
-
-// =============================================================================
-// checkCredentialsScaffolding tests
-// =============================================================================
-
-func TestCheckCredentialsScaffoldingCreatesFile(t *testing.T) {
-	// AC-001: First run creates skeleton with correct JSON and 0600 perms
-	exec := fakeExecutorOK()
-	p, homeDir, repoRoot := setupPreflight(t, exec)
-
-	// Verify file does not exist before
-	projectName := filepath.Base(repoRoot)
-	credPath := filepath.Join(homeDir, ".golemic", projectName, "credentials.json")
-	if _, err := os.Stat(credPath); err == nil {
-		t.Fatal("credentials.json should not exist before check")
-	}
-
-	result := p.checkCredentialsScaffolding()
-
-	// Should report FEHLT (created)
-	if result.Ok {
-		t.Errorf("checkCredentialsScaffolding() should report FEHLT (file created), got OK")
-	}
-	if !strings.Contains(result.Details, "fill in dev_token and reviewer_token") {
-		t.Errorf("details should guide user, got: %s", result.Details)
-	}
-	if !strings.Contains(result.Details, credPath) {
-		t.Errorf("details should contain path, got: %s", result.Details)
-	}
-
-	// Verify file exists with correct structure
-	data, err := os.ReadFile(credPath)
-	if err != nil {
-		t.Fatalf("credentials.json should exist after check: %v", err)
-	}
-
-	// Verify JSON content
-	var parsed map[string]interface{}
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Errorf("credentials.json is not valid JSON: %v\ncontent: %s", err, string(data))
-	}
-	devToken, devOk := parsed["dev_token"]
-	revToken, revOk := parsed["reviewer_token"]
-	if !devOk || devToken != "${GOLEMIC_DEV_TOKEN}" {
-		t.Errorf("dev_token should be template reference, got: %v", devToken)
-	}
-	if !revOk || revToken != "${GOLEMIC_REVIEWER_TOKEN}" {
-		t.Errorf("reviewer_token should be template reference, got: %v", revToken)
-	}
-
-	// Verify permissions are 0600
-	fi, err := os.Stat(credPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Perm() != 0600 {
-		t.Errorf("credentials.json permissions = 0%o, want 0600", fi.Mode().Perm())
-	}
-}
-
-func TestCheckCredentialsScaffoldingIdempotent(t *testing.T) {
-	// AC-002: Repeated runs don't overwrite existing file
-	exec := fakeExecutorOK()
-	p, homeDir, repoRoot := setupPreflight(t, exec)
-
-	projectName := filepath.Base(repoRoot)
-	credDir := filepath.Join(homeDir, ".golemic", projectName)
-	credPath := filepath.Join(credDir, "credentials.json")
-
-	// Pre-create credentials.json with custom content
-	if err := os.MkdirAll(credDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	originalContent := `{"dev_token": "ghp_custom", "reviewer_token": "ghp_custom_rev"}`
-	if err := os.WriteFile(credPath, []byte(originalContent), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	// First check: should find existing file, report OK
-	result := p.checkCredentialsScaffolding()
-	if !result.Ok {
-		t.Errorf("checkCredentialsScaffolding() should report OK when file exists, got: %s", result.Details)
-	}
-
-	// Verify file was NOT overwritten
-	data, err := os.ReadFile(credPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != originalContent {
-		t.Errorf("credentials.json was overwritten:\noriginal: %s\nnow: %s", originalContent, string(data))
-	}
-
-	// Second check: still OK
-	result2 := p.checkCredentialsScaffolding()
-	if !result2.Ok {
-		t.Errorf("second check should still be OK, got: %s", result2.Details)
-	}
-}
-
-func TestCheckCredentialsScaffoldingInvalidProjectName(t *testing.T) {
-	// AC-006: Invalid project names rejected
-	tests := []struct {
-		name       string
-		repoRoot   string
-		wantDetail string
-	}{
-		{name: "empty name", repoRoot: "", wantDetail: "cannot determine project name"},
-		{name: "leading dot", repoRoot: "/tmp/.foo", wantDetail: "invalid project name"},
-		{name: "space in name", repoRoot: "/tmp/my repo", wantDetail: "invalid project name"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			exec := fakeExecutorOK()
-			homeDir := t.TempDir()
-
-			p := New(exec, homeDir, tt.repoRoot)
-			result := p.checkCredentialsScaffolding()
-			if result.Ok {
-				t.Errorf("checkCredentialsScaffolding() should fail for repo root %q", tt.repoRoot)
-			}
-			if !strings.Contains(result.Details, tt.wantDetail) {
-				t.Errorf("details = %q, want to contain %q", result.Details, tt.wantDetail)
-			}
-
-			// Verify no directory or file was created (for the non-empty-root cases)
-			if tt.repoRoot != "" {
-				credDir := filepath.Join(homeDir, ".golemic")
-				if entries, err := os.ReadDir(credDir); err == nil && len(entries) > 0 {
-					t.Errorf("no credentials directory should be created for invalid project name, got: %v", entries)
-				}
-			}
-		})
 	}
 }
 
