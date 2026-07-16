@@ -1665,6 +1665,11 @@ func TestRunPreflight(t *testing.T) {
 
 			// For success case: pre-create valid config and credentials
 			if tt.wantExit == 0 {
+				// Isolate from environment: env vars take precedence over file values.
+				// Set them to tokens the mock executor recognises.
+				t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_token")
+				t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_token")
+
 				// Valid config
 				golemicDir := filepath.Join(repoRoot, ".golemic")
 				if err := os.MkdirAll(golemicDir, 0755); err != nil {

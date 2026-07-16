@@ -1144,13 +1144,12 @@ func TestRunAllAllChecksPass(t *testing.T) {
 	}
 
 	output := buf.String()
-	// Check output format — 7 checks
+	// Check output format — 6 checks (credentials scaffolding is transparent, not a separate check)
 	for _, expected := range []string{
 		"OK: gh installiert",
 		"OK: pi installiert",
 		"OK: git",
 		"OK: .golemic/ Scaffolding",
-		"OK: Credentials Scaffolding",
 		"OK: config.json valide",
 		"OK: Credentials",
 	} {
@@ -1178,9 +1177,9 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 
 	results := p.RunAll()
 
-	// Should have exactly 7 results (gh, pi, git, scaffolding, cred scaffolding, config, credentials)
-	if len(results) != 7 {
-		t.Errorf("RunAll() returned %d results, want 7", len(results))
+	// Should have exactly 6 results (gh, pi, git, scaffolding, config, credentials)
+	if len(results) != 6 {
+		t.Errorf("RunAll() returned %d results, want 6", len(results))
 	}
 
 	// All should fail
@@ -1189,13 +1188,12 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 	}
 
 	output := buf.String()
-	// All 7 checks should appear in output
+	// All 6 checks should appear in output
 	for _, expected := range []string{
 		"FEHLT: gh installiert",
 		"FEHLT: pi installiert",
 		"FEHLT: git",
 		"FEHLT: .golemic/ Scaffolding",
-		"FEHLT: Credentials Scaffolding",
 		"FEHLT: config.json valide",
 		"FEHLT: Credentials",
 	} {
@@ -1233,13 +1231,8 @@ func TestRunAllScaffoldingFailThenFix(t *testing.T) {
 		t.Errorf("scaffolding check should report FEHLT (created), got OK")
 	}
 
-	// results[4] = checkCredentialsScaffolding (should be FEHLT — created)
+	// results[4] = checkConfig (should be FEHLT — empty verify_command in template)
 	if results[4].Ok {
-		t.Errorf("credentials scaffolding check should report FEHLT (created), got OK")
-	}
-
-	// results[5] = checkConfig (should be FEHLT — empty verify_command in template)
-	if results[5].Ok {
 		t.Errorf("config check should fail (empty verify_command in template), got OK")
 	}
 
@@ -1660,17 +1653,16 @@ func TestPreflightCheckOrder(t *testing.T) {
 	p.SetStdout(&buf)
 	results := p.RunAll()
 
-	if len(results) != 7 {
-		t.Fatalf("expected 7 results, got %d", len(results))
+	if len(results) != 6 {
+		t.Fatalf("expected 6 results, got %d", len(results))
 	}
 
-	// Verify exact order
+	// Verify exact order (credentials scaffolding is transparent, not a separate check)
 	expectedNames := []string{
 		"gh installiert",
 		"pi installiert",
 		"git",
 		".golemic/ Scaffolding",
-		"Credentials Scaffolding",
 		"config.json valide",
 		"Credentials",
 	}

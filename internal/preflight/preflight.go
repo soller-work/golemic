@@ -95,14 +95,14 @@ type ghUserLogin struct {
 	Login string `json:"login"`
 }
 
-// RunAll runs all seven checks in order, prints results to stdout, and returns them.
+// RunAll runs all checks in order, prints results to stdout, and returns them.
+// Credentials scaffolding is handled transparently inside checkCredentials (BR-002, §2.9).
 func (p *Preflight) RunAll() Results {
 	results := Results{
 		p.checkGhVersion(),
 		p.checkPiVersion(),
 		p.checkGit(),
 		p.checkScaffolding(),
-		p.checkCredentialsScaffolding(),
 		p.checkConfig(),
 		p.checkCredentials(),
 	}
@@ -399,6 +399,8 @@ func (p *Preflight) checkConfig() Result {
 // checkCredentials loads credentials and validates both tokens via gh api user.
 // It checks that the two tokens resolve to different GitHub logins.
 // Reuses the cached config from checkConfig if available.
+// If credentials.json is missing, it scaffolds the skeleton file transparently
+// before attempting validation (BR-002, §2.9, §3.0).
 func (p *Preflight) checkCredentials() Result {
 	// Use cached config from checkConfig if available, otherwise load fresh
 	var cfg *config.Config
@@ -410,6 +412,23 @@ func (p *Preflight) checkCredentials() Result {
 	}
 	if err != nil {
 		return Result{Name: "Credentials", Ok: false, Details: "cannot load config: " + err.Error()}
+	}
+
+	// Scaffold credentials.json if missing (transparent side effect, §2.9).
+	// The scaffolding is NOT a user-visible check — only validation is reported.
+	credPath := filepath.Join(p.homeDir, ".golemic", cfg.Project, "credentials.json")
+	if _, statErr := os.Stat(credPath); os.IsNotExist(statErr) {
+		if valErr := credentials.ValidateProjectName(cfg.Project); valErr == nil {
+			skeleton := credentialsSkeleton{
+				DevToken:      "${GOLEMIC_DEV_TOKEN}",
+				ReviewerToken: "${GOLEMIC_REVIEWER_TOKEN}",
+			}
+			data, marshalErr := json.MarshalIndent(skeleton, "", "    ")
+			if marshalErr == nil {
+				// Ignore write errors — credential loading will surface them
+				_ = writeFileAtomic(credPath, data, 0600)
+			}
+		}
 	}
 
 	// Load credentials
