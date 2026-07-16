@@ -6,12 +6,11 @@
 //   - RenderReviewer: renders a user prompt for the reviewer role with PR number,
 //     issue context, verify command, and guidelines injected.
 //
-// Static system prompts are stored in prompts/dev.md and prompts/reviewer.md
-// and returned as file paths alongside the rendered user prompt.
+// Static system prompts are stored in prompts/dev.md and prompts/reviewer.md;
+// the caller resolves their paths from the golemic binary directory.
 package prompt
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -31,8 +30,6 @@ type devTemplateData struct {
 	Branch        string
 	VerifyCommand string
 	Guidelines    string
-	TitleB64      string
-	BodyB64       string
 }
 
 // reviewerTemplateData holds the template variables for the reviewer user prompt.
@@ -67,11 +64,10 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 1. Understand the issue and the guidelines above.
 2. Implement the necessary changes on branch ` + "`" + `{{.Branch}}` + "`" + `.
 3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-4. Store the base64-encoded title and body in variables:
-   TITLE_B64={{.TitleB64}}
-   BODY_B64={{.BodyB64}}
-5. **Only after ` + "`" + `{{.VerifyCommand}}` + "`" + ` exits 0**, call:
-   ` + "`" + `golemic open-pr --title-b64 $TITLE_B64 --body-b64 $BODY_B64 --issue {{.Issue.Number}}` + "`" + `
+4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
+5. Push the branch: ` + "`" + `git push -u origin {{.Branch}}` + "`" + `
+6. **Only after ` + "`" + `{{.VerifyCommand}}` + "`" + ` exits 0**, open the PR:
+   ` + "`" + `golemic open-pr --title "..." --body "..."` + "`" + `
 `
 
 const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
@@ -93,10 +89,10 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 
 ## Instructions
 
-1. Review the diff and changes in PR #{{.PRNumber}}.
+1. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `gh pr view {{.PRNumber}}` + "`" + `
 2. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-3. Write your review findings.
-4. Call ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "<your review>" --pr {{.PRNumber}}` + "`" + `
+3. Review the changes against the issue requirements and the guidelines above.
+4. Call exactly one: ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}}` + "`" + `
 `
 
 // RenderDev renders a dev user prompt with all run-specific facts injected.
@@ -114,16 +110,11 @@ func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath 
 		return "", err
 	}
 
-	titleB64 := base64.StdEncoding.EncodeToString([]byte(issue.Title))
-	bodyB64 := base64.StdEncoding.EncodeToString([]byte(issue.Body))
-
 	data := devTemplateData{
 		Issue:         issue,
 		Branch:        branch,
 		VerifyCommand: verifyCommand,
 		Guidelines:    guidelines,
-		TitleB64:      titleB64,
-		BodyB64:       bodyB64,
 	}
 
 	tmpl, err := template.New("dev").Parse(devUserTemplate)

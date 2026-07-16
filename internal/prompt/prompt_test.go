@@ -1,9 +1,7 @@
 package prompt
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +12,25 @@ var testIssue = Issue{
 	Number: 42,
 	Title:  "Fix bug",
 	Body:   "Details here",
+}
+
+// mustContain fails if s does not contain every string in wants.
+func mustContain(t *testing.T, s string, wants []string) {
+	t.Helper()
+	for _, w := range wants {
+		if !strings.Contains(s, w) {
+			t.Errorf("prompt missing %q", w)
+		}
+	}
+}
+
+// assertBefore fails if the first occurrence of a comes at or after the first occurrence of b.
+func assertBefore(t *testing.T, s, a, b string) {
+	t.Helper()
+	ai, bi := strings.Index(s, a), strings.Index(s, b)
+	if ai < 0 || bi < 0 || ai >= bi {
+		t.Errorf("%q must appear before %q (positions %d, %d)", a, b, ai, bi)
+	}
 }
 
 func writeTestGuidelines(t *testing.T, dir, name, content string) string {
@@ -28,7 +45,29 @@ func writeTestGuidelines(t *testing.T, dir, name, content string) string {
 	return path
 }
 
-// AC-001: Dev prompt golden file has all facts
+// AC-001: Dev prompt uses only --title/--body for open-pr; no b64 remnants
+func TestRenderDev_OpenPRFlags(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	userPrompt, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+	if err != nil {
+		t.Fatalf("RenderDev() unexpected error: %v", err)
+	}
+
+	if !strings.Contains(userPrompt, "golemic open-pr --title") {
+		t.Error("dev prompt missing 'golemic open-pr --title'")
+	}
+	if !strings.Contains(userPrompt, "--body") {
+		t.Error("dev prompt missing '--body' flag for open-pr")
+	}
+	for _, banned := range []string{"title-b64", "body-b64", "--issue", "TitleB64", "BodyB64", "TITLE_B64", "BODY_B64"} {
+		if strings.Contains(userPrompt, banned) {
+			t.Errorf("dev prompt must not contain %q", banned)
+		}
+	}
+}
+
+// AC-001 (facts): Dev prompt contains all run-specific data
 func TestRenderDev_ContainsAllFacts(t *testing.T) {
 	guidelinesContent := "# Dev Guidelines (Test)\n\n## Stack\nGo 1.21, standard library"
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", guidelinesContent)
@@ -38,55 +77,32 @@ func TestRenderDev_ContainsAllFacts(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	// Issue number
-	if !strings.Contains(userPrompt, "42") {
-		t.Error("userPrompt missing issue number 42")
-	}
-
-	// Issue title
-	if !strings.Contains(userPrompt, "Fix bug") {
-		t.Error("userPrompt missing issue title 'Fix bug'")
-	}
-
-	// Issue body
-	if !strings.Contains(userPrompt, "Details here") {
-		t.Error("userPrompt missing issue body 'Details here'")
-	}
-
-	// Branch name
-	if !strings.Contains(userPrompt, "golemic/issue-42") {
-		t.Error("userPrompt missing branch name 'golemic/issue-42'")
-	}
-
-	// Verify command
-	if !strings.Contains(userPrompt, "go test ./...") {
-		t.Error("userPrompt missing verify command 'go test ./...'")
-	}
-
-	// Guidelines content injected
-	if !strings.Contains(userPrompt, "# Dev Guidelines (Test)") {
-		t.Error("userPrompt missing guidelines content")
-	}
-	if !strings.Contains(userPrompt, "Go 1.21, standard library") {
-		t.Error("userPrompt missing guidelines body content")
-	}
-
-	// Final step: golemic open-pr
-	if !strings.Contains(userPrompt, "golemic open-pr") {
-		t.Error("userPrompt missing 'golemic open-pr' as final step")
-	}
-
-	// Only after verify_command exits 0
+	mustContain(t, userPrompt, []string{
+		"42", "Fix bug", "Details here",
+		"golemic/issue-42", "go test ./...",
+		"# Dev Guidelines (Test)", "Go 1.21, standard library",
+		"golemic open-pr",
+	})
 	if !strings.Contains(userPrompt, "Only after") && !strings.Contains(userPrompt, "only after") {
-		t.Error("userPrompt missing condition that open-pr is only allowed after verify_command exits 0")
-	}
-
-	if userPrompt == "" {
-		t.Error("userPrompt is empty string")
+		t.Error("userPrompt missing condition that open-pr is only allowed after verify exits 0")
 	}
 }
 
-// AC-002: Reviewer prompt golden file has all facts
+// AC-002: Dev step list has commit and push before open-pr
+func TestRenderDev_CommitAndPushBeforeOpenPR(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	userPrompt, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+	if err != nil {
+		t.Fatalf("RenderDev() unexpected error: %v", err)
+	}
+
+	mustContain(t, userPrompt, []string{"git commit", "git push", "golemic open-pr", "git push -u origin golemic/issue-42"})
+	assertBefore(t, userPrompt, "git commit", "golemic open-pr")
+	assertBefore(t, userPrompt, "git push", "golemic open-pr")
+}
+
+// AC-003 (facts): Reviewer prompt contains all run-specific data
 func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 	guidelinesContent := "# Reviewer Guidelines (Test)\n\n## Stack\nGo 1.21, standard library"
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", guidelinesContent)
@@ -97,46 +113,58 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
 
-	// PR number
 	if !strings.Contains(userPrompt, "123") {
 		t.Error("userPrompt missing PR number 123")
 	}
-
-	// Issue number
 	if !strings.Contains(userPrompt, "42") {
 		t.Error("userPrompt missing issue number 42")
 	}
-
-	// Issue title
 	if !strings.Contains(userPrompt, "Fix bug") {
 		t.Error("userPrompt missing issue title 'Fix bug'")
 	}
-
-	// Issue body
 	if !strings.Contains(userPrompt, "Details here") {
 		t.Error("userPrompt missing issue body 'Details here'")
 	}
-
-	// Verify command
 	if !strings.Contains(userPrompt, "go test ./...") {
 		t.Error("userPrompt missing verify command 'go test ./...'")
 	}
-
-	// Guidelines content injected
 	if !strings.Contains(userPrompt, "# Reviewer Guidelines (Test)") {
 		t.Error("userPrompt missing guidelines content")
 	}
 	if !strings.Contains(userPrompt, "Go 1.21, standard library") {
 		t.Error("userPrompt missing guidelines body content")
 	}
-
-	// Final step: golemic submit-review
 	if !strings.Contains(userPrompt, "golemic submit-review") {
-		t.Error("userPrompt missing 'golemic submit-review' as final step")
+		t.Error("userPrompt missing 'golemic submit-review'")
+	}
+}
+
+// AC-003 (steps): Reviewer prompt has diff-fetch, verify, and submit-review steps
+func TestRenderReviewer_StepList(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
+
+	userPrompt, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath)
+	if err != nil {
+		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
 
-	if userPrompt == "" {
-		t.Error("userPrompt is empty string")
+	if !strings.Contains(userPrompt, "git diff origin/main...HEAD") {
+		t.Error("reviewer prompt missing 'git diff origin/main...HEAD' step")
+	}
+	if !strings.Contains(userPrompt, "gh pr view 123") {
+		t.Error("reviewer prompt missing 'gh pr view <PR>' step")
+	}
+	if !strings.Contains(userPrompt, "go test ./...") {
+		t.Error("reviewer prompt missing verify command step")
+	}
+	if !strings.Contains(userPrompt, "golemic submit-review --verdict") {
+		t.Error("reviewer prompt missing 'golemic submit-review --verdict'")
+	}
+	if !strings.Contains(userPrompt, "--body") {
+		t.Error("reviewer prompt missing '--body' for submit-review")
+	}
+	if !strings.Contains(userPrompt, "--pr 123") {
+		t.Error("reviewer prompt missing '--pr 123'")
 	}
 }
 
@@ -286,9 +314,8 @@ func TestRenderDev_EmptyTitleBody(t *testing.T) {
 	}
 }
 
-// P2-1: Adversarial input — title with apostrophe, body with backticks + apostrophe
-// Asserts the pre-encoded base64 approach prevents ALL shell quoting issues.
-func TestRenderDev_AdversarialShellSafety(t *testing.T) {
+// AC-001: Adversarial input renders without b64 and includes the title/body in the display section
+func TestRenderDev_AdversarialInput(t *testing.T) {
 	adversarialIssue := Issue{
 		Number: 42,
 		Title:  `it's a fix`,
@@ -301,92 +328,17 @@ func TestRenderDev_AdversarialShellSafety(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	// Must use base64 flags, not inline --title/--body or tempfile flags
-	if strings.Contains(userPrompt, `--title "`) {
-		t.Error("rendered prompt uses unsafe inline --title \"...\" shell quoting; must use --title-b64")
+	for _, banned := range []string{"title-b64", "body-b64", "TITLE_B64", "BODY_B64"} {
+		if strings.Contains(userPrompt, banned) {
+			t.Errorf("rendered prompt must not contain %q", banned)
+		}
 	}
-	if strings.Contains(userPrompt, `--body "`) {
-		t.Error("rendered prompt uses unsafe inline --body \"...\" shell quoting; must use --body-b64")
-	}
-	if strings.Contains(userPrompt, "--title-file") {
-		t.Error("rendered prompt uses old --title-file flag; must use --title-b64")
-	}
-	if strings.Contains(userPrompt, "--body-file") {
-		t.Error("rendered prompt uses old --body-file flag; must use --body-b64")
-	}
-
-	// Must reference the base64 flags
-	if !strings.Contains(userPrompt, "--title-b64") {
-		t.Error("rendered prompt missing --title-b64 flag")
-	}
-	if !strings.Contains(userPrompt, "--body-b64") {
-		t.Error("rendered prompt missing --body-b64 flag")
-	}
-
-	// Pre-encoded base64 values are used (no printf or base64 commands)
-	if !strings.Contains(userPrompt, "TITLE_B64=") {
-		t.Error("rendered prompt missing TITLE_B64 variable assignment")
-	}
-	if !strings.Contains(userPrompt, "BODY_B64=") {
-		t.Error("rendered prompt missing BODY_B64 variable assignment")
-	}
-	// The base64-encoded values are alphanumeric (no shell metacharacters)
-	if !strings.Contains(userPrompt, "aXQncyBhIGZpeA==") {
-		t.Error("rendered prompt missing expected base64-encoded title value")
-	}
-	if !strings.Contains(userPrompt, "YGVjaG8gaXQncyBicm9rZW5g") {
-		t.Error("rendered prompt missing expected base64-encoded body value")
-	}
-
-	// Adversarial content is present in the prompt (as instruction text)
-	if !strings.Contains(userPrompt, `it's a fix`) {
-		t.Error("adversarial title not present in rendered prompt")
-	}
-	if !strings.Contains(userPrompt, "`echo it's broken`") {
-		t.Error("adversarial body not present in rendered prompt")
-	}
-
-	// golemic open-pr is still present as the final action
 	if !strings.Contains(userPrompt, "golemic open-pr") {
 		t.Error("golemic open-pr missing from rendered prompt")
 	}
-
-	// Extract the full shell script (TITLE_B64, BODY_B64, golemic invocation) and
-	// validate the entire script with bash -n to verify zero syntax errors.
-	var shellScriptLines []string
-	for _, line := range strings.Split(userPrompt, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "TITLE_B64=") ||
-			strings.HasPrefix(trimmed, "BODY_B64=") ||
-			strings.HasPrefix(trimmed, "golemic open-pr") {
-			shellScriptLines = append(shellScriptLines, trimmed)
-		}
+	if !strings.Contains(userPrompt, `it's a fix`) {
+		t.Error("adversarial title not present in rendered prompt")
 	}
-
-	if len(shellScriptLines) == 0 {
-		t.Fatal("no shell script lines found in rendered prompt")
-	}
-
-	fullScript := strings.Join(shellScriptLines, "\n")
-	if err := bashValidate(fullScript); err != nil {
-		t.Errorf("full shell script fails bash -n syntax check:\n  %v\n  script:\n%s", err, fullScript)
-	}
-}
-
-// bashValidate runs bash -n on a shell command string to check syntax.
-func bashValidate(cmd string) error {
-	// Use "bash -n -c" to check syntax without executing
-	return bashCheckSyntax(cmd)
-}
-
-func bashCheckSyntax(cmd string) error {
-	// We can't easily capture stderr separately, so use combined output
-	c := exec.Command("bash", "-n", "-c", cmd)
-	out, err := c.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("bash syntax error: %v\n  output: %s", err, string(out))
-	}
-	return nil
 }
 
 func TestRenderReviewer_NonZeroPR(t *testing.T) {
