@@ -1,0 +1,313 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "command",
+  "slice_id": "role-guidelines-paths",
+  "depends_on": [],
+  "title": "Bug: Runner liest Guidelines nicht rollenspezifisch aus .golemic/guidelines/",
+  "summary": "Der Runner uebergibt fuer beide Rollen <repoRoot>/guidelines.md an den Prompt-Renderer. Architektur (docs/architecture.md 2.9/2.10) und Preflight-Scaffolding definieren aber rollenspezifische Dateien .golemic/guidelines/dev.md und .golemic/guidelines/reviewer.md. Nach einem Preflight-Setup schlaegt jeder echte Run mit 'guidelines file not found' fehl; die E2E-Fixtures maskieren das, indem sie guidelines.md an die Repo-Wurzel schreiben. Fix: Runner uebergibt die rollenspezifischen Pfade aus .golemic/guidelines/, E2E-Fixtures werden auf das gescaffoldete Layout umgestellt.",
+  "stakeholder_intent": {
+    "actor": "Maintainer",
+    "goal": "golemic run funktioniert in einem per Preflight aufgesetzten Host-Repo ohne manuelle Zusatzdateien",
+    "business_value": "Der Loop-Kern (Iteration 1 MVP) ist im realen Zielprojekt lauffaehig statt nur in maskierten E2E-Fixtures",
+    "trigger": "golemic run --issue N wird in einem Host-Repo ausgefuehrt, das per golemic preflight aufgesetzt wurde",
+    "success_outcome": "Dev-Rolle erhaelt .golemic/guidelines/dev.md, Reviewer-Rolle erhaelt .golemic/guidelines/reviewer.md woertlich in ihren User-Prompt injiziert"
+  },
+  "scope": {
+    "in_scope": [
+      "Guidelines-Pfad fuer die Dev-Rolle auf <repoRoot>/.golemic/guidelines/dev.md aendern (internal/runner/dev.go)",
+      "Guidelines-Pfad fuer die Reviewer-Rolle auf <repoRoot>/.golemic/guidelines/reviewer.md aendern (internal/runner/reviewer.go)",
+      "E2E-Fixtures von <repoRoot>/guidelines.md auf das gescaffoldete Layout .golemic/guidelines/{dev,reviewer}.md umstellen",
+      "Unit-Tests, die die rollenspezifischen Pfade absichern"
+    ],
+    "out_of_scope": [
+      "Aufloesung der System-Prompt-Pfade prompts/{dev,reviewer}.md (eigenes Issue system-prompt-resolution)",
+      "Inhaltliche Aenderungen an den Prompt-Templates (eigenes Issue prompt-cli-contract)",
+      "Aenderungen am Preflight-Scaffolding (verhaelt sich bereits architekturkonform)"
+    ]
+  },
+  "preconditions": [
+    "Preflight-Scaffolding legt .golemic/guidelines/dev.md und .golemic/guidelines/reviewer.md an (internal/preflight/preflight.go, verifiziert)",
+    "prompt.RenderDev/RenderReviewer nehmen bereits einen guidelinesPath-Parameter entgegen und failen fail-closed bei fehlender Datei"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Die Dev-Rolle erhaelt ausschliesslich .golemic/guidelines/dev.md als Guidelines-Quelle",
+      "applies_when": "Der Runner rendert den Dev-User-Prompt",
+      "outcome": "RenderDev wird mit filepath.Join(repoRoot, \".golemic\", \"guidelines\", \"dev.md\") aufgerufen"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Die Reviewer-Rolle erhaelt ausschliesslich .golemic/guidelines/reviewer.md als Guidelines-Quelle",
+      "applies_when": "Der Runner rendert den Reviewer-User-Prompt",
+      "outcome": "RenderReviewer wird mit filepath.Join(repoRoot, \".golemic\", \"guidelines\", \"reviewer.md\") aufgerufen"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Fehlende Guidelines-Datei bleibt ein harter Fehlerpfad vor dem Agent-Start (fail-closed)",
+      "applies_when": "Die rollenspezifische Guidelines-Datei existiert nicht",
+      "outcome": "Rollen-Lauf startet nicht; Outcome dev_failed bzw. review_failed mit klarer Fehlermeldung inkl. erwartetem Pfad"
+    },
+    {
+      "id": "BR-004",
+      "rule": "E2E-Fixtures duerfen keine guidelines.md an der Repo-Wurzel mehr anlegen",
+      "applies_when": "E2E-Tests bauen ein Host-Repo-Fixture auf",
+      "outcome": "Fixtures schreiben .golemic/guidelines/dev.md und .golemic/guidelines/reviewer.md; das architekturwidrige Layout kann nicht wieder einreissen"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "Runner-Prompt-Rendering",
+      "operation": "runner.runDevAgent/runReviewerAgent uebergeben den rollenspezifischen Guidelines-Pfad an prompt.RenderDev/RenderReviewer",
+      "inputs": [
+        {
+          "name": "repoRoot",
+          "type": "string",
+          "required": true,
+          "constraints": ["absoluter Pfad zum Host-Repo-Root"],
+          "source": "runner (resolveHostRepo)"
+        },
+        {
+          "name": "role",
+          "type": "string",
+          "required": true,
+          "constraints": ["dev oder reviewer"],
+          "source": "runner"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Guidelines-Datei existiert",
+          "status": "Prompt gerendert",
+          "body": "User-Prompt mit woertlich injiziertem Inhalt der rollenspezifischen Guidelines-Datei"
+        },
+        {
+          "condition": "Guidelines-Datei fehlt",
+          "status": "Fehler",
+          "body": "Fehlermeldung 'guidelines file not found: <pfad>' auf stderr; Outcome dev_failed/review_failed"
+        }
+      ],
+      "errors": [
+        {
+          "code": "GUIDELINES_NOT_FOUND",
+          "condition": ".golemic/guidelines/<role>.md existiert nicht im Host-Repo",
+          "status": "Rollen-Lauf startet nicht; Outcome dev_failed/review_failed",
+          "message": "guidelines file not found: <repoRoot>/.golemic/guidelines/<role>.md"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "internal/runner/dev.go (runDevAgent, Aufruf prompt.RenderDev)",
+      "precondition": "guidelinesPath ist filepath.Join(r.repoRoot, \"guidelines.md\")",
+      "changes": [
+        {
+          "field": "guidelinesPath-Argument",
+          "operation": "set",
+          "value_source": "filepath.Join(r.repoRoot, \".golemic\", \"guidelines\", \"dev.md\")"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "internal/runner/reviewer.go (runReviewerAgent, Aufruf prompt.RenderReviewer)",
+      "precondition": "guidelinesPath ist filepath.Join(r.repoRoot, \"guidelines.md\")",
+      "changes": [
+        {
+          "field": "guidelinesPath-Argument",
+          "operation": "set",
+          "value_source": "filepath.Join(r.repoRoot, \".golemic\", \"guidelines\", \"reviewer.md\")"
+        }
+      ]
+    },
+    {
+      "id": "SC-003",
+      "target": "E2E-Fixture-Aufbau (test/e2e/dev_failures_test.go, reviewer_failures_test.go, timeout_test.go, collision_test.go soweit betroffen)",
+      "precondition": "Fixtures schreiben guidelines.md an die Repo-Wurzel",
+      "changes": [
+        {
+          "field": "Fixture-Dateien",
+          "operation": "set",
+          "value_source": ".golemic/guidelines/dev.md und .golemic/guidelines/reviewer.md statt <root>/guidelines.md"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Nicht relevant (lokale Pfadaufloesung)",
+    "authorization_rules": ["Keine"],
+    "data_classification": "Projekt-Konfiguration (eingecheckte Guidelines)",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/runner/dev.go",
+      "internal/runner/reviewer.go",
+      "internal/runner/runner_test.go",
+      "test/e2e/dev_failures_test.go",
+      "test/e2e/reviewer_failures_test.go",
+      "test/e2e/timeout_test.go"
+    ],
+    "integration_points": [
+      "internal/prompt.RenderDev / RenderReviewer (Signatur bleibt unveraendert)",
+      "internal/preflight Scaffolding-Layout .golemic/guidelines/ (Vertrag, bleibt unveraendert)"
+    ],
+    "architecture_constraints": [
+      "docs/architecture.md 2.9: Guidelines liegen rollenspezifisch unter .golemic/guidelines/ im Host-Repo",
+      "docs/architecture.md 2.10: Der Runner injiziert die zur Rolle passende Datei woertlich in den Rollen-Prompt",
+      "Fail-closed-Verhalten von readGuidelines bleibt erhalten (kein stiller Fallback auf andere Pfade)"
+    ],
+    "allowed_changes": [
+      "Pfad-Argumente in dev.go/reviewer.go",
+      "Fixture-Aufbau in E2E-Tests",
+      "Neue/angepasste Unit-Tests fuer die Pfadwahl"
+    ],
+    "forbidden_changes": [
+      "Kein Fallback auf <repoRoot>/guidelines.md",
+      "Keine Aenderung der prompt.Render*-Signaturen",
+      "Keine Aenderung am Preflight-Scaffolding"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Direkte Korrektur; kein Bestand zu migrieren (Iteration 1, keine produktiven Installationen)",
+    "consistency_and_concurrency": "Nicht relevant; reine Pfadaufloesung pro Prozess, keine Nebenlaeufigkeit"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Dev-Rolle erhaelt .golemic/guidelines/dev.md",
+      "given": [
+        "Host-Repo mit .golemic/guidelines/dev.md (Inhalt 'DEV-MARKER') und .golemic/guidelines/reviewer.md (Inhalt 'REV-MARKER')"
+      ],
+      "when": ["Der Runner rendert den Dev-Prompt"],
+      "then": [
+        "Der gerenderte Dev-User-Prompt enthaelt 'DEV-MARKER'",
+        "Der gerenderte Dev-User-Prompt enthaelt nicht 'REV-MARKER'"
+      ],
+      "traces_to": ["BR-001", "SC-001", "IF-001"]
+    },
+    {
+      "id": "AC-002",
+      "title": "Reviewer-Rolle erhaelt .golemic/guidelines/reviewer.md",
+      "given": [
+        "Host-Repo mit .golemic/guidelines/dev.md (Inhalt 'DEV-MARKER') und .golemic/guidelines/reviewer.md (Inhalt 'REV-MARKER')"
+      ],
+      "when": ["Der Runner rendert den Reviewer-Prompt"],
+      "then": [
+        "Der gerenderte Reviewer-User-Prompt enthaelt 'REV-MARKER'",
+        "Der gerenderte Reviewer-User-Prompt enthaelt nicht 'DEV-MARKER'"
+      ],
+      "traces_to": ["BR-002", "SC-002", "IF-001"]
+    },
+    {
+      "id": "AC-003",
+      "title": "Fehlende rollenspezifische Guidelines-Datei bricht fail-closed ab",
+      "given": ["Host-Repo ohne .golemic/guidelines/dev.md"],
+      "when": ["Der Runner versucht den Dev-Prompt zu rendern"],
+      "then": [
+        "Der Dev-Agent wird nicht gestartet",
+        "stderr nennt den erwarteten Pfad .golemic/guidelines/dev.md",
+        "Outcome ist dev_failed"
+      ],
+      "traces_to": ["BR-003", "IF-001", "SC-001"]
+    },
+    {
+      "id": "AC-004",
+      "title": "E2E-Fixtures nutzen das gescaffoldete Layout",
+      "given": ["Die E2E-Suite ist auf das neue Layout umgestellt"],
+      "when": ["grep -rn 'guidelines.md' test/e2e/ wird ausgefuehrt und die E2E-Suite laeuft"],
+      "then": [
+        "Kein Fixture schreibt guidelines.md an die Repo-Wurzel",
+        "Alle Fixtures schreiben .golemic/guidelines/dev.md und .golemic/guidelines/reviewer.md",
+        "go test ./test/e2e/... ist gruen"
+      ],
+      "traces_to": ["BR-004", "SC-003"]
+    }
+  ],
+  "quality": {
+    "required_test_levels": ["unit", "integration"],
+    "test_cases": [
+      "Unit: runDevAgent verwendet .golemic/guidelines/dev.md (Marker-Assertion im gerenderten Prompt oder Pfad-Assertion)",
+      "Unit: runReviewerAgent verwendet .golemic/guidelines/reviewer.md",
+      "Unit: fehlende dev.md fuehrt zu dev_failed mit Pfad in stderr",
+      "E2E: bestehende Orchestrierungs-Szenarien gruen mit gescaffoldetem Guidelines-Layout"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "env -u GOLEMIC_DEV_TOKEN -u GOLEMIC_REVIEWER_TOKEN go test ./...",
+      "golangci-lint run ./..."
+    ],
+    "non_functional_requirements": [
+      "Fehlermeldungen nennen den vollstaendigen erwarteten Pfad"
+    ],
+    "definition_of_done": [
+      "Beide Rollen lesen ihre Guidelines aus .golemic/guidelines/<role>.md",
+      "Kein Code- oder Testpfad referenziert <repoRoot>/guidelines.md mehr",
+      "Alle Tests und Lint gruen"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Kanonischer Guidelines-Ort",
+      "decision": "Rollenspezifische Dateien .golemic/guidelines/{dev,reviewer}.md, wie von Architektur 2.9 und Preflight-Scaffolding vorgegeben; der Runner wird angepasst, nicht das Scaffolding",
+      "source": "codebase",
+      "evidence_ids": ["EV-001", "EV-002", "EV-003"],
+      "rationale": "Architektur und Scaffolding sind konsistent; nur der Runner weicht ab"
+    },
+    {
+      "id": "D-002",
+      "topic": "Umgang mit E2E-Fixtures",
+      "decision": "Fixtures auf das gescaffoldete Layout umstellen statt beide Layouts zu unterstuetzen",
+      "source": "confirmed_recommendation",
+      "evidence_ids": ["EV-004"],
+      "rationale": "Die Fixtures maskieren den Bug; ein Fallback wuerde die Architekturabweichung zementieren"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/runner/dev.go",
+      "symbol": "runDevAgent",
+      "location": "Aufruf prompt.RenderDev, guidelinesPath-Argument (Zeile ~31)",
+      "finding": "Uebergibt filepath.Join(r.repoRoot, \"guidelines.md\") — nicht rollenspezifisch, nicht unter .golemic/",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "internal/runner/reviewer.go",
+      "symbol": "runReviewerAgent",
+      "location": "Aufruf prompt.RenderReviewer, guidelinesPath-Argument (Zeile ~40)",
+      "finding": "Uebergibt ebenfalls filepath.Join(r.repoRoot, \"guidelines.md\") — Reviewer erhaelt dieselbe Datei wie Dev",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "internal/preflight/preflight.go",
+      "symbol": "scaffolding",
+      "location": "Zeilen 297-311",
+      "finding": "Scaffolding legt .golemic/guidelines/dev.md und .golemic/guidelines/reviewer.md aus eingebetteten Templates an — architekturkonform",
+      "verified": true
+    },
+    {
+      "id": "EV-004",
+      "path": "test/e2e/dev_failures_test.go",
+      "symbol": null,
+      "location": "Fixture-Aufbau (Zeile ~227), analog reviewer_failures_test.go und timeout_test.go",
+      "finding": "E2E-Fixtures schreiben guidelines.md an die Repo-Wurzel und maskieren so die Abweichung",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

@@ -1,0 +1,275 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "command",
+  "slice_id": "test-env-hermeticity",
+  "depends_on": [],
+  "title": "Bug: Unit-Tests nicht hermetisch gegen GOLEMIC_*-Umgebungsvariablen",
+  "summary": "internal/credentials liest GOLEMIC_DEV_TOKEN/GOLEMIC_REVIEWER_TOKEN direkt via os.LookupEnv. Der Env-Vorrang vor credentials.json ist per Architektur 2.9 gewollt, aber die Unit-Tests isolieren die Prozess-Umgebung nicht: Hat die Entwickler-Shell echte Tokens exportiert, schlagen TestCheck_IdenticalTokensRejectedLocally_AC002 (preflight) und TestRun_MissingCredentials_AC005 (runner) fehl (reproduziert; mit env -u ist die Suite gruen). Das verletzt Architektur 2.12 (Unit-Ebene = reine, deterministische Go-Tests mit Fakes). Fix: Env-Zugriff im credentials.Loader injizierbar machen und alle betroffenen Tests hermetisch konstruieren.",
+  "stakeholder_intent": {
+    "actor": "Maintainer",
+    "goal": "go test ./... ist unabhaengig von der realen Prozess-Umgebung deterministisch gruen",
+    "business_value": "Verlaessliche Testsuite als Hauptabsicherung des Loops (Architektur 2.12); keine falschen Alarme auf Maschinen mit gesetzten Bot-Tokens",
+    "trigger": "Entwickler oder CI fuehren die Unit-Suite aus, waehrend GOLEMIC_*-Variablen gesetzt sind",
+    "success_outcome": "Die komplette Suite ist gruen — mit beliebig gesetzten wie auch mit nicht gesetzten GOLEMIC_DEV_TOKEN/GOLEMIC_REVIEWER_TOKEN"
+  },
+  "scope": {
+    "in_scope": [
+      "Env-Zugriff im credentials.Loader injizierbar machen (Default os.LookupEnv, Produktionsverhalten identisch)",
+      "Betroffene Tests in credentials, preflight und runner hermetisch konstruieren (kontrollierter Lookup)",
+      "Durchreichung des Lookups an preflight/runner, soweit fuer die Testkonstruktion noetig"
+    ],
+    "out_of_scope": [
+      "Aenderung der Vorrang-Semantik Env vor Datei (Architektur 2.9, bleibt exakt gleich)",
+      "E2E-Tests (eigene Prozesse mit explizit gesetztem Env)",
+      "Weitere os.Getenv-Nutzer ausserhalb des Credentials-Pfads (template.EnvResolver, eventlog-Subcommand-Kontext: dort ist Env der fachliche Vertrag)"
+    ]
+  },
+  "preconditions": [
+    "credentials.Loader existiert mit NewLoader(homeDir) und Load(project)",
+    "Fehlerbild reproduziert: mit exportierten GOLEMIC_*-Tokens schlagen genau die zwei genannten Tests fehl, ohne sie ist die Suite gruen"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Der Env-Zugriff des credentials.Loader ist injizierbar; Default ist os.LookupEnv",
+      "applies_when": "Loader wird konstruiert",
+      "outcome": "Produktionscode verhaelt sich unveraendert (Env-Vorrang vor Datei); Tests koennen den Lookup kontrollieren"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Kein Unit-Test liest die reale Prozess-Umgebung fuer GOLEMIC_-Variablen",
+      "applies_when": "Tests konstruieren Loader, Preflight oder Runner",
+      "outcome": "Alle betroffenen Tests injizieren einen kontrollierten Lookup (leer oder mit definierten Werten)"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Die Vorrang-Semantik Env vor credentials.json bleibt fachlich unveraendert und getestet",
+      "applies_when": "Loader.Load laeuft mit gesetztem (injiziertem) Env-Wert und vorhandener Datei",
+      "outcome": "Der Env-Wert gewinnt; ein Unit-Test sichert das mit injiziertem Lookup ab"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "credentials.Loader mit injizierbarem Env-Lookup",
+      "operation": "Load(project) liest Tokens mit Vorrang injizierter Env-Lookup vor credentials.json",
+      "inputs": [
+        {
+          "name": "lookupEnv",
+          "type": "func(string) (string, bool)",
+          "required": false,
+          "constraints": ["Default: os.LookupEnv"],
+          "source": "Konstruktor/Option; Tests injizieren Fakes"
+        },
+        {
+          "name": "project",
+          "type": "string",
+          "required": true,
+          "constraints": ["Projekt-Schluessel fuer ~/.golemic/<projekt>/credentials.json"],
+          "source": "config.json"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Tokens via Env oder Datei aufloesbar",
+          "status": "Credentials geladen",
+          "body": "DevToken/ReviewerToken mit Quellen-Kennzeichnung wie bisher"
+        },
+        {
+          "condition": "Weder Env noch Datei liefern Tokens",
+          "status": "Fehler",
+          "body": "Bestehende Fehlermeldung des Loaders (unveraendert)"
+        }
+      ],
+      "errors": [
+        {
+          "code": "CREDENTIALS_MISSING",
+          "condition": "Injizierter Lookup liefert nichts und credentials.json fehlt",
+          "status": "Load schlaegt fehl",
+          "message": "Bestehende Loader-Fehlermeldung (Wortlaut unveraendert)"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "internal/credentials/credentials.go (Loader)",
+      "precondition": "Load ruft os.LookupEnv direkt fuer GOLEMIC_DEV_TOKEN (~Zeile 164) und GOLEMIC_REVIEWER_TOKEN (~Zeile 177) auf",
+      "changes": [
+        {
+          "field": "Env-Zugriff",
+          "operation": "set",
+          "value_source": "Injizierbares lookupEnv-Feld/-Option mit Default os.LookupEnv; direkte os.LookupEnv-Aufrufe ersetzt"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "Betroffene Tests (internal/credentials, internal/preflight/credentials_test.go, internal/runner/runner_test.go) und ggf. Durchreichung in preflight/runner",
+      "precondition": "Tests haengen implizit an der realen Prozess-Umgebung",
+      "changes": [
+        {
+          "field": "Testkonstruktion",
+          "operation": "set",
+          "value_source": "Kontrollierter Lookup (leere oder definierte Fake-Umgebung) in allen Tests, die Credentials laden"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Nicht relevant; Tokens werden weiterhin nur gelesen, nie geloggt",
+    "authorization_rules": ["Keine"],
+    "data_classification": "Credentials (Tokens); Testwerte sind Fakes",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/credentials/credentials.go",
+      "internal/credentials/credentials_test.go",
+      "internal/preflight/preflight.go (Loader-Konstruktion, falls Durchreichung noetig)",
+      "internal/preflight/credentials_test.go",
+      "internal/runner/runner.go (Loader-Konstruktion, falls Durchreichung noetig)",
+      "internal/runner/runner_test.go"
+    ],
+    "integration_points": [
+      "preflight.checkCredentials (nutzt credentials.NewLoader)",
+      "runner.Run PS-002 (nutzt credentials.NewLoader)"
+    ],
+    "architecture_constraints": [
+      "docs/architecture.md 2.9: Env-Variablen haben Vorrang vor der Datei — Semantik unveraendert",
+      "docs/architecture.md 2.12: Unit-Tests sind reine Go-Tests mit Fakes, keine impliziten Umgebungsabhaengigkeiten",
+      "Keine Verhaltensaenderung im Produktionspfad"
+    ],
+    "allowed_changes": [
+      "Injizierbarer Lookup im Loader plus minimale Durchreichung",
+      "Testanpassungen in credentials, preflight, runner"
+    ],
+    "forbidden_changes": [
+      "Keine Aenderung der Vorrang-Reihenfolge oder Fehlermeldungen des Loaders",
+      "Kein t.Setenv-Workaround, der die reale Umgebung mutiert statt sie zu isolieren",
+      "Keine Aenderung an template.EnvResolver oder eventlog-Env-Vertrag"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Rein additive API-Erweiterung mit Default; keine Migration",
+    "consistency_and_concurrency": "Nicht relevant; Lookup ist eine reine Funktion pro Aufruf"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Suite gruen trotz gesetzter GOLEMIC_-Variablen",
+      "given": ["GOLEMIC_DEV_TOKEN=fake-dev-token und GOLEMIC_REVIEWER_TOKEN=fake-reviewer-token sind im Prozess-Env gesetzt"],
+      "when": ["go test ./... laeuft"],
+      "then": [
+        "Alle Pakete sind gruen, insbesondere TestCheck_IdenticalTokensRejectedLocally_AC002 und TestRun_MissingCredentials_AC005"
+      ],
+      "traces_to": ["BR-001", "BR-002", "SC-001", "SC-002", "IF-001"]
+    },
+    {
+      "id": "AC-002",
+      "title": "Suite gruen ohne GOLEMIC_-Variablen",
+      "given": ["GOLEMIC_DEV_TOKEN und GOLEMIC_REVIEWER_TOKEN sind nicht gesetzt"],
+      "when": ["go test ./... laeuft"],
+      "then": ["Alle Pakete sind gruen"],
+      "traces_to": ["BR-002", "SC-002"]
+    },
+    {
+      "id": "AC-003",
+      "title": "Env-Vorrang bleibt erhalten",
+      "given": [
+        "Ein Loader mit injiziertem Lookup, der fuer beide Variablen Werte liefert",
+        "Eine credentials.json mit abweichenden Werten existiert"
+      ],
+      "when": ["Load(project) laeuft"],
+      "then": [
+        "Die injizierten Env-Werte gewinnen",
+        "Die Quellen-Kennzeichnung meldet Env als Quelle"
+      ],
+      "traces_to": ["BR-003", "IF-001", "SC-001"]
+    }
+  ],
+  "quality": {
+    "required_test_levels": ["unit"],
+    "test_cases": [
+      "Unit: Loader mit injiziertem Lookup — Env-Vorrang, Datei-Fallback, Fehlerfall",
+      "Unit: preflight- und runner-Tests hermetisch (kontrollierter Lookup)",
+      "Regression: die zwei zuvor umgebungsabhaengigen Tests sind unter beiden Env-Bedingungen gruen"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "GOLEMIC_DEV_TOKEN=fake-dev-token GOLEMIC_REVIEWER_TOKEN=fake-reviewer-token go test ./...",
+      "env -u GOLEMIC_DEV_TOKEN -u GOLEMIC_REVIEWER_TOKEN go test ./...",
+      "golangci-lint run ./..."
+    ],
+    "non_functional_requirements": [
+      "Keine Testlaufzeit-Verschlechterung; keine echten Netzwerk- oder Env-Abhaengigkeiten"
+    ],
+    "definition_of_done": [
+      "Beide quality_commands-Testlaeufe (mit und ohne gesetzte Variablen) sind gruen",
+      "Kein direkter os.LookupEnv-Aufruf fuer GOLEMIC_-Tokens mehr im Loader",
+      "Produktionsverhalten nachweislich unveraendert (Vorrang-Test)"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Isolationsmechanismus",
+      "decision": "Injizierbarer Env-Lookup im credentials.Loader (Default os.LookupEnv) statt t.Setenv-Manipulation der realen Umgebung",
+      "source": "confirmed_recommendation",
+      "evidence_ids": ["EV-001", "EV-004"],
+      "rationale": "Entspricht dem bestehenden Fake-/Injektionsmuster (Executor, Resolver); t.Setenv kann Variablen nicht entfernen, nur ueberschreiben"
+    },
+    {
+      "id": "D-002",
+      "topic": "Betroffener Testumfang",
+      "decision": "credentials-, preflight- und runner-Tests werden hermetisch konstruiert; die zwei reproduzierten Failures sind die Regressionsanker",
+      "source": "confirmed_recommendation",
+      "evidence_ids": ["EV-002", "EV-003"],
+      "rationale": "Genau diese Tests schlugen mit exportierten Shell-Tokens fehl (reproduziert am 2026-07-16)"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/credentials/credentials.go",
+      "symbol": "Loader.Load",
+      "location": "Zeilen ~164 und ~177",
+      "finding": "Direkte os.LookupEnv-Aufrufe fuer GOLEMIC_DEV_TOKEN und GOLEMIC_REVIEWER_TOKEN mit Vorrang vor der Datei",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "internal/preflight/credentials_test.go",
+      "symbol": "TestCheck_IdenticalTokensRejectedLocally_AC002",
+      "location": "Check-Mode-Credentials-Test",
+      "finding": "Erwartet 'tokens identical' aus der Datei; mit exportierten, verschiedenen Shell-Tokens gewinnt das Env und der Test schlaegt fehl (reproduziert)",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "internal/runner/runner_test.go",
+      "symbol": "TestRun_MissingCredentials_AC005",
+      "location": "Zeile ~556",
+      "finding": "Erwartet Credentials-Fehler ohne gh-Aufruf; mit exportierten Shell-Tokens gelingt Load und gh issue view wird aufgerufen (reproduziert)",
+      "verified": true
+    },
+    {
+      "id": "EV-004",
+      "path": "internal/preflight/preflight.go",
+      "symbol": "checkCredentials",
+      "location": "Check- und Setup-Mode-Zweige",
+      "finding": "Konstruiert credentials.NewLoader(p.homeDir) ohne Moeglichkeit, den Env-Zugriff zu kontrollieren",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

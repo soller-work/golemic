@@ -1,0 +1,315 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "command",
+  "slice_id": "git-hostrepo-pinning",
+  "depends_on": [],
+  "title": "Bug: git-/gh-Aufrufe laufen im Prozess-cwd statt im aufgeloesten Host-Repo",
+  "summary": "Der Runner loest das Host-Repo explizit auf (repo.ResolveHostRepo existiert genau fuer den Symlink-Fall tools/golemic), aber mehrere host-repo-bezogene Kommandos laufen danach trotzdem im Prozess-cwd: die Branch-Kollisionschecks (git branch --list, git ls-remote), der PR-Kollisionscheck und das Issue-Laden (gh leitet das Ziel-Repo aus dem git-Kontext des cwd ab) sowie die Preflight-git-Checks (git worktree list, git config --get remote.origin.url). Im Symlink-Szenario pruefen sie das falsche Repo. Das worktree-Paket pinnt dagegen bereits korrekt mit git -C. Fix: verzeichnis-gepinnte Ausfuehrung im Executor und alle Host-Repo-Aufrufe auf repoRoot pinnen.",
+  "stakeholder_intent": {
+    "actor": "Maintainer",
+    "goal": "Alle git- und gh-Aufrufe des Runners und des Preflights wirken deterministisch auf das aufgeloeste Host-Repo",
+    "business_value": "Kollisionsschutz, Preflight und Issue-Laden funktionieren auch im architektur-vorgesehenen Drop-in-/Symlink-Szenario (tools/golemic) korrekt",
+    "trigger": "golemic run oder golemic preflight wird aus einem cwd aufgerufen, dessen git-Root nicht das Host-Repo ist (z.B. symlinked tools/golemic)",
+    "success_outcome": "Kollisionschecks, gh issue view, gh pr list und Preflight-git-Checks laufen mit Arbeitsverzeichnis bzw. -C = repoRoot"
+  },
+  "scope": {
+    "in_scope": [
+      "Executor um verzeichnis-gepinnte Ausfuehrung erweitern (cmd.Dir; z.B. RunInDir/RunWithEnvInDir)",
+      "Kollisionschecks in internal/runner/collision.go auf repoRoot pinnen (git via -C oder Dir; gh via Arbeitsverzeichnis)",
+      "Issue-Laden in internal/runner/issue.go auf repoRoot pinnen",
+      "Preflight-git-Checks in internal/preflight/preflight.go auf p.repoRoot pinnen",
+      "Unit-Tests, die das effektive Arbeitsverzeichnis bzw. die -C-Argumente per Fake-Executor asserten"
+    ],
+    "out_of_scope": [
+      "internal/worktree (pinnt bereits durchgaengig mit git -C)",
+      "Aenderung der Host-Repo-Aufloesung selbst (repo.ResolveHostRepo bleibt unveraendert)",
+      "gh --repo-Flag-Strategie (gh soll das Repo weiter aus dem git-Kontext des Arbeitsverzeichnisses ableiten)"
+    ]
+  },
+  "preconditions": [
+    "repo.ResolveHostRepo liefert den absoluten Host-Repo-Root (verifiziert, inkl. Symlink-Fall-Doku)",
+    "preflight.Preflight haelt bereits p.repoRoot",
+    "internal/worktree pinnt alle git-Aufrufe mit -C (verifiziert; dient als Muster)"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Jeder git-Aufruf, der das Host-Repo betrifft, laeuft mit -C repoRoot oder Arbeitsverzeichnis repoRoot",
+      "applies_when": "Kollisionschecks (branch --list, ls-remote) und Preflight-git-Checks (worktree list, config --get remote.origin.url) laufen",
+      "outcome": "Die Checks pruefen das aufgeloeste Host-Repo, unabhaengig vom Prozess-cwd"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Jeder gh-Aufruf, der das Host-Repo betrifft, laeuft mit Arbeitsverzeichnis repoRoot",
+      "applies_when": "gh issue view (Issue-Laden) und gh pr list (PR-Kollisionscheck) laufen",
+      "outcome": "gh leitet das Ziel-Repo aus dem git-Kontext des Host-Repos ab, nicht aus dem cwd"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Die Fail-closed-Semantik der Checks bleibt unveraendert",
+      "applies_when": "git-/gh-Kommandos schlagen fehl",
+      "outcome": "Bestehende Fehlerpfade (Abbruch mit Meldung, outcome aborted bzw. Preflight-FAILED) bleiben identisch"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "Verzeichnis-gepinnter Executor",
+      "operation": "Executor fuehrt Kommandos mit explizitem Arbeitsverzeichnis aus (cmd.Dir)",
+      "inputs": [
+        {
+          "name": "dir",
+          "type": "string",
+          "required": true,
+          "constraints": ["absoluter Pfad; fuer Host-Repo-Aufrufe = repoRoot"],
+          "source": "Aufrufer (runner/preflight)"
+        },
+        {
+          "name": "name/args",
+          "type": "string / []string",
+          "required": true,
+          "constraints": ["git- oder gh-Kommando wie bisher"],
+          "source": "Aufrufer"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Kommando erfolgreich",
+          "status": "stdout wie bisher",
+          "body": "Unveraenderte Ausgabe-Vertraege der bestehenden Executor-Methoden"
+        },
+        {
+          "condition": "Kommando schlaegt fehl",
+          "status": "Fehler wie bisher",
+          "body": "Bestehende Fehler-Wrapping-Semantik (ErrExit etc.) bleibt erhalten"
+        }
+      ],
+      "errors": [
+        {
+          "code": "EXEC_FAILED",
+          "condition": "git/gh liefert Exit != 0",
+          "status": "Aufrufer behandelt fail-closed wie bisher",
+          "message": "Bestehende Fehlermeldungen der Aufrufstellen (unveraendert)"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "preflight.Executor-Interface und Implementierungen (inkl. Fakes in Tests)",
+      "precondition": "Executor kennt nur Run/RunWithEnv ohne Arbeitsverzeichnis-Kontrolle",
+      "changes": [
+        {
+          "field": "Interface",
+          "operation": "append",
+          "value_source": "Verzeichnis-gepinnte Variante(n) mit cmd.Dir (z.B. RunInDir/RunWithEnvInDir)"
+        }
+      ]
+    },
+    {
+      "id": "SC-002",
+      "target": "internal/runner/collision.go (checkBranchCollision, checkPRCollision) und internal/runner/issue.go (loadIssue)",
+      "precondition": "git branch --list, git ls-remote, gh pr list und gh issue view laufen im Prozess-cwd",
+      "changes": [
+        {
+          "field": "Kommando-Ausfuehrung",
+          "operation": "set",
+          "value_source": "Alle vier Aufrufe auf repoRoot gepinnt (git via -C oder Dir; gh via Arbeitsverzeichnis repoRoot)"
+        }
+      ]
+    },
+    {
+      "id": "SC-003",
+      "target": "internal/preflight/preflight.go (checkGit)",
+      "precondition": "git worktree list und git config --get remote.origin.url laufen im Prozess-cwd",
+      "changes": [
+        {
+          "field": "Kommando-Ausfuehrung",
+          "operation": "set",
+          "value_source": "Beide Aufrufe auf p.repoRoot gepinnt"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Unveraendert: gh-Aufrufe mit rollenspezifischem GH_TOKEN via RunWithEnv",
+    "authorization_rules": ["Keine neuen"],
+    "data_classification": "Repo-Metadaten (Branches, PRs, Remotes)",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/preflight/preflight.go (Executor-Interface + checkGit)",
+      "internal/runner/collision.go",
+      "internal/runner/issue.go",
+      "internal/runner/runner_test.go",
+      "internal/preflight/git_test.go",
+      "Fake-Executors in den betroffenen Test-Dateien"
+    ],
+    "integration_points": [
+      "repo.ResolveHostRepo liefert das Pinning-Ziel repoRoot",
+      "internal/worktree als bestehendes -C-Pinning-Muster"
+    ],
+    "architecture_constraints": [
+      "docs/architecture.md 2.7: golemic arbeitet auf dem umgebenden Host-Repo, nicht auf sich selbst",
+      "docs/architecture.md 2.11: Kollisionschecks muessen das richtige Repo pruefen (Abbruch mit klarer Meldung)",
+      "docs/architecture.md 2.12: gh/git hinter schmalen injizierbaren Executors; Erweiterung folgt dem bestehenden Muster"
+    ],
+    "allowed_changes": [
+      "Executor-Interface-Erweiterung inkl. aller Implementierungen und Test-Fakes",
+      "Aufrufstellen in collision.go, issue.go, preflight.go",
+      "Testanpassungen und neue Assertions"
+    ],
+    "forbidden_changes": [
+      "Keine Aenderung an repo.ResolveHostRepo",
+      "Keine Aenderung an internal/worktree",
+      "Keine Verhaltensaenderung der Fehlerpfade"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Interface-Erweiterung mit Anpassung aller bekannten Implementierungen im selben Commit",
+    "consistency_and_concurrency": "Nicht relevant; sequentielle Kommandoausfuehrung wie bisher"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Kollisionschecks pruefen das Host-Repo",
+      "given": ["Ein Runner mit repoRoot != Prozess-cwd (Fake-Executor zeichnet Arbeitsverzeichnis/Argumente auf)"],
+      "when": ["checkAllCollisions laeuft"],
+      "then": [
+        "git branch --list und git ls-remote laufen mit -C repoRoot bzw. Arbeitsverzeichnis repoRoot",
+        "gh pr list laeuft mit Arbeitsverzeichnis repoRoot"
+      ],
+      "traces_to": ["BR-001", "BR-002", "SC-001", "SC-002", "IF-001"]
+    },
+    {
+      "id": "AC-002",
+      "title": "Issue-Laden zielt auf das Host-Repo",
+      "given": ["Ein Runner mit repoRoot != Prozess-cwd"],
+      "when": ["loadIssue laeuft"],
+      "then": ["gh issue view laeuft mit Arbeitsverzeichnis repoRoot und rollenspezifischem GH_TOKEN"],
+      "traces_to": ["BR-002", "SC-002", "IF-001"]
+    },
+    {
+      "id": "AC-003",
+      "title": "Preflight-git-Checks pruefen das Host-Repo",
+      "given": ["Ein Preflight mit repoRoot != Prozess-cwd"],
+      "when": ["checkGit laeuft"],
+      "then": [
+        "git worktree list und git config --get remote.origin.url laufen gepinnt auf p.repoRoot",
+        "HTTPS-Remote-Pruefung bewertet das Remote des Host-Repos"
+      ],
+      "traces_to": ["BR-001", "SC-003", "IF-001"]
+    },
+    {
+      "id": "AC-004",
+      "title": "Fehlerpfade unveraendert",
+      "given": ["Fake-Executor laesst ein gepinntes Kommando fehlschlagen"],
+      "when": ["Kollisionscheck bzw. Preflight laeuft"],
+      "then": [
+        "Bestehendes Fail-closed-Verhalten: Abbruch mit Meldung, outcome aborted bzw. FAILED-Result",
+        "Bestehende Tests und E2E-Suite bleiben gruen"
+      ],
+      "traces_to": ["BR-003", "SC-002", "SC-003"]
+    }
+  ],
+  "quality": {
+    "required_test_levels": ["unit", "integration"],
+    "test_cases": [
+      "Unit: Fake-Executor-Assertions auf Arbeitsverzeichnis/-C fuer alle sechs Aufrufstellen",
+      "Unit: Fehlerpfade der gepinnten Kommandos unveraendert",
+      "Integration: bestehende E2E-Suite gruen"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "env -u GOLEMIC_DEV_TOKEN -u GOLEMIC_REVIEWER_TOKEN go test ./...",
+      "golangci-lint run ./..."
+    ],
+    "non_functional_requirements": [
+      "Executor-Erweiterung bleibt schmal und folgt dem bestehenden Interface-Stil"
+    ],
+    "definition_of_done": [
+      "Alle host-repo-bezogenen git-/gh-Aufrufe in runner und preflight sind auf repoRoot gepinnt",
+      "Fake-Executor-Assertions decken das Pinning ab",
+      "Alle Tests und Lint gruen"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Pinning-Mechanismus",
+      "decision": "Executor erhaelt verzeichnis-gepinnte Ausfuehrung (cmd.Dir); git alternativ via -C, gh ueber das Arbeitsverzeichnis (kein --repo-Flag)",
+      "source": "confirmed_recommendation",
+      "evidence_ids": ["EV-001", "EV-002", "EV-003"],
+      "rationale": "gh leitet das Ziel-Repo aus dem git-Kontext des Arbeitsverzeichnisses ab; cmd.Dir loest git und gh einheitlich und folgt dem Executor-Injektionsmuster aus Architektur 2.12"
+    },
+    {
+      "id": "D-002",
+      "topic": "Abgrenzung worktree-Paket",
+      "decision": "internal/worktree bleibt unangetastet",
+      "source": "codebase",
+      "evidence_ids": ["EV-004"],
+      "rationale": "Alle git-Aufrufe dort sind bereits mit -C repoRoot bzw. -C wtPath gepinnt (verifiziert)"
+    },
+    {
+      "id": "D-003",
+      "topic": "Warum Pinning noetig ist",
+      "decision": "cwd-git-Root und Host-Repo koennen divergieren; das ist der dokumentierte Symlink-Fall",
+      "source": "codebase",
+      "evidence_ids": ["EV-005"],
+      "rationale": "repo.ResolveHostRepo existiert genau fuer diesen Fall; nach der Aufloesung muss sie auch durchgaengig verwendet werden"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/runner/collision.go",
+      "symbol": "checkBranchCollision / checkPRCollision",
+      "location": "git branch --list (~Zeile 36), git ls-remote (~Zeile 48), gh pr list (~Zeile 68)",
+      "finding": "Alle drei Kommandos laufen ohne -C/Arbeitsverzeichnis-Pinning im Prozess-cwd",
+      "verified": true
+    },
+    {
+      "id": "EV-002",
+      "path": "internal/runner/issue.go",
+      "symbol": "loadIssue",
+      "location": "gh issue view via RunWithEnv",
+      "finding": "gh issue view laeuft im Prozess-cwd; gh leitet das Ziel-Repo aus dem dortigen git-Kontext ab",
+      "verified": true
+    },
+    {
+      "id": "EV-003",
+      "path": "internal/preflight/preflight.go",
+      "symbol": "checkGit",
+      "location": "git worktree list (~Zeile 187), git config --get remote.origin.url (~Zeile 193)",
+      "finding": "Beide Checks laufen ohne Pinning im Prozess-cwd, obwohl p.repoRoot vorhanden ist",
+      "verified": true
+    },
+    {
+      "id": "EV-004",
+      "path": "internal/worktree/worktree.go",
+      "symbol": "Create / CreateForReviewer / IsDirty / Cleanup",
+      "location": "Alle executor.Run-Aufrufe",
+      "finding": "Durchgaengig mit git -C repoRoot bzw. -C wtPath gepinnt — dient als Muster und ist von diesem Issue ausgenommen",
+      "verified": true
+    },
+    {
+      "id": "EV-005",
+      "path": "internal/repo/resolve.go",
+      "symbol": "ResolveHostRepo",
+      "location": "Doc-Kommentar und Algorithmus",
+      "finding": "Behandelt explizit den Fall, dass das git-Root des cwd das symlinked golemic-Repo statt des Host-Repos ist",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}
