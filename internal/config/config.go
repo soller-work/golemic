@@ -16,6 +16,7 @@ type Config struct {
 	Label          string `json:"label"`
 	Models         Models `json:"models"`
 	TimeoutMinutes int    `json:"timeout_minutes"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
 // configRaw is used for parsing to detect missing vs zero values
@@ -25,6 +26,7 @@ type configRaw struct {
 	Label          *string    `json:"label"`
 	Models         *modelsRaw `json:"models"`
 	TimeoutMinutes *int       `json:"timeout_minutes"`
+	TimeoutSeconds *int       `json:"timeout_seconds"`
 }
 
 // modelsRaw is used for parsing models to detect missing vs zero values
@@ -121,6 +123,11 @@ func Load(repoRoot string) (*Config, error) {
 		config.TimeoutMinutes = *raw.TimeoutMinutes
 	}
 
+	// Extract timeout_seconds (optional; if > 0 overrides timeout_minutes in runner)
+	if raw.TimeoutSeconds != nil {
+		config.TimeoutSeconds = *raw.TimeoutSeconds
+	}
+
 	// Validate required fields
 	if config.Project == "" {
 		return nil, fmt.Errorf("required field 'project' is missing or empty in config file %s", configPath)
@@ -152,6 +159,12 @@ func Load(repoRoot string) (*Config, error) {
 	} else {
 		// Field not present, apply default
 		config.TimeoutMinutes = 30
+	}
+
+	// Validate timeout_seconds if explicitly set
+	if raw.TimeoutSeconds != nil && config.TimeoutSeconds <= 0 {
+		return nil, fmt.Errorf("field 'timeout_seconds' must be > 0, got %d in config file %s",
+			config.TimeoutSeconds, configPath)
 	}
 
 	return config, nil

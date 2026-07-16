@@ -435,7 +435,12 @@ func (r *Runner) Run() int {
 // Returns final outcome.
 func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) string {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	timeoutDuration := time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+	var timeoutDuration time.Duration
+	if r.cfg.TimeoutSeconds > 0 {
+		timeoutDuration = time.Duration(r.cfg.TimeoutSeconds) * time.Second
+	} else {
+		timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+	}
 
 	// PS-002: Create dev worktree
 	if err := worktree.Create(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer); err != nil {

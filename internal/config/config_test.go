@@ -183,6 +183,33 @@ func TestLoad(t *testing.T) {
 			},
 		},
 		{
+			name: "timeout_seconds valid overrides minutes",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"timeout_seconds": 5
+			}`,
+			wantErr: false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.TimeoutSeconds != 5 {
+					t.Errorf("TimeoutSeconds = %v, want 5", cfg.TimeoutSeconds)
+				}
+				if cfg.TimeoutMinutes != 30 {
+					t.Errorf("TimeoutMinutes = %v, want 30 (default)", cfg.TimeoutMinutes)
+				}
+			},
+		},
+		{
+			name: "timeout_seconds zero is rejected",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"timeout_seconds": 0
+			}`,
+			wantErr:     true,
+			errContains: "timeout_seconds",
+		},
+		{
 			name: "empty label gets default",
 			configContent: `{
 				"project": "test",
