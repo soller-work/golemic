@@ -1,0 +1,258 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "command",
+  "slice_id": "split-runner-package",
+  "depends_on": [
+    "golangci-lint-guardrail"
+  ],
+  "title": "Abbau: internal/runner nach Verantwortlichkeit auf mehrere Dateien splitten",
+  "summary": "Zerlegt die monolithische runner.go (633 Zeilen) verhaltensneutral in mehrere Dateien innerhalb desselben Pakets internal/runner, geschnitten nach Verantwortlichkeit (Orchestrierung, einzelne Schritte, Fehlertypen). Keine oeffentliche API- oder Verhaltensaenderung; bestehende Tests bleiben unveraendert gruen.",
+  "stakeholder_intent": {
+    "actor": "Maintainer / Go-Entwickler",
+    "goal": "Die groesste Einzeldatei nach Concern aufteilen, ohne Verhalten zu aendern",
+    "business_value": "Reduziert bestehende Komplexitaets-Schuld und verbessert Lesbarkeit/SRP im Orchestrator-Paket",
+    "trigger": "Wartungsarbeit am runner-Paket bzw. geplanter Schuldenabbau",
+    "success_outcome": "internal/runner besteht aus mehreren fokussierten Dateien; go build und alle bestehenden Tests bleiben gruen; keine Signaturaenderung"
+  },
+  "scope": {
+    "in_scope": [
+      "Aufteilen von internal/runner/runner.go in mehrere .go-Dateien im selben Paket",
+      "Schnitt nach Verantwortlichkeit (z.B. Orchestrierung, einzelne Schritte, Fehlertypen)",
+      "Beibehaltung aller Signaturen, Typen und des Verhaltens"
+    ],
+    "out_of_scope": [
+      "Verhaltensaenderungen oder neue Features",
+      "Aenderung der oeffentlichen API des runner-Pakets",
+      "Aufteilen von runner_test.go (separat, falls noetig)",
+      "Neue Pakete anlegen"
+    ]
+  },
+  "preconditions": [
+    "make lint aus golangci-lint-guardrail verfuegbar",
+    "Bestehende runner-Tests sind gruen",
+    "internal/runner/runner.go umfasst ~633 Zeilen in einer Datei"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Verhaltensneutral: kein beobachtbares Verhalten aendert sich",
+      "applies_when": "Code wird zwischen Dateien verschoben",
+      "outcome": "Bestehende Tests bleiben unveraendert gruen"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Paketgrenze bleibt package runner; kein neues Paket",
+      "applies_when": "Dateien werden erzeugt",
+      "outcome": "Alle neuen Dateien tragen package runner"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Keine oeffentliche Signatur aendert sich",
+      "applies_when": "Symbole werden verschoben",
+      "outcome": "Aufrufer (cmd, Tests) kompilieren ohne Aenderung"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "internal_api",
+      "name": "internal/runner Paket-API",
+      "operation": "unveraenderte exportierte Typen/Funktionen des runner-Pakets",
+      "inputs": [
+        {
+          "name": "keine neuen Eingaben",
+          "type": "string",
+          "required": false,
+          "constraints": [
+            "Signaturen unveraendert"
+          ],
+          "source": "bestehender Code"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "nach Refactoring",
+          "status": "unveraendert",
+          "body": "identische exportierte API wie vor dem Split"
+        }
+      ],
+      "errors": []
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": "internal/runner (Paketdateien)",
+      "precondition": "runner.go enthaelt alle Verantwortlichkeiten in einer Datei",
+      "changes": [
+        {
+          "field": "runner.go",
+          "operation": "set",
+          "value_source": "auf Kern-Orchestrierung reduziert"
+        },
+        {
+          "field": "zusaetzliche .go-Dateien im Paket runner",
+          "operation": "create",
+          "value_source": "aus runner.go extrahierte, nach Concern gruppierte Symbole"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Nicht relevant",
+    "authorization_rules": [
+      "Keine"
+    ],
+    "data_classification": "Quellcode",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      "internal/runner/"
+    ],
+    "integration_points": [
+      "cmd/golemic (Aufrufer des runner-Pakets)"
+    ],
+    "architecture_constraints": [
+      "Kein neues Paket; package runner bleibt die Grenze",
+      "Verhaltensneutral"
+    ],
+    "allowed_changes": [
+      "Symbole zwischen neuen Dateien im runner-Paket verschieben",
+      "runner.go verschlanken"
+    ],
+    "forbidden_changes": [
+      "Keine Signatur-/Verhaltensaenderung",
+      "Kein neues Paket",
+      "Keine Aenderung an cmd oder anderen Paketen"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Reines Verschieben von Code innerhalb des Pakets",
+    "consistency_and_concurrency": "Nicht relevant; keine Laufzeitaenderung"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Tests bleiben nach Split gruen",
+      "given": [
+        "runner.go wurde in mehrere Dateien zerlegt"
+      ],
+      "when": [
+        "go test ./internal/runner laeuft"
+      ],
+      "then": [
+        "Alle bestehenden Tests bestehen unveraendert",
+        "go build ./... erfolgreich"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-003",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Paketgrenze unveraendert",
+      "given": [
+        "Neue Dateien im runner-Paket"
+      ],
+      "when": [
+        "Dateien werden inspiziert"
+      ],
+      "then": [
+        "Alle tragen package runner",
+        "cmd kompiliert ohne Aenderung gegen die runner-API"
+      ],
+      "traces_to": [
+        "BR-002",
+        "BR-003",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Geaenderter Code haelt den Guardrail ein",
+      "given": [
+        "make lint aus golangci-lint-guardrail ist aktiv"
+      ],
+      "when": [
+        "make lint auf den verschobenen/veraenderten Zeilen laeuft"
+      ],
+      "then": [
+        "Keine neuen Komplexitaets-Findings auf dem angefassten Code",
+        "Exit-Code 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "SC-001",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Bestehende runner-Tests unveraendert ausfuehren",
+      "go build ./... nach Split"
+    ],
+    "quality_commands": [
+      "go build ./...",
+      "go test ./internal/runner",
+      "make lint"
+    ],
+    "non_functional_requirements": [
+      "Jede resultierende Datei hat eine erkennbar einzelne Verantwortlichkeit"
+    ],
+    "definition_of_done": [
+      "runner.go in mehrere fokussierte Dateien zerlegt",
+      "Alle bestehenden Tests gruen ohne Aenderung",
+      "go build ./... erfolgreich",
+      "make lint gruen auf angefasstem Code"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Refactoring-Grenze",
+      "decision": "Split innerhalb desselben Pakets, kein neues Paket, verhaltensneutral",
+      "source": "user",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "Go organisiert nach Paket, nicht nach Datei; mehr Dateien pro Paket ist idiomatisch"
+    },
+    {
+      "id": "D-002",
+      "topic": "Zuschnitt getrennt von Tests",
+      "decision": "Quelldatei-Split getrennt vom Testdatei-Split (Issue split-large-test-files)",
+      "source": "user",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "Unterschiedliche Risiken (Produktivcode vs. Test), unabhaengig deploybar"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/runner/runner.go",
+      "symbol": null,
+      "location": "gesamte Datei",
+      "finding": "633 Zeilen in einer Datei; runner ist Orchestrator und importiert agent, config, credentials, eventlog, preflight, prompt, repo, worktree",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

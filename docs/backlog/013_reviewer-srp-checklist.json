@@ -1,0 +1,245 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "command",
+  "slice_id": "reviewer-srp-checklist",
+  "depends_on": [],
+  "title": "Reviewer-Checkliste um Struct-/Package-SRP ergaenzen",
+  "summary": "Ergaenzt die verbindliche Pruef-Checkliste des dev-loop-Reviewers (.pi/agents/reviewer.md) um einen expliziten Single-Responsibility-Punkt auf Struct-/Package-Ebene. Deckt genau das ab, was statische Linter nicht sehen (Kohaesion/God-Struct), leichtgewichtig als Review-Kriterium statt als Metrik-Tooling.",
+  "stakeholder_intent": {
+    "actor": "Maintainer",
+    "goal": "SRP auf Struct-/Package-Ebene als verbindlichen Review-Punkt verankern",
+    "business_value": "Faengt Kohaesions-/God-Struct-Verstoesse ab, die golangci-lint prinzipbedingt nicht erkennt",
+    "trigger": "Reviewer-Agent bearbeitet ein Code-Review im dev-loop",
+    "success_outcome": "Die Reviewer-Checkliste enthaelt einen SRP-Punkt, der bei jedem Review explizit abgearbeitet wird"
+  },
+  "scope": {
+    "in_scope": [
+      "Neuer Checklisten-Punkt zu Single Responsibility (Struct-/Package-Kohaesion, God-Struct/God-Package) in .pi/agents/reviewer.md",
+      "Einordnung in die bestehende Severity-Systematik (P-Stufen)"
+    ],
+    "out_of_scope": [
+      "SonarQube/LCOM-Tooling",
+      "Aenderung anderer Reviewer-Dateien (prompts/reviewer.md, template-Guidelines)",
+      "Statische Linter-Regeln (Issues golangci-lint-guardrail, depguard-import-rules)"
+    ]
+  },
+  "preconditions": [
+    ".pi/agents/reviewer.md existiert und enthaelt eine nummerierte Pruef-Checkliste (Items 1-8)",
+    "Bestehende Severity-Skala (P1-P4) ist definiert"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "SRP-Punkt wird als explizites Checklisten-Item ergaenzt, nicht als Fliesstext",
+      "applies_when": "Die Checkliste in .pi/agents/reviewer.md wird bearbeitet",
+      "outcome": "Neues nummeriertes Item, das der Reviewer explizit erwaehnen muss"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Der Punkt zielt auf Struct-/Package-Ebene, nicht auf Funktions-Komplexitaet",
+      "applies_when": "Formulierung des Items",
+      "outcome": "Abgrenzung zu funlen/gocyclo, die Funktionen abdecken"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Leichtgewichtig: nur Checklisten-Ergaenzung, keine neue Tooling-Abhaengigkeit",
+      "applies_when": "Umfang des Issues",
+      "outcome": "Keine Metrik-Infrastruktur wird eingefuehrt"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "other",
+      "name": "Reviewer-Agent-Guideline",
+      "operation": "Reviewer arbeitet die Pruef-Checkliste in .pi/agents/reviewer.md ab",
+      "inputs": [
+        {
+          "name": "Code-Aenderung unter Review",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Diff/Slice im dev-loop"
+          ],
+          "source": "dev-loop"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Review abgeschlossen",
+          "status": "Checkliste inkl. SRP-Item abgearbeitet",
+          "body": "Review-Findings mit explizitem SRP-Statement (Befund oder 'geprueft, kein Befund')"
+        }
+      ],
+      "errors": []
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": ".pi/agents/reviewer.md (Pruef-Checkliste)",
+      "precondition": "Checkliste enthaelt Items 1-8 ohne dedizierten SRP-Punkt",
+      "changes": [
+        {
+          "field": "Pruef-Checkliste",
+          "operation": "append",
+          "value_source": "Neues Item: Single Responsibility auf Struct-/Package-Ebene (Kohaesion, kein God-Struct/God-Package), mit Severity-Einordnung"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Nicht relevant",
+    "authorization_rules": [
+      "Keine"
+    ],
+    "data_classification": "Agent-Konfiguration",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      ".pi/agents/reviewer.md"
+    ],
+    "integration_points": [
+      "dev-loop Reviewer-Subagent"
+    ],
+    "architecture_constraints": [
+      "Nur die Checkliste in .pi/agents/reviewer.md wird ergaenzt",
+      "Bestehende Severity- und Verdikt-Regeln bleiben unveraendert"
+    ],
+    "allowed_changes": [
+      "Ergaenzung eines Checklisten-Items",
+      "Kurze Severity-Einordnung des neuen Items"
+    ],
+    "forbidden_changes": [
+      "Keine Aenderung an prompts/reviewer.md oder template-Guidelines",
+      "Kein neues Tooling",
+      "Keine Aenderung der Verdikt-Kontrakt-Zeile"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Additive Doku-/Konfig-Ergaenzung",
+    "consistency_and_concurrency": "Nicht relevant"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "SRP-Item ist in der Checkliste vorhanden",
+      "given": [
+        ".pi/agents/reviewer.md wurde bearbeitet"
+      ],
+      "when": [
+        "Die Pruef-Checkliste wird gelesen"
+      ],
+      "then": [
+        "Ein nummeriertes Item adressiert Single Responsibility auf Struct-/Package-Ebene",
+        "Es ist in die P-Severity-Systematik eingeordnet"
+      ],
+      "traces_to": [
+        "BR-001",
+        "BR-002",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Abgrenzung zu Funktions-Komplexitaet ist klar",
+      "given": [
+        "Das neue Item ist formuliert"
+      ],
+      "when": [
+        "Der Text wird geprueft"
+      ],
+      "then": [
+        "Der Punkt bezieht sich auf Kohaesion/God-Struct/God-Package",
+        "Er dupliziert nicht die statisch gepruefte Funktions-Komplexitaet"
+      ],
+      "traces_to": [
+        "BR-002",
+        "BR-003",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Keine weiteren Dateien oder Tooling geaendert",
+      "given": [
+        "Das Issue ist umgesetzt"
+      ],
+      "when": [
+        "Der Diff wird inspiziert"
+      ],
+      "then": [
+        "Nur .pi/agents/reviewer.md wurde geaendert",
+        "Keine neue Tooling-Abhaengigkeit wurde hinzugefuegt"
+      ],
+      "traces_to": [
+        "BR-003",
+        "SC-001",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "unit"
+    ],
+    "test_cases": [
+      "Sichtpruefung: SRP-Item vorhanden und severity-eingeordnet",
+      "Diff betrifft ausschliesslich .pi/agents/reviewer.md"
+    ],
+    "quality_commands": [
+      "git diff --stat .pi/agents/reviewer.md"
+    ],
+    "non_functional_requirements": [
+      "Formulierung bleibt knapp und im Stil der bestehenden Checkliste"
+    ],
+    "definition_of_done": [
+      "SRP-Checklisten-Item in .pi/agents/reviewer.md ergaenzt und severity-eingeordnet",
+      "Keine anderen Dateien geaendert",
+      "Abgrenzung zur Funktions-Komplexitaet im Text erkennbar"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Mechanismus fuer Struct-SRP",
+      "decision": "Leichtgewichtige Reviewer-Checkliste statt SonarQube/LCOM-Tooling",
+      "source": "user",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "Struct-Kohaesion ist eine Urteils-, keine Metrikfrage; passt zum bestehenden Reviewer-Verfahren"
+    },
+    {
+      "id": "D-002",
+      "topic": "Zieldatei",
+      "decision": "Nur .pi/agents/reviewer.md (dev-loop-Reviewer), nicht die Scaffolding-Templates",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "Diese Datei steuert den Reviewer, der golemics eigenen Code prueft"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": ".pi/agents/reviewer.md",
+      "symbol": null,
+      "location": "Abschnitt 'Pruef-Checkliste' (Items 1-8) und Severity-Skala",
+      "finding": "Reviewer-Agent hat eine nummerierte Pruef-Checkliste mit 8 Items und eine P1-P4-Severity-Skala; kein dedizierter Struct-/Package-SRP-Punkt vorhanden",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}

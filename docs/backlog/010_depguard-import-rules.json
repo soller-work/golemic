@@ -1,0 +1,261 @@
+{
+  "schema_version": "1.1.0",
+  "readiness": "ready",
+  "slice_type": "command",
+  "slice_id": "depguard-import-rules",
+  "depends_on": [
+    "golangci-lint-guardrail"
+  ],
+  "title": "depguard Import-Richtungs-Regeln (Architektur einfrieren)",
+  "summary": "Aktiviert den depguard-Linter in der bestehenden .golangci.yml und kodiert die verifizierte azyklische Import-Schichtung: internal-Pakete duerfen cmd nicht importieren, und die bestehende Richtung (runner als Orchestrator, Blattpakete ohne Rueckwaertskanten) wird eingefroren. Laeuft repo-weit, weil der Import-Graph bereits sauber ist.",
+  "stakeholder_intent": {
+    "actor": "Maintainer / Go-Entwickler",
+    "goal": "Die vorhandene, saubere Import-Richtung zwischen den Paketen statisch erzwingen",
+    "business_value": "Verhindert Architektur-Regressionen (Zyklen, falsche Abhaengigkeitsrichtung), bevor sie im Review durchrutschen",
+    "trigger": "Entwickler fuehrt make lint aus",
+    "success_outcome": "Ein Import, der die erlaubte Richtung verletzt, laesst make lint fehlschlagen"
+  },
+  "scope": {
+    "in_scope": [
+      "depguard-Konfiguration in der bestehenden .golangci.yml",
+      "Regel: kein internal-Paket importiert cmd",
+      "Regel: Blattpakete (agent, config, eventlog, prompt, template) importieren keine hoeheren Pakete wie runner",
+      "depguard laeuft repo-weit (nicht new-from-rev), da der Graph bereits azyklisch ist"
+    ],
+    "out_of_scope": [
+      "Aenderung der aktuellen Import-Struktur",
+      "Komplexitaetslinter (Issue golangci-lint-guardrail)",
+      "Package-Kohaesion/LCOM"
+    ]
+  },
+  "preconditions": [
+    ".golangci.yml existiert (aus Issue golangci-lint-guardrail)",
+    "Import-Graph ist azyklisch und verifiziert"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Kein internal-Paket darf cmd importieren",
+      "applies_when": "Ein Import auf golemic/cmd aus internal auftaucht",
+      "outcome": "depguard-Verstoss, Exit ungleich 0"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Blattpakete duerfen keine hoeheren Orchestrator-Pakete importieren",
+      "applies_when": "agent/config/eventlog/prompt/template importiert runner (oder erzeugt eine Rueckwaertskante)",
+      "outcome": "depguard-Verstoss, Exit ungleich 0"
+    },
+    {
+      "id": "BR-003",
+      "rule": "Regeln gelten repo-weit, nicht nur auf geaenderten Zeilen",
+      "applies_when": "make lint laeuft",
+      "outcome": "depguard prueft alle Dateien, da der Graph bereits sauber ist"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "cli",
+      "name": "make lint (depguard)",
+      "operation": "make lint",
+      "inputs": [
+        {
+          "name": "Go-Importgraph",
+          "type": "string",
+          "required": true,
+          "constraints": [
+            "Import-Statements aller Pakete"
+          ],
+          "source": "Dateisystem"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "keine verbotene Kante",
+          "status": "exit 0",
+          "body": "keine Ausgabe"
+        },
+        {
+          "condition": "verbotene Import-Kante",
+          "status": "exit 1",
+          "body": "stdout: depguard-Report mit Datei:Zeile und verletzter Regel"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "verbotener Import",
+          "code": "1",
+          "status": "exit 1",
+          "message": "depguard: import not allowed"
+        }
+      ]
+    }
+  ],
+  "read_models": [],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [
+    {
+      "id": "SC-001",
+      "target": ".golangci.yml (depguard-Sektion)",
+      "precondition": "depguard nicht konfiguriert",
+      "changes": [
+        {
+          "field": "linters/depguard-Regeln",
+          "operation": "append",
+          "value_source": "Erlaubte Import-Kanten gemaess verifiziertem Graph"
+        }
+      ]
+    }
+  ],
+  "side_effects": [],
+  "security": {
+    "authentication": "Keine; lokales Werkzeug",
+    "authorization_rules": [
+      "Keine besonderen Rechte erforderlich"
+    ],
+    "data_classification": "Quellcode-Metadaten",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      ".golangci.yml"
+    ],
+    "integration_points": [
+      "golangci-lint depguard-Linter"
+    ],
+    "architecture_constraints": [
+      "Aktuelle Import-Richtung ist verbindlich: runner ist Orchestrator; cmd importiert runner/repo/preflight/eventlog",
+      "Keine Produktivcode-Aenderung"
+    ],
+    "allowed_changes": [
+      "Ergaenzung der depguard-Sektion in .golangci.yml"
+    ],
+    "forbidden_changes": [
+      "Keine Aenderung bestehender Imports",
+      "Kein Umbau der Paketstruktur"
+    ],
+    "dependencies": [],
+    "migration_strategy": "Additiv; nur Konfigurationsergaenzung",
+    "consistency_and_concurrency": "Nicht relevant"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Verbotener cmd-Import scheitert",
+      "given": [
+        "depguard ist konfiguriert",
+        "Ein internal-Paket importiert testweise golemic/cmd"
+      ],
+      "when": [
+        "make lint laeuft"
+      ],
+      "then": [
+        "depguard meldet den verbotenen Import mit Datei:Zeile",
+        "Exit-Code ungleich 0"
+      ],
+      "traces_to": [
+        "BR-001",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-002",
+      "title": "Rueckwaertskante aus Blattpaket scheitert",
+      "given": [
+        "depguard ist konfiguriert",
+        "Ein Blattpaket importiert testweise runner"
+      ],
+      "when": [
+        "make lint laeuft"
+      ],
+      "then": [
+        "depguard meldet die verbotene Kante",
+        "Exit-Code ungleich 0"
+      ],
+      "traces_to": [
+        "BR-002",
+        "SC-001",
+        "IF-001"
+      ]
+    },
+    {
+      "id": "AC-003",
+      "title": "Aktueller Graph bleibt gruen",
+      "given": [
+        "depguard ist konfiguriert",
+        "Der unveraenderte, azyklische Import-Graph"
+      ],
+      "when": [
+        "make lint laeuft"
+      ],
+      "then": [
+        "Keine Findings",
+        "Exit-Code 0"
+      ],
+      "traces_to": [
+        "BR-003",
+        "SC-001",
+        "IF-001"
+      ]
+    }
+  ],
+  "quality": {
+    "required_test_levels": [
+      "integration"
+    ],
+    "test_cases": [
+      "make lint gruen auf aktuellem Graph",
+      "make lint rot bei kuenstlichem cmd-Import aus internal",
+      "make lint rot bei kuenstlicher Rueckwaertskante"
+    ],
+    "quality_commands": [
+      "make lint"
+    ],
+    "non_functional_requirements": [
+      "depguard-Regeln bleiben lesbar und pflegbar"
+    ],
+    "definition_of_done": [
+      "depguard in .golangci.yml aktiv und konfiguriert",
+      "Aktueller Graph erzeugt keine Findings",
+      "Verbotene Kanten werden nachweisbar gemeldet"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Reichweite",
+      "decision": "depguard laeuft repo-weit, nicht im new-from-rev-Modus",
+      "source": "confirmed_recommendation",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "Der Import-Graph ist bereits azyklisch und sauber, daher sofort gruen"
+    },
+    {
+      "id": "D-002",
+      "topic": "Erlaubte Richtung",
+      "decision": "Kein internal->cmd; Blattpakete ohne Rueckwaertskante; runner als Orchestrator",
+      "source": "codebase",
+      "evidence_ids": [
+        "EV-001"
+      ],
+      "rationale": "Spiegelt die verifizierte bestehende Schichtung wider"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "internal/runner/runner.go",
+      "symbol": null,
+      "location": "Import-Bloecke aller internal-Pakete und cmd",
+      "finding": "Azyklische Schichtung: agent/config/eventlog/prompt/template sind Blaetter; credentials->template; preflight->config,credentials; repo->preflight; worktree->eventlog,preflight; runner importiert alle; cmd importiert runner,repo,preflight,eventlog; kein internal importiert cmd",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}
