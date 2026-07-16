@@ -25,7 +25,7 @@ var knownCommands = []struct {
 	{"run", "Run the main process (golemic run --issue N)"},
 	{"emit", "Emit an event to the run log"},
 	{"open-pr", "Open a pull request (not implemented)"},
-	{"submit-review", "Submit a review (not implemented)"},
+	{"submit-review", "Submit a review"},
 }
 
 func usage(w io.Writer) {
@@ -79,6 +79,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if command == "open-pr" {
 		return runOpenPR(args, stdout, stderr, os.Getenv, osExecutor{})
+	}
+
+	if command == "submit-review" {
+		return runSubmitReview(args, stdout, stderr, os.Getenv, osExecutor{})
 	}
 
 	for _, c := range knownCommands {
@@ -322,6 +326,117 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 
 	// Print PR URL to stdout for the caller.
 	fmt.Fprintln(stdout, prURL)
+	return 0
+}
+
+// runSubmitReview executes the submit-review subcommand:
+// golemic submit-review --verdict approved|changes_requested --body <text> --pr <n>
+// It validates env var context and verdict (fail-fast), submits a review via gh pr review,
+// and writes a review_submitted event atomically (only on gh success).
+func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int {
+	fs := flag.NewFlagSet("submit-review", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var verdictFlag string
+	var bodyFlag string
+	var prFlag int
+	fs.StringVar(&verdictFlag, "verdict", "", "Verdict: 'approved' or 'changes_requested' (required)")
+	fs.StringVar(&bodyFlag, "body", "", "Review body (required)")
+	fs.IntVar(&prFlag, "pr", 0, "PR number (required)")
+
+	if err := fs.Parse(args[2:]); err != nil {
+		return 1
+	}
+
+	// BR-004: Check env vars before any gh/git call.
+	runID := getenv("GOLEMIC_RUN_ID")
+	eventLogPath := getenv("GOLEMIC_EVENT_LOG")
+
+	if runID == "" || eventLogPath == "" {
+		var missing []string
+		if runID == "" {
+			missing = append(missing, "GOLEMIC_RUN_ID")
+		}
+		if eventLogPath == "" {
+			missing = append(missing, "GOLEMIC_EVENT_LOG")
+		}
+		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		return 1
+	}
+
+	// BR-001, BR-005: Validate verdict before any gh call (fail-fast).
+	if verdictFlag != "approved" && verdictFlag != "changes_requested" {
+		fmt.Fprintf(stderr, "Invalid verdict: must be 'approved' or 'changes_requested', got %q\n", verdictFlag)
+		return 1
+	}
+
+	// Validate required flags.
+	if bodyFlag == "" {
+		fmt.Fprintln(stderr, "--body must not be empty")
+		return 1
+	}
+	if prFlag <= 0 {
+		fmt.Fprintln(stderr, "--pr must be a positive integer")
+		return 1
+	}
+
+	// BR-002, BR-003, IC-001: Call gh pr review with appropriate flags.
+	var ghArgs []string
+	ghArgs = append(ghArgs, "pr", "review", strconv.Itoa(prFlag))
+
+	if verdictFlag == "approved" {
+		ghArgs = append(ghArgs, "--approve")
+	} else { // verdictFlag == "changes_requested"
+		ghArgs = append(ghArgs, "--request-changes", "--body", bodyFlag)
+	}
+
+	// Validate event log path is writable BEFORE calling gh (atomic coupling: fail-closed).
+	writer, err := eventlog.NewWriter(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+	defer writer.Close()
+
+	_, err = executor.RunWithEnv(
+		nil, // no additional env vars; GH_TOKEN comes from process
+		"gh", ghArgs...,
+	)
+	if err != nil {
+		var ee *preflight.ErrExit
+		if errors.As(err, &ee) {
+			fmt.Fprintf(stderr, "Failed to submit review: %s\n", strings.TrimSpace(ee.Stderr))
+		} else {
+			fmt.Fprintf(stderr, "Failed to submit review: %v\n", err)
+		}
+		return 1
+	}
+
+	// BR-004: Write review_submitted event (only reached if gh succeeds).
+
+	payload := map[string]interface{}{
+		"verdict":  verdictFlag,
+		"body":     bodyFlag,
+		"prNumber": prFlag,
+	}
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+
+	event := eventlog.Event{
+		Type:    eventlog.EventReviewSubmitted,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   runID,
+		Payload: payloadJSON,
+	}
+
+	if err := writer.Write(event); err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+
 	return 0
 }
 
