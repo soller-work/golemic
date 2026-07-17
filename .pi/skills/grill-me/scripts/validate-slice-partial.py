@@ -48,14 +48,14 @@ STAGES = {
     },
     '50_percent': {
         'required_fields': [
-            'schema_version', 'slice_type', 'slice_id', 'title', 'summary',
+            'schema_version', 'slice_type', 'title', 'summary',
             'stakeholder_intent', 'scope', 'business_rules', 'interfaces'
         ],
         'description': 'Check critical fields are populated (≈50% done)'
     },
     'full_draft': {
         'required_fields': [
-            'schema_version', 'slice_type', 'slice_id', 'title', 'summary',
+            'schema_version', 'slice_type', 'title', 'summary',
             'stakeholder_intent', 'scope', 'preconditions',
             'business_rules', 'decision_tables', 'interfaces',
             'acceptance_scenarios', 'decision_log', 'codebase_evidence'

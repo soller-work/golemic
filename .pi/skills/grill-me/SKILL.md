@@ -59,7 +59,7 @@ If the estimate changes, state the new range and one concrete reason before the 
 Walk dependencies in this order unless the feature requires a different dependency order:
 
 1. stakeholder, goal, value, and trigger;
-2. issue dependencies: which other backlog issues (by `slice_id`) must be completed before this one is takeable;
+2. issue dependencies: which existing GitHub issues (by number) must be resolved before this one is takeable — these become `--blocked-by` arguments to `create_issue.py` and are recorded as native GitHub blocked_by relations;
 3. in-scope outcome and explicit non-goals;
 3. actors, authorization, and ownership;
 4. preconditions and relevant existing state;
@@ -102,22 +102,12 @@ Do not use `ready` merely because the user wants to stop. If required informatio
 
 ### 5. Produce the artifact
 
-Create exactly one JSON document. Its target path is the next free backlog
-slot — compute it, do not guess:
-
-```bash
-python3 scripts/next_backlog_slot.py "<slice title>"
-# prints e.g. docs/backlog/012_event-log-writer.json
-```
-
-(Run from the repo root, or pass `--dir <path-to-backlog>`. The numeric prefix
-is the processing order for the dev loop; gaps from completed issues are
-expected.) Follow `schema.json` exactly. Use JSON values, not Markdown, Gherkin text blocks, comments, or prose outside defined fields.
+Create exactly one JSON document as a local temporary file (e.g. `slice.json`). Follow `schema.json` exactly. Use JSON values, not Markdown, Gherkin text blocks, comments, or prose outside defined fields. There is no `slice_id` field and no local backlog directory — the GitHub issue number assigned at creation time is the only identifier.
 
 Requirements:
 
 - Keep identifiers stable and unique.
-- Populate `depends_on` with the `slice_id`s of backlog issues that must be completed first (empty array if none). This is the machine-readable dependency graph the dev loop uses to decide takeability — reference `slice_id`s, never numeric filename prefixes. Do not reference an issue's own `slice_id`. A dependency on already-completed work is a precondition, not a `depends_on` entry (completed issues are deleted from the backlog, so they resolve as satisfied).
+- `depends_on` is informational prose only (e.g. `["Requires issue #5 to be closed first"]`). Hard dependencies are expressed as `--blocked-by N` arguments to `create_issue.py` (step 8) and become native GitHub blocked_by relations — not a field in the JSON.
 - Use `BR-*` for business rules, `DT-*` for decision tables, `IF-*` for interfaces, `RM-*` for read models, `PS-*` for process steps, `IC-*` for integration contracts, `SC-*` for state changes, `SE-*` for side effects, `AC-*` for acceptance scenarios, `EV-*` for codebase evidence, and `D-*` for decisions.
 - Trace acceptance scenarios to every relevant rule, interface, read model, process step, integration contract, state change, and side effect.
 - Use empty arrays instead of omitting required collections.
@@ -129,18 +119,10 @@ Requirements:
 Run from the skill directory or use equivalent absolute paths:
 
 ```bash
-python scripts/validate_slice.py schema.json <target-path-from-step-5>
+python scripts/validate_slice.py schema.json <slice.json>
 ```
 
 If validation fails, repair the JSON and rerun the validator. Do not present an invalid artifact as complete.
-
-Then verify the dependency graph over the whole backlog directory:
-
-```bash
-python3 scripts/issue_graph.py verify docs/backlog
-```
-
-Self-dependencies and cycles are hard errors (exit 2) and must be repaired. A warning that a dependency is "not an existing issue (assumed completed)" is expected when the dependency has already been implemented. `issue_graph.py takeable docs/backlog` lists every currently-unblocked issue; `issue_graph.py check docs/backlog <slice_id>` reports whether one specific issue is takeable. Claimed issues (moved to `docs/backlog/working/` by the dev loop) still count as existing and still block their dependents until deleted.
 
 The validator performs:
 
@@ -231,8 +213,17 @@ Agents that skip these steps waste tokens:
 
 Using the tools enforces correctness **before** expensive JSON manipulation. Token cost: ~40% reduction. Quality: 100% validation pass rate on first full validation.
 
-### 8. Finish
+### 8. Create the GitHub issue
 
-Present the validated backlog issue file (`docs/backlog/NNN_<slug>.json`) as the sole source of truth and report whether validation passed. It is now an open issue that the dev-loop skill will pick up in prefix order.
+Once validation passes, create the issue from the host repository root:
+
+```bash
+python3 .pi/skills/grill-me/scripts/create_issue.py slice.json [--blocked-by N[,N...]]
+```
+
+- `--blocked-by` accepts a comma-separated list of existing GitHub issue numbers that this issue is blocked by. These become native GitHub blocked_by relations. Omit the flag when there are no hard dependencies.
+- The script re-validates the slice, deterministically renders the Markdown body, creates the issue, sets blocked_by relations, and attaches the `ready-for-agent` label as the final write step (so a partially created issue is never visible as takeable).
+- On success it prints the new issue number and URL. The local `slice.json` is now a throwaway file; the GitHub issue is the sole artifact.
+- Use `--dry-run` to preview the rendered body and planned `gh` commands without executing any write.
 
 Do not edit production code. Do not silently convert the result into loose issues.

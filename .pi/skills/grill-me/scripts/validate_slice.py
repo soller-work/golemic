@@ -102,11 +102,6 @@ def semantic_errors(document: dict[str, Any]) -> list[str]:
     ids, duplicate_errors = collect_ids(document)
     errors.extend(duplicate_errors)
 
-    slice_id = document.get("slice_id")
-    depends_on = document.get("depends_on", [])
-    if slice_id in depends_on:
-        errors.append("An issue must not list its own slice_id in $.depends_on")
-
     traceable_ids = {
         item["id"]
         for collection in TRACE_COLLECTIONS

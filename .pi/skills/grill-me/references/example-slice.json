@@ -1,6 +1,5 @@
 {
   "schema_version": "1.1.0",
-  "slice_id": "cancel-paid-order",
   "title": "Cancel a paid order before shipment",
   "summary": "Allow an authenticated customer to cancel an owned paid order before shipment and request one refund.",
   "readiness": "ready",

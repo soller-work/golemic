@@ -7,8 +7,6 @@
   "required": [
     "schema_version",
     "slice_type",
-    "slice_id",
-    "depends_on",
     "title",
     "summary",
     "readiness",
@@ -45,16 +43,12 @@
         "integration"
       ]
     },
-    "slice_id": {
-      "$ref": "#/$defs/kebabId"
-    },
     "depends_on": {
       "type": "array",
       "items": {
-        "$ref": "#/$defs/kebabId"
+        "$ref": "#/$defs/nonEmptyString"
       },
-      "uniqueItems": true,
-      "description": "slice_ids of other backlog issues that must be completed (deleted from the backlog) before this issue is takeable. Machine-readable dependency graph; empty array means no dependencies."
+      "description": "Informational prose describing hard dependencies (e.g. issue numbers or titles). Not machine-readable; native GitHub blocked_by relations are the authoritative dependency graph."
     },
     "title": {
       "$ref": "#/$defs/nonEmptyString"

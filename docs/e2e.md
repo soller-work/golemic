@@ -700,3 +700,143 @@ After a successful smoke test, you can be confident that:
 5. The event logging system works and logs are persistent.
 
 You can now proceed to deploy golemic to a production project or refine agent prompts and configuration for your specific stack.
+
+---
+
+## Part 5: AC-008 Full-Chain Scenario — grill-me Issue Creation
+
+> **Status: MANUAL procedure. NOT executed.** This scenario requires a live
+> `golemic_e2e` sandbox with two bot tokens and the ability to hit GitHub APIs.
+> Do not claim it was executed unless you have actually run the steps below.
+
+This procedure covers AC-008 from the `github-issue-creation-from-grill-me-slice`
+specification: create a real issue in `golemic_e2e` via `create_issue.py`, then
+run `golemic run --issue N` against it and verify the full chain through PR
+creation and review submission.
+
+### Prerequisites
+
+In addition to the prerequisites in Part 1:
+
+- `python3` available on PATH with `jsonschema` installed (`pip install jsonschema`)
+- A schema-valid slice JSON produced by the grill-me skill (save it as `slice.json`)
+- An existing open issue in `golemic_e2e` to use as a hard dependency; note its
+  number as `BLOCKER_N` (or omit `--blocked-by` if there are no dependencies)
+- The `golemic` binary built and on PATH
+
+### Step 1: Preflight the sandbox
+
+```bash
+cd /path/to/golemic_e2e
+golemic preflight
+```
+
+All checks must show `OK` before continuing.
+
+### Step 2: Create the issue via create_issue.py
+
+Run from the `golemic_e2e` repository root so `gh` resolves the correct repo:
+
+```bash
+cd /path/to/golemic_e2e
+
+python3 /path/to/golemic/.pi/skills/grill-me/scripts/create_issue.py \
+  /path/to/slice.json \
+  --blocked-by BLOCKER_N
+```
+
+Omit `--blocked-by` if there are no hard dependencies.
+
+Expected output (exit 0):
+```
+#N https://github.com/<your-org>/golemic_e2e/issues/N
+```
+
+Note the issue number as `ISSUE_N`.
+
+> **Endpoint verification:** The `gh api --method POST
+> /repos/{owner}/{repo}/issues/ISSUE_N/blocked-by -f issue_number=BLOCKER_N`
+> call must be verified against the live GitHub API during this step. If the
+> endpoint does not exist or returns an unexpected error, inspect the response,
+> find the correct endpoint shape in the GitHub REST API documentation, update
+> `create_issue.py` accordingly, and re-run.
+
+### Step 3: Verify the issue on GitHub
+
+```bash
+gh issue view ISSUE_N --repo "<your-org>/golemic_e2e"
+```
+
+Verify all of the following before proceeding:
+
+1. **Title** equals the `title` field from `slice.json`.
+
+2. **Body sections** are present in order: Summary, Stakeholder Intent, Scope,
+   Preconditions, Business Rules, Interfaces, Acceptance Scenarios, Definition
+   of Done.
+
+3. **Authoritative spec statement** appears above the `<details>` block:
+   ```
+   > The embedded JSON block below is the authoritative machine-readable
+   > specification. The Markdown sections above are its human-readable
+   > projection. In any conflict, the JSON is correct.
+   ```
+
+4. **Embedded JSON round-trips** to the exact input. Verify with:
+   ```bash
+   gh issue view ISSUE_N --repo "<your-org>/golemic_e2e" --json body \
+     | python3 -c "
+   import json, sys, re
+   body = json.load(sys.stdin)['body']
+   m = re.search(r'\x60\x60\x60json\n(.*?)\n\x60\x60\x60', body, re.DOTALL)
+   assert m, 'no json block found in body'
+   parsed = json.loads(m.group(1))
+   print('JSON round-trip OK, title:', parsed['title'])
+   "
+   ```
+
+5. **`ready-for-agent` label** (or the label from `.golemic/config.json`) is
+   attached to the issue.
+
+6. **Blocked-by relation** to `BLOCKER_N` is visible in the issue sidebar or
+   via the API. If `create_issue.py` reported `PARTIAL_FAILURE` on the
+   blocked-by step, fix the endpoint (see Step 2 note), set the relation
+   manually, then reattach the label before continuing.
+
+### Step 4: Run golemic on the created issue
+
+```bash
+cd /path/to/golemic_e2e
+golemic run --issue ISSUE_N
+```
+
+Expected: exit 0, a run-ID printed to stdout. The dev bot implements the slice,
+opens a PR, and the reviewer bot submits a formal review.
+
+### Step 5: Verify the full chain
+
+After `golemic run --issue ISSUE_N` exits 0:
+
+**PR created by the dev bot:**
+```bash
+gh pr list --repo "<your-org>/golemic_e2e" --state open
+```
+Expected: one PR on branch `golemic/issue-ISSUE_N` authored by the dev bot.
+
+**Formal review submitted by the reviewer bot:**
+```bash
+gh pr view <PR_N> --repo "<your-org>/golemic_e2e" --json reviews
+```
+Expected: at least one review of type `APPROVE` or `REQUEST_CHANGES` from the
+reviewer bot account (different from the dev bot account).
+
+**Dev agent referenced slice JSON content:** Inspect the PR description or
+commits and confirm they reference content derived from the embedded slice JSON
+(e.g., a business rule, acceptance criterion, or Definition of Done item). This
+proves that `internal/runner/issue.go` consumed the `body` field and the dev
+agent received the full embedded specification.
+
+### Step 6: Teardown
+
+Follow Part 4 of this document to close the PR, delete the branch, remove
+worktrees, and delete `ISSUE_N` from `golemic_e2e`.
