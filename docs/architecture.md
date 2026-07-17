@@ -160,10 +160,11 @@ das **umgebende Host-Repo**, indem er die Verzeichnisebenen bis zum nächsten
 git-root hochwandert, und arbeitet auf **dessen** GitHub-Remote, Issues, `main`
 und Worktrees. Golemic baut also das *Zielprojekt*, nicht sich selbst.
 
-> Hinweis: Bei einer echten Unterverzeichnis-Installation ist der Ort tatsächlich
-> beliebig — `git rev-parse --show-toplevel` liefert das Host-Repo ortsunabhängig.
-> Nur der **Symlink**-Installfall (Binary zeigt auf einen separaten golemic-Checkout)
-> ist in `ResolveHostRepo` derzeit auf die Pfadkomponente `tools/golemic` verdrahtet.
+> Der Ort ist in beiden Fällen beliebig, ohne hartkodierte Pfadkomponente
+> (`ResolveHostRepo`): Liegt das Aufrufverzeichnis innerhalb des von git
+> aufgelösten Roots (echtes Unterverzeichnis), gilt dieser Root direkt. Liegt es
+> außerhalb (golemic per **Symlink** aus einem separaten Checkout eingebunden),
+> läuft der Runner den logischen Pfad aufwärts bis zum umgebenden Host-Repo.
 
 Dieses Repo (`golemic`) ist der reine **Werkzeug-Lieferant**: Go-Sourcen + Binary,
 die Rollen-Prompts (`dev`, `reviewer`), der Installer und diese Doku. Der alte

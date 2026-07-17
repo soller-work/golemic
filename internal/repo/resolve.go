@@ -10,21 +10,21 @@ import (
 	"golemic/internal/preflight"
 )
 
-// ResolveHostRepo determines the host repository root when golemic is symlinked into it.
+// ResolveHostRepo determines the host repository root that golemic operates on.
 //
-// When golemic is installed as tools/golemic (symlink or subdir) in a host repo,
-// this function finds the host repo's git root, not the golemic repo's root.
+// golemic is dropped into an arbitrary subdirectory of a host repo (the location
+// is free; tools/golemic is only the conventional default). This resolves the
+// host repo's git root, not golemic's own, without hardcoding any path component.
 //
-// Algorithm:
-//  1. Get the git root of the current directory (may be golemic itself if symlinked)
-//  2. If we're under tools/golemic, walk up the directory tree
-//  3. For each directory with a .git subdirectory, check its git root
-//  4. Skip any git root that matches the golemic repo's root
-//  5. Return the first different git root found (the host repo)
-//  6. Fall back to the cwd's git root if no alternative is found
+// The signal is whether cwd lies inside the git root that git resolved:
+//   - cwd inside gitRoot: golemic is its own repo or a real subdirectory of the
+//     host repo; git already resolved the correct root, so return it.
+//   - cwd outside gitRoot: git followed a symlink out of the host repo (golemic
+//     symlinked in from a separate checkout), so walk the logical cwd path upward
+//     to the nearest enclosing git root that differs from golemic's own.
 //
-// This handles:
-//   - golemic symlinked into a host repo: /host-repo/tools/golemic → /actual/golemic
+// This handles, at any location:
+//   - golemic symlinked into a host repo: /host-repo/<any-dir> → /actual/golemic
 //   - golemic as a git submodule or regular subdirectory
 //   - golemic as the main repo (no host repo; returns its own root)
 func ResolveHostRepo(executor preflight.Executor, cwd string) (string, error) {
@@ -38,18 +38,17 @@ func ResolveHostRepo(executor preflight.Executor, cwd string) (string, error) {
 		return "", fmt.Errorf("not in a git repository")
 	}
 
-	// If we're not under tools/golemic, assume this is the host repo
-	if !strings.Contains(cwd, "/tools/golemic") {
+	// cwd inside gitRoot: git resolved the correct root (self or real subdir).
+	if cwd == gitRoot || strings.HasPrefix(cwd, gitRoot+string(filepath.Separator)) {
 		return gitRoot, nil
 	}
 
-	// We're under tools/golemic; try to find the enclosing host repo
-	// by walking up from cwd and checking for a different git root
-
-	gollemicGitRoot := gitRoot
+	// cwd outside gitRoot: golemic was reached via a symlink out of the host repo.
+	// Walk up the logical cwd path to find the enclosing host repo.
+	golemicGitRoot := gitRoot
 
 	current := cwd
-	for current != "" && current != "/" {
+	for current != "" && current != string(filepath.Separator) {
 		gitDir := filepath.Join(current, ".git")
 		if _, err := os.Stat(gitDir); err == nil {
 			// Found a .git; check its git root
@@ -57,7 +56,7 @@ func ResolveHostRepo(executor preflight.Executor, cwd string) (string, error) {
 			if err == nil {
 				candidate = strings.TrimSpace(candidate)
 				// Found a different git root; this is the host repo
-				if candidate != "" && candidate != gollemicGitRoot {
+				if candidate != "" && candidate != golemicGitRoot {
 					return candidate, nil
 				}
 			}
