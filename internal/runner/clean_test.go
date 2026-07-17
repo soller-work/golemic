@@ -144,15 +144,15 @@ func TestCleanArtifacts_AllArtifactsExist_AC001(t *testing.T) { //nolint:cyclop 
 		t.Errorf("stderr missing PR close report, got: %q", out)
 	}
 
-	// Verify git worktree remove was called for both worktrees
+	// Verify git worktree remove --force was called for both worktrees
 	var worktreeRemoveCalls int
 	for _, c := range exec.calls {
-		if c.name == "git" && len(c.args) >= 2 && c.args[0] == "worktree" && c.args[1] == "remove" {
+		if c.name == "git" && len(c.args) >= 3 && c.args[0] == "worktree" && c.args[1] == "remove" && c.args[2] == "--force" {
 			worktreeRemoveCalls++
 		}
 	}
 	if worktreeRemoveCalls != 2 {
-		t.Errorf("expected 2 git worktree remove calls, got %d", worktreeRemoveCalls)
+		t.Errorf("expected 2 git worktree remove --force calls, got %d", worktreeRemoveCalls)
 	}
 }
 
