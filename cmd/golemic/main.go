@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -208,6 +209,27 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 	return 0
 }
 
+// ensureBodyClosesIssue appends a "Closes #<N>" line to the PR body when the
+// branch is a golemic issue branch (golemic/issue-<N>) and the body does not
+// already contain a GitHub closing keyword for that issue. Without a closing
+// keyword, merging the PR does not auto-close the issue.
+func ensureBodyClosesIssue(body, branch string) string {
+	const prefix = "golemic/issue-"
+	if !strings.HasPrefix(branch, prefix) {
+		return body
+	}
+	num := strings.TrimPrefix(branch, prefix)
+	if _, err := strconv.Atoi(num); err != nil {
+		return body
+	}
+
+	closing := regexp.MustCompile(`(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#` + num + `\b`)
+	if closing.MatchString(body) {
+		return body
+	}
+	return strings.TrimRight(body, "\n") + "\n\nCloses #" + num + "\n"
+}
+
 // runOpenPR executes the open-pr subcommand: golemic open-pr --title <t> --body <b>
 // It validates env var context, resolves the current branch, creates a PR via gh,
 // parses the PR number and URL, and writes a pr_opened event atomically.
@@ -262,13 +284,18 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		return 1
 	}
 
+	// Ensure the PR body carries a GitHub closing keyword so the merge
+	// auto-closes the originating issue. The issue number is encoded in the
+	// golemic branch name (golemic/issue-<N>); non-golemic branches are left as-is.
+	body := ensureBodyClosesIssue(bodyFlag, branch)
+
 	// BR-002, IC-001: Create PR via gh pr create.
 	// GH_TOKEN is inherited from the process environment (BR-005).
 	prOut, err := executor.RunWithEnv(
 		nil, // no additional env vars; GH_TOKEN comes from process
 		"gh", "pr", "create",
 		"--title", titleFlag,
-		"--body", bodyFlag,
+		"--body", body,
 		"--base", "main",
 		"--head", branch,
 	)
