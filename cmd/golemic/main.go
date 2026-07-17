@@ -25,7 +25,7 @@ var knownCommands = []struct {
 	{"preflight", "Check prerequisites"},
 	{"run", "Run the main process (golemic run --issue N)"},
 	{"emit", "Emit an event to the run log"},
-	{"open-pr", "Open a pull request (not implemented)"},
+	{"open-pr", "Open a pull request"},
 	{"submit-review", "Submit a review"},
 }
 

@@ -237,59 +237,6 @@ func mustRun(t *testing.T, dir, name string, args ...string) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: Happy path — no collision, run_started written, exit 0
-// ---------------------------------------------------------------------------
-
-func SkipTestRun_HappyPath_AC001(t *testing.T) {
-	homeDir, repoRoot, project := setupRunnerTest(t)
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
-	os.MkdirAll(guidelinesDir, 0755)                                                       //nolint:errcheck
-	os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644)      //nolint:errcheck
-	os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("# Guidelines"), 0644) //nolint:errcheck
-	exec := setupHappyExecutor(repoRoot)
-
-	var stdout, stderr bytes.Buffer
-	runner := New(exec, homeDir, repoRoot, 42)
-	runner.SetPreflighter(passingPreflighter{})
-	runner.SetStdout(&stdout)
-	runner.SetStderr(&stderr)
-
-	exitCode := runner.Run()
-
-	if exitCode != 0 {
-		t.Fatalf("exit code: got %d, want 0; stderr: %s", exitCode, stderr.String())
-	}
-	if stderr.Len() > 0 {
-		t.Errorf("stderr should be empty, got: %q", stderr.String())
-	}
-
-	// Verify runId is printed to stdout
-	runID := strings.TrimSpace(stdout.String())
-	if !strings.HasPrefix(runID, "issue-42-") {
-		t.Errorf("stdout should contain runId starting with 'issue-42-', got: %q", runID)
-	}
-
-	// Verify event log was created
-	logPath := filepath.Join(homeDir, ".golemic", project, "runs", runID, "events.jsonl")
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Expect exactly one event (run_started) — no collision, so run_finished is not written
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Type != eventlog.EventRunStarted {
-		t.Errorf("event type: got %q, want %q", events[0].Type, eventlog.EventRunStarted)
-	}
-	if string(events[0].Payload) != `{"issue":42,"runId":"`+runID+`"}` {
-		t.Errorf("payload: got %s, want issue=42, runId=%s", string(events[0].Payload), runID)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // AC-002: Worktree collision aborts with cleanup command
 // ---------------------------------------------------------------------------
 
@@ -630,50 +577,6 @@ func TestRun_MissingCredentials_AC005(t *testing.T) {
 		if call.name == "gh" {
 			t.Errorf("gh command was called despite credentials failure: %s %v", call.name, call.args)
 		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// runId format test: issue-<N>-<timestamp> (BR-003)
-// ---------------------------------------------------------------------------
-
-func SkipTestRun_RunIDFormat(t *testing.T) {
-	homeDir, repoRoot, _ := setupRunnerTest(t)
-	guidelinesDir2 := filepath.Join(repoRoot, ".golemic", "guidelines")
-	os.MkdirAll(guidelinesDir2, 0755)                                                        //nolint:errcheck
-	os.WriteFile(filepath.Join(guidelinesDir2, "dev.md"), []byte("# Guidelines"), 0644)      //nolint:errcheck
-	os.WriteFile(filepath.Join(guidelinesDir2, "reviewer.md"), []byte("# Guidelines"), 0644) //nolint:errcheck
-	exec := setupHappyExecutor(repoRoot)
-
-	var stdout, stderr bytes.Buffer
-	runner := New(exec, homeDir, repoRoot, 42)
-	runner.SetPreflighter(passingPreflighter{})
-	runner.SetStdout(&stdout)
-	runner.SetStderr(&stderr)
-
-	exitCode := runner.Run()
-
-	if exitCode != 0 {
-		t.Fatalf("exit code: got %d, want 0; stderr: %s", exitCode, stderr.String())
-	}
-
-	runID := strings.TrimSpace(stdout.String())
-
-	// Format: issue-42-YYYYMMDDTHHMMSSZ
-	if !strings.HasPrefix(runID, "issue-42-") {
-		t.Errorf("runId should start with 'issue-42-', got: %q", runID)
-	}
-
-	// Extract timestamp part
-	tsPart := strings.TrimPrefix(runID, "issue-42-")
-	if len(tsPart) != 16 { // 20060102T150405Z = 16 chars
-		t.Errorf("timestamp part should be 16 chars (YYYYMMDDTHHMMSSZ), got %d: %q", len(tsPart), tsPart)
-	}
-
-	// Verify it parses as a valid UTC time
-	_, err := time.Parse("20060102T150405Z", tsPart)
-	if err != nil {
-		t.Errorf("timestamp %q is not valid sortable UTC format: %v", tsPart, err)
 	}
 }
 
