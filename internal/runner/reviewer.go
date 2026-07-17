@@ -45,7 +45,11 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	}
 
 	// Run reviewer agent
-	_, _, err = agent.RunRole(context.Background(), agent.RoleConfig{
+	runFn := r.runAgentFn
+	if runFn == nil {
+		runFn = agent.RunRole
+	}
+	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "reviewer",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "reviewer.md"),
 		UserPrompt:        userPrompt,
@@ -66,6 +70,15 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 			return outcomeTimeout
 		}
 		fmt.Fprintf(r.stderr, "review_failed: agent failed: %v\n", err) //nolint:errcheck
+		return outcomeReviewFailed
+	}
+
+	// Record agent exit code in event log (BR-004)
+	r.writeAgentCompleted(eventLogPath, "reviewer", exitCode)
+
+	// Fail on non-zero exit (BR-001, BR-002)
+	if exitCode != 0 {
+		fmt.Fprintf(r.stderr, "review_failed: reviewer agent exited with code %d; see %s\n", exitCode, paths.Stderr) //nolint:errcheck
 		return outcomeReviewFailed
 	}
 
