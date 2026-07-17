@@ -27,6 +27,7 @@ const (
 	EventPROpened         = "pr_opened"
 	EventReviewSubmitted  = "review_submitted"
 	EventRunFinished      = "run_finished"
+	EventAgentCompleted   = "agent_completed"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -38,7 +39,19 @@ func AllEventTypes() []string {
 		EventPROpened,
 		EventReviewSubmitted,
 		EventRunFinished,
+		EventAgentCompleted,
 	}
+}
+
+// agentCompletedData is the payload shape for agent_completed events.
+type agentCompletedData struct {
+	Role     string `json:"role"`
+	ExitCode int    `json:"exitCode"`
+}
+
+// MarshalAgentCompletedPayload encodes an agent_completed payload.
+func MarshalAgentCompletedPayload(role string, exitCode int) (json.RawMessage, error) {
+	return json.Marshal(agentCompletedData{Role: role, ExitCode: exitCode})
 }
 
 // ---------------------------------------------------------------------------

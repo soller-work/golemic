@@ -36,7 +36,11 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	}
 
 	// Run dev agent
-	_, _, err = agent.RunRole(context.Background(), agent.RoleConfig{
+	runFn := r.runAgentFn
+	if runFn == nil {
+		runFn = agent.RunRole
+	}
+	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
 		UserPrompt:        userPrompt,
@@ -57,6 +61,15 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 			return outcomeTimeout
 		}
 		fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err) //nolint:errcheck
+		return outcomeDevFailed
+	}
+
+	// Record agent exit code in event log (BR-004)
+	r.writeAgentCompleted(eventLogPath, "dev", exitCode)
+
+	// Fail on non-zero exit (BR-001, BR-002)
+	if exitCode != 0 {
+		fmt.Fprintf(r.stderr, "dev_failed: dev agent exited with code %d; see %s\n", exitCode, paths.Stderr) //nolint:errcheck
 		return outcomeDevFailed
 	}
 

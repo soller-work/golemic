@@ -13,12 +13,14 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"path/filepath"
 	"time"
 
+	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
@@ -46,6 +48,7 @@ type Runner struct {
 	issueNum    int
 	preflighter Preflighter // nil = create from executor+homeDir+repoRoot in Run()
 	lookupEnv   func(string) (string, bool)
+	runAgentFn  func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
 
 	// Resolved during Run
 	repoRoot   string
@@ -84,6 +87,12 @@ func (r *Runner) SetPreflighter(p Preflighter) { r.preflighter = p }
 // SetLookupEnv injects a custom env lookup for credentials loading.
 // nil means os.LookupEnv (production default).
 func (r *Runner) SetLookupEnv(fn func(string) (string, bool)) { r.lookupEnv = fn }
+
+// SetRunAgentFn injects a fake agent runner for unit tests.
+// nil means agent.RunRole (production default).
+func (r *Runner) SetRunAgentFn(fn func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)) {
+	r.runAgentFn = fn
+}
 
 // ---------------------------------------------------------------------------
 // Run
@@ -241,6 +250,27 @@ func (r *Runner) Run() int {
 
 	fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
 	return 1
+}
+
+// writeAgentCompleted appends an agent_completed event to the event log.
+// Errors are silently dropped; a log write failure must not change the run outcome.
+func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
+	w, err := eventlog.NewWriter(eventLogPath)
+	if err != nil {
+		return
+	}
+	defer w.Close() //nolint:errcheck
+
+	payload, err := eventlog.MarshalAgentCompletedPayload(role, exitCode)
+	if err != nil {
+		return
+	}
+	_ = w.Write(eventlog.Event{
+		Type:    eventlog.EventAgentCompleted,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   r.runID,
+		Payload: payload,
+	})
 }
 
 // orchestrate implements the full dev→reviewer loop after collision check passes.
