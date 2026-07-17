@@ -16,7 +16,7 @@ type Config struct {
 	Label          string `json:"label"`
 	Models         Models `json:"models"`
 	TimeoutMinutes int    `json:"timeout_minutes"`
-	TimeoutSeconds int    `json:"timeout_seconds"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 }
 
 // configRaw is used for parsing to detect missing vs zero values

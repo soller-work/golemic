@@ -207,7 +207,7 @@ func TestLoad(t *testing.T) {
 				"timeout_seconds": 0
 			}`,
 			wantErr:     true,
-			errContains: "timeout_seconds",
+			errContains: "field 'timeout_seconds' must be > 0, got 0",
 		},
 		{
 			name: "empty label gets default",

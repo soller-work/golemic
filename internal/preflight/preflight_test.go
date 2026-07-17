@@ -2,11 +2,14 @@ package preflight
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golemic/internal/config"
 )
 
 // emptyLookup is an env lookup that returns nothing — used to isolate tests from GOLEMIC_* env.
@@ -407,5 +410,113 @@ func TestPreflightCheckOrder(t *testing.T) {
 			t.Errorf("output order violation: %q appears before previous check", expected)
 		}
 		prevIdx = idx
+	}
+}
+
+// assertScaffoldValues checks that cfg matches the DefaultConfig values for the given project.
+func assertScaffoldValues(t *testing.T, cfg config.Config, project string) {
+	t.Helper()
+	if cfg.Project != project {
+		t.Errorf("Project = %q, want %q", cfg.Project, project)
+	}
+	if cfg.VerifyCommand != "" {
+		t.Errorf("VerifyCommand = %q, want empty", cfg.VerifyCommand)
+	}
+	if cfg.TimeoutMinutes != 30 {
+		t.Errorf("TimeoutMinutes = %d, want 30", cfg.TimeoutMinutes)
+	}
+	if cfg.Label != "ready-for-agent" {
+		t.Errorf("Label = %q, want %q", cfg.Label, "ready-for-agent")
+	}
+	if cfg.Models.Dev != "z-ai/glm-4.6" {
+		t.Errorf("Models.Dev = %q, want %q", cfg.Models.Dev, "z-ai/glm-4.6")
+	}
+	if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
+		t.Errorf("Models.Reviewer = %q, want %q", cfg.Models.Reviewer, "deepseek/deepseek-v4-pro")
+	}
+}
+
+// TestCreateConfigNoTimeoutSecondsKey verifies AC-001: the scaffolded config.json
+// must not contain a timeout_seconds key.
+func TestCreateConfigNoTimeoutSecondsKey(t *testing.T) {
+	exec := fakeExecutorOK()
+	_, _, repoRoot := setupPreflight(t, exec)
+
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(golemicDir, "config.json")
+
+	p := &Preflight{executor: exec, repoRoot: repoRoot}
+	if err := p.createConfig(golemicDir, configPath, "test-project"); err != nil {
+		t.Fatalf("createConfig() error: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("json.Unmarshal() error: %v", err)
+	}
+	if _, ok := raw["timeout_seconds"]; ok {
+		t.Error("scaffolded config.json must not contain timeout_seconds key")
+	}
+
+	var cfg config.Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("json.Unmarshal into Config: %v", err)
+	}
+	assertScaffoldValues(t, cfg, "test-project")
+}
+
+// TestScaffoldRoundtrip verifies AC-002: a scaffolded config.json with verify_command
+// filled in loads without error and has the expected timeout defaults.
+func TestScaffoldRoundtrip(t *testing.T) {
+	exec := fakeExecutorOK()
+	_, _, repoRoot := setupPreflight(t, exec)
+
+	projectName := filepath.Base(repoRoot)
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(golemicDir, "config.json")
+
+	p := &Preflight{executor: exec, repoRoot: repoRoot}
+	if err := p.createConfig(golemicDir, configPath, projectName); err != nil {
+		t.Fatalf("createConfig() error: %v", err)
+	}
+
+	// Simulate the one human edit: fill in verify_command.
+	var raw map[string]json.RawMessage
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("json.Unmarshal() error: %v", err)
+	}
+	raw["verify_command"] = json.RawMessage(`"go test ./..."`)
+	updated, err := json.MarshalIndent(raw, "", "    ")
+	if err != nil {
+		t.Fatalf("json.MarshalIndent() error: %v", err)
+	}
+	if err := os.WriteFile(configPath, updated, 0644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	cfg, err := config.Load(repoRoot)
+	if err != nil {
+		t.Fatalf("config.Load() after scaffold roundtrip: %v", err)
+	}
+	if cfg.TimeoutMinutes != 30 {
+		t.Errorf("TimeoutMinutes = %d, want 30", cfg.TimeoutMinutes)
+	}
+	if cfg.TimeoutSeconds != 0 {
+		t.Errorf("TimeoutSeconds = %d, want 0 (no override)", cfg.TimeoutSeconds)
 	}
 }
