@@ -281,9 +281,12 @@ def _planned_commands(title: str, blocked_by: List[int], label_name: str) -> Lis
     cmds = [f"gh issue create --title {title!r} --body <rendered-body>"]
     for n in blocked_by:
         cmds.append(
+            f"gh api /repos/{{owner}}/{{repo}}/issues/{n} -q .id  (resolve internal id)"
+        )
+        cmds.append(
             f"gh api --method POST "
-            f"/repos/{{owner}}/{{repo}}/issues/<new-number>/blocked-by"
-            f" -f issue_number={n}"
+            f"/repos/{{owner}}/{{repo}}/issues/<new-number>/dependencies/blocked_by"
+            f" -F issue_id=<id-of-{n}>"
         )
     cmds.append(
         f"gh label create {label_name!r} --color 0075ca"
@@ -364,14 +367,24 @@ def run(
     issue_url = result.stdout.strip()
     issue_number = issue_url.rstrip("/").split("/")[-1]
 
-    # Step 2: blocked_by relations (SC-002, BR-004) — one gh api call per number
+    # Step 2: blocked_by relations (SC-002, BR-004) — one gh api call per number.
+    # The dependencies API keys on the internal issue id, not the issue number,
+    # so each dependency number is resolved to its id first.
     for i, dep_num in enumerate(blocked_by):
         try:
+            id_result = gh.run(
+                [
+                    "api", f"/repos/{{owner}}/{{repo}}/issues/{dep_num}",
+                    "-q", ".id",
+                ],
+                capture_output=True,
+            )
+            dep_id = id_result.stdout.strip()
             gh.run(
                 [
                     "api", "--method", "POST",
-                    f"/repos/{{owner}}/{{repo}}/issues/{issue_number}/blocked-by",
-                    "-f", f"issue_number={dep_num}",
+                    f"/repos/{{owner}}/{{repo}}/issues/{issue_number}/dependencies/blocked_by",
+                    "-F", f"issue_id={dep_id}",
                 ],
             )
         except subprocess.CalledProcessError:

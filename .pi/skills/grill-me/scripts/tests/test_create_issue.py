@@ -185,7 +185,11 @@ class FakeGhRunner:
         if verb == ("issue", "create"):
             return FakeResult(returncode=0, stdout=self._create_url)
 
-        if args[0] == "api" and "blocked-by" in " ".join(args):
+        if args[0] == "api" and "-q" in args and ".id" in args:
+            # dependency id resolution (GET /repos/.../issues/<n> -q .id)
+            return FakeResult(returncode=0, stdout="424242")
+
+        if args[0] == "api" and "dependencies/blocked_by" in " ".join(args):
             if self._blocked_by_fail:
                 if check:
                     raise subprocess.CalledProcessError(1, "gh", stderr="blocked-by failed")
@@ -291,9 +295,9 @@ class TestWriteSequence(unittest.TestCase):
         self.assertEqual(verbs[0], ("auth", "status"))
         # issue create
         create_idx = next(i for i, v in enumerate(verbs) if v == ("issue", "create"))
-        # api (blocked-by) calls
+        # api calls: one id-resolution GET + one POST per dependency
         api_calls = [c for c in gh.calls if c[0] == "api"]
-        self.assertEqual(len(api_calls), 2)
+        self.assertEqual(len(api_calls), 4)
         api_idx = next(i for i, v in enumerate(verbs) if v == ("api", "--method"))
         # label create + attach come after api calls
         label_create_idx = next(
