@@ -242,6 +242,76 @@ func TestRun_NoHeaderOnFailureBeforeIssueLoad_AC004(t *testing.T) {
 	}
 }
 
+// setupCollisionRun creates a Runner with a worktree pre-existing to cause a
+// collision abort, giving tests a quick exit point without full orchestration.
+func setupCollisionRun(t *testing.T, quiet bool) (*bytes.Buffer, *bytes.Buffer, int) {
+	t.Helper()
+	homeDir, repoRoot, _ := setupRunnerTest(t)
+	exec := setupHappyExecutor(repoRoot)
+
+	project := "test-project"
+	worktreeDir := filepath.Join(homeDir, ".golemic", project, "worktrees", "issue-42")
+	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	r := New(exec, homeDir, repoRoot, 42)
+	r.SetPreflighter(passingPreflighter{})
+	r.SetStdout(&stdout)
+	r.SetStderr(&stderr)
+	r.SetQuiet(quiet)
+
+	return &stdout, &stderr, r.Run()
+}
+
+// TestRun_QuietSuppressesHeader_AC001 covers AC-001: --quiet suppresses the header.
+func TestRun_QuietSuppressesHeader_AC001(t *testing.T) {
+	_, stderr, exitCode := setupCollisionRun(t, true)
+	if exitCode != 1 {
+		t.Fatalf("expected exit 1 (collision), got %d", exitCode)
+	}
+	errOut := stderr.String()
+	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Dev logs:", "Reviewer logs:"} {
+		if strings.Contains(errOut, label) {
+			t.Errorf("header label %q found in stderr under --quiet; stderr: %q", label, errOut)
+		}
+	}
+	// Collision message must still appear (BR-003)
+	if !strings.Contains(errOut, "Worktree exists at") {
+		t.Errorf("collision message missing from stderr under --quiet; stderr: %q", errOut)
+	}
+}
+
+// TestRun_NoQuietRendersHeader_AC002 covers AC-002: without --quiet the header appears.
+func TestRun_NoQuietRendersHeader_AC002(t *testing.T) {
+	_, stderr, exitCode := setupCollisionRun(t, false)
+	if exitCode != 1 {
+		t.Fatalf("expected exit 1 (collision), got %d", exitCode)
+	}
+	errOut := stderr.String()
+	if !strings.Contains(errOut, "Run ID:") {
+		t.Errorf("header missing 'Run ID:' in stderr without --quiet:\n%s", errOut)
+	}
+}
+
+// TestRun_QuietStdoutUnchanged_AC003 covers AC-003: stdout carries only the runID line.
+func TestRun_QuietStdoutUnchanged_AC003(t *testing.T) {
+	stdout, _, exitCode := setupCollisionRun(t, true)
+	if exitCode != 1 {
+		t.Fatalf("expected exit 1 (collision), got %d", exitCode)
+	}
+	stdoutStr := stdout.String()
+	if !strings.HasPrefix(stdoutStr, "runs/") {
+		t.Errorf("expected stdout to start with 'runs/'; got: %q", stdoutStr)
+	}
+	for _, label := range []string{"Run ID:", "Issue:", "Event log:"} {
+		if strings.Contains(stdoutStr, label) {
+			t.Errorf("header label %q found in stdout under --quiet", label)
+		}
+	}
+}
+
 func max(a, b int) int {
 	if a > b {
 		return a
