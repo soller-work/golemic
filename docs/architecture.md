@@ -87,8 +87,9 @@ Identität ist damit deterministisch Runner-Sache, kein Prompt-Thema.
 
 ### 2.5 Runner in Go
 Der Runner ist ein **einzelnes Go-Binary** — keine Runtime-Abhängigkeit, ideal für
-einen Installer, der `tools/golemic` in ein beliebiges Fremdprojekt dropt
-(unabhängig von dessen Sprache). Go ist stark im Shellen von `gh`/`pi`, hat robustes
+einen Installer, der golemic in ein Unterverzeichnis eines beliebigen
+Fremdprojekts dropt (Ort frei wählbar, Konvention/Default: `tools/golemic`;
+unabhängig von dessen Sprache). Go ist stark im Shellen von `gh`/`pi`, hat robustes
 JSON und ist gut testbar. Bewusst **nicht** Bash: Verdikt-Auswertung und
 Eskalationslogik sind zu wichtig für fragiles Shell-Glue.
 
@@ -152,11 +153,17 @@ Lifecycle-Events schreibt der Runner selbst.
 Loop-Entscheidung in Iteration 1 = `verdict` aus `review_submitted`.
 
 ### 2.7 Golemic ist ein Werkzeug, das auf das Host-Repo wirkt
-Golemic wird per Installer in ein ausgechecktes Zielprojekt gedroppt
-(`<ziel>/tools/golemic`). Aus diesem Verzeichnis aufgerufen ermittelt der Runner
-das **umgebende Host-Repo** (git-root oberhalb von `tools/golemic`) und arbeitet
-auf **dessen** GitHub-Remote, Issues, `main` und Worktrees. Golemic baut also das
-*Zielprojekt*, nicht sich selbst.
+Golemic wird per Installer in ein **Unterverzeichnis** eines ausgecheckten
+Zielprojekts gedroppt — der Ort ist frei wählbar, Konvention/Default ist
+`<ziel>/tools/golemic`. Aus diesem Verzeichnis aufgerufen ermittelt der Runner
+das **umgebende Host-Repo**, indem er die Verzeichnisebenen bis zum nächsten
+git-root hochwandert, und arbeitet auf **dessen** GitHub-Remote, Issues, `main`
+und Worktrees. Golemic baut also das *Zielprojekt*, nicht sich selbst.
+
+> Hinweis: Bei einer echten Unterverzeichnis-Installation ist der Ort tatsächlich
+> beliebig — `git rev-parse --show-toplevel` liefert das Host-Repo ortsunabhängig.
+> Nur der **Symlink**-Installfall (Binary zeigt auf einen separaten golemic-Checkout)
+> ist in `ResolveHostRepo` derzeit auf die Pfadkomponente `tools/golemic` verdrahtet.
 
 Dieses Repo (`golemic`) ist der reine **Werkzeug-Lieferant**: Go-Sourcen + Binary,
 die Rollen-Prompts (`dev`, `reviewer`), der Installer und diese Doku. Der alte

@@ -9,7 +9,7 @@ Before starting, ensure you have:
 - A local clone of the `golemic_e2e` sandbox repository
 - Write access to the `golemic_e2e` repository on GitHub
 - Two GitHub bot tokens configured (dev bot and reviewer bot) with write access to the repo
-- The `golemic` binary built and available in your PATH (from `go build -o tools/golemic ./cmd/golemic`)
+- The `golemic` binary built at the repo root (from `make build`, i.e. `go build -o golemic ./cmd/golemic`)
 - The `gh` CLI installed and authenticated
 - The `pi` CLI installed and launchable (`pi --version` succeeds)
 
