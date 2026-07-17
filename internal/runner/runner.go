@@ -50,6 +50,8 @@ type Runner struct {
 	lookupEnv   func(string) (string, bool)
 	runAgentFn  func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
 
+	clean bool
+
 	// Resolved during Run
 	repoRoot   string
 	project    string
@@ -93,6 +95,9 @@ func (r *Runner) SetLookupEnv(fn func(string) (string, bool)) { r.lookupEnv = fn
 func (r *Runner) SetRunAgentFn(fn func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)) {
 	r.runAgentFn = fn
 }
+
+// SetClean enables pre-run artifact cleanup for the target issue.
+func (r *Runner) SetClean(clean bool) { r.clean = clean }
 
 // ---------------------------------------------------------------------------
 // Run
@@ -189,6 +194,22 @@ func (r *Runner) Run() int {
 		return 1
 	}
 	r.issue = issue
+
+	// ---- Pre-collision cleanup (--clean) ----
+	if r.clean {
+		if err := r.cleanArtifacts(); err != nil {
+			fmt.Fprintln(r.stderr, err.Error()) //nolint:errcheck
+			finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
+			_ = writer.Write(eventlog.Event{
+				Type:    eventlog.EventRunFinished,
+				Ts:      time.Now().Format(time.RFC3339),
+				RunID:   r.runID,
+				Payload: finishedPayload,
+			})
+			fmt.Fprintf(r.stdout, "runs/%s\n", r.runID) //nolint:errcheck
+			return 1
+		}
+	}
 
 	// ---- PS-005: Collision check ----
 	collision, err := r.checkAllCollisions()
