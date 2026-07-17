@@ -68,6 +68,7 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 5. Push the branch: ` + "`" + `git push -u origin {{.Branch}}` + "`" + `
 6. **Only after ` + "`" + `{{.VerifyCommand}}` + "`" + ` exits 0**, open the PR:
    ` + "`" + `golemic open-pr --title "..." --body "..."` + "`" + `
+   The body **must** include a closing keyword so merging auto-closes the issue, e.g. ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `.
 `
 
 const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
