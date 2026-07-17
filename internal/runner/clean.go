@@ -19,7 +19,7 @@ func (r *Runner) cleanArtifacts() error { //nolint:gocognit,cyclop // five seque
 	// Dev worktree
 	devWtPath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	if _, err := os.Stat(devWtPath); err == nil {
-		if _, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "remove", devWtPath); err != nil {
+		if _, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "remove", "--force", devWtPath); err != nil {
 			return fmt.Errorf("clean failed: could not remove dev worktree for issue %d: %w", r.issueNum, err)
 		}
 		fmt.Fprintf(r.stderr, "clean: removed dev worktree %s\n", devWtPath) //nolint:errcheck
@@ -28,7 +28,7 @@ func (r *Runner) cleanArtifacts() error { //nolint:gocognit,cyclop // five seque
 	// Reviewer worktree
 	reviewerWtPath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
 	if _, err := os.Stat(reviewerWtPath); err == nil {
-		if _, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "remove", reviewerWtPath); err != nil {
+		if _, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "remove", "--force", reviewerWtPath); err != nil {
 			return fmt.Errorf("clean failed: could not remove reviewer worktree for issue %d: %w", r.issueNum, err)
 		}
 		fmt.Fprintf(r.stderr, "clean: removed reviewer worktree %s\n", reviewerWtPath) //nolint:errcheck
