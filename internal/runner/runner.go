@@ -51,6 +51,7 @@ type Runner struct {
 	runAgentFn  func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
 
 	clean bool
+	quiet bool
 
 	// Resolved during Run
 	repoRoot   string
@@ -98,6 +99,9 @@ func (r *Runner) SetRunAgentFn(fn func(ctx context.Context, cfg agent.RoleConfig
 
 // SetClean enables pre-run artifact cleanup for the target issue.
 func (r *Runner) SetClean(clean bool) { r.clean = clean }
+
+// SetQuiet suppresses the run-setup header when set to true.
+func (r *Runner) SetQuiet(quiet bool) { r.quiet = quiet }
 
 // ---------------------------------------------------------------------------
 // Run
@@ -194,7 +198,9 @@ func (r *Runner) Run() int {
 		return 1
 	}
 	r.issue = issue
-	r.writeRunHeader(r.stderr)
+	if !r.quiet {
+		r.writeRunHeader(r.stderr)
+	}
 
 	// ---- Pre-collision cleanup (--clean) ----
 	if r.clean {
