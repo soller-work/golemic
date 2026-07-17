@@ -43,3 +43,4 @@ __pycache__/
 
 # Local build output
 /golemic
+/tools/golemic

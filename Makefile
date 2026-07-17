@@ -1,5 +1,9 @@
 LINT_BASE_REF ?= origin/main
 
+.PHONY: build
+build: ## Build the golemic binary to tools/golemic
+	go build -o tools/golemic ./cmd/golemic
+
 .PHONY: lint
 lint: ## Run golangci-lint: changed-lines (complexity/standard) + repo-wide architecture rules
 	golangci-lint run --new-from-rev=$(LINT_BASE_REF)
