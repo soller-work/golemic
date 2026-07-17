@@ -396,7 +396,7 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 	ghArgs = append(ghArgs, "pr", "review", strconv.Itoa(prFlag))
 
 	if verdictFlag == "approved" {
-		ghArgs = append(ghArgs, "--approve")
+		ghArgs = append(ghArgs, "--approve", "--body", bodyFlag)
 	} else { // verdictFlag == "changes_requested"
 		ghArgs = append(ghArgs, "--request-changes", "--body", bodyFlag)
 	}

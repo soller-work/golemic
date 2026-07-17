@@ -14,7 +14,7 @@ import (
 	"golemic/internal/preflight"
 )
 
-func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocognit // moved verbatim; cyclomatic 23 and cognitive 32 exceed thresholds on the pre-existing table body
+func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocognit,funlen // moved verbatim; cyclomatic 23 and cognitive 32 exceed thresholds on the pre-existing table body
 	// AC-001: Approved verdict calls gh --approve and writes event.
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
@@ -27,12 +27,16 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 	exec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			if name == "gh" && len(args) >= 3 && args[0] == "pr" && args[1] == "review" && args[2] == "123" {
-				// Verify --approve is present, --request-changes is not.
+				// Verify --approve and --body are present, --request-changes is not.
 				hasApprove := false
+				hasBody := false
 				hasRequestChanges := false
-				for _, arg := range args {
+				for i, arg := range args {
 					if arg == "--approve" {
 						hasApprove = true
+					}
+					if arg == "--body" && i+1 < len(args) && args[i+1] == "LGTM" {
+						hasBody = true
 					}
 					if arg == "--request-changes" {
 						hasRequestChanges = true
@@ -40,6 +44,9 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 				}
 				if !hasApprove {
 					return "", fmt.Errorf("--approve not found in gh args")
+				}
+				if !hasBody {
+					return "", fmt.Errorf("--body with 'LGTM' not found in gh args")
 				}
 				if hasRequestChanges {
 					return "", fmt.Errorf("--request-changes should not be present for approved verdict")
