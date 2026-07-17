@@ -194,6 +194,7 @@ func (r *Runner) Run() int {
 		return 1
 	}
 	r.issue = issue
+	r.writeRunHeader(r.stderr)
 
 	// ---- Pre-collision cleanup (--clean) ----
 	if r.clean {
