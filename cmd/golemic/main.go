@@ -28,6 +28,7 @@ var knownCommands = []struct {
 	{"emit", "Emit an event to the run log"},
 	{"open-pr", "Open a pull request"},
 	{"submit-review", "Submit a review"},
+	{"status", "Show run health status"},
 }
 
 func usage(w io.Writer) {
@@ -93,6 +94,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if command == "submit-review" {
 		return runSubmitReview(args, stdout, stderr, os.Getenv, osExecutor{})
+	}
+
+	if command == "status" {
+		return runStatus(args, stdout, stderr, osExecutor{})
 	}
 
 	for _, c := range knownCommands {
