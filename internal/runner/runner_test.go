@@ -1215,7 +1215,7 @@ func TestRunDevAgent_MissingGuidelines_AC003(t *testing.T) {
 	var stderr bytes.Buffer
 	r.SetStderr(&stderr)
 
-	outcome := r.runDevAgent(filepath.Join(repoRoot, ".golemic"), "/tmp/events.jsonl", 5*time.Minute)
+	outcome := r.runDevAgent(filepath.Join(repoRoot, ".golemic"), "/tmp/events.jsonl", 5*time.Minute, "", 1)
 
 	if outcome != outcomeDevFailed {
 		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
@@ -1289,7 +1289,7 @@ func TestRunDevAgent_SystemPromptFromBinaryDir_AC001(t *testing.T) {
 	}
 
 	r, golemicDir, stderr := setupDevRunner(t)
-	r.runDevAgent(golemicDir, "/tmp/events.jsonl", 5*time.Minute)
+	r.runDevAgent(golemicDir, "/tmp/events.jsonl", 5*time.Minute, "", 1)
 
 	// System prompt was found: error must NOT mention the system prompt path
 	if strings.Contains(stderr.String(), "systemPromptFile") {
@@ -1317,7 +1317,7 @@ func TestRunDevAgent_MissingSystemPromptInBinaryDir_AC002(t *testing.T) {
 	}
 
 	r, golemicDir, stderr := setupDevRunner(t)
-	outcome := r.runDevAgent(golemicDir, "/tmp/events.jsonl", 5*time.Minute)
+	outcome := r.runDevAgent(golemicDir, "/tmp/events.jsonl", 5*time.Minute, "", 1)
 
 	if outcome != outcomeDevFailed {
 		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
