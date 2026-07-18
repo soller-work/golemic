@@ -166,6 +166,84 @@ func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesP
 	return sb.String(), nil
 }
 
+// devRetryTemplateData holds the template variables for the dev retry user prompt.
+type devRetryTemplateData struct {
+	Issue         Issue
+	Branch        string
+	Findings      string
+	VerifyCommand string
+	Guidelines    string
+}
+
+const devRetryUserTemplate = `# Dev Retry: Address Review Findings for Issue #{{.Issue.Number}}
+
+**Title:** {{.Issue.Title}}
+
+**Description:**
+{{.Issue.Body}}
+
+**Branch:** {{.Branch}}
+
+**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
+
+---
+
+## Reviewer Findings
+
+The reviewer has requested the following changes:
+
+{{.Findings}}
+
+---
+
+## Guidelines
+
+{{.Guidelines}}
+
+---
+
+## Instructions
+
+1. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
+2. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
+3. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
+4. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
+`
+
+// RenderDevRetry renders a dev retry user prompt injecting the verbatim reviewer findings.
+//
+// Returns EMPTY_FINDINGS error if findings is empty (BR-002, IF-001).
+func RenderDevRetry(findings string, issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+	if findings == "" {
+		return "", fmt.Errorf("EMPTY_FINDINGS: changes_requested review has an empty body")
+	}
+
+	guidelines, err := readGuidelines(guidelinesPath)
+	if err != nil {
+		return "", err
+	}
+
+	data := devRetryTemplateData{
+		Issue:         issue,
+		Branch:        branch,
+		Findings:      findings,
+		VerifyCommand: verifyCommand,
+		Guidelines:    guidelines,
+	}
+
+	tmpl, err := template.New("devRetry").Parse(devRetryUserTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse dev retry prompt template: %w", err)
+	}
+
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return "", fmt.Errorf("failed to render dev retry prompt template: %w", err)
+	}
+
+	return sb.String(), nil
+}
+
 // readGuidelines reads the guidelines file at the given path.
 // Returns an error if the file does not exist or cannot be read.
 func readGuidelines(path string) (string, error) {
