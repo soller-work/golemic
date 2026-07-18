@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
+	"golemic/internal/telemetry"
 	"golemic/internal/worktree"
 )
 
@@ -64,6 +66,11 @@ type Runner struct {
 	cfg        *config.Config
 	creds      *credentials.Credentials
 	issue      *issueData
+
+	// Telemetry
+	sink         telemetry.Sink
+	traceID      string
+	sinkOverride bool // when true, Run() does not overwrite r.sink from config
 }
 
 // New creates a new Runner. executor is used for all gh/git commands, homeDir is
@@ -77,6 +84,7 @@ func New(executor preflight.Executor, homeDir, cwd string, issueNum int) *Runner
 		stdout:   io.Discard,
 		stderr:   io.Discard,
 		issueNum: issueNum,
+		sink:     telemetry.NoopSink{},
 	}
 }
 
@@ -111,6 +119,13 @@ func (r *Runner) SetCITimeout(d time.Duration) { r.ciTimeoutOverride = d }
 
 // SetQuiet suppresses the run-setup header when set to true.
 func (r *Runner) SetQuiet(quiet bool) { r.quiet = quiet }
+
+// SetSink injects a telemetry sink, bypassing the config-driven sink selection in Run.
+// Used by tests to inject a recording or failing sink at the runner level.
+func (r *Runner) SetSink(s telemetry.Sink) {
+	r.sink = s
+	r.sinkOverride = true
+}
 
 // ---------------------------------------------------------------------------
 // Run
@@ -256,8 +271,60 @@ func (r *Runner) Run() int {
 		return 1
 	}
 
+	// ---- Telemetry sink setup ----
+	r.traceID = telemetry.TraceID(r.runID)
+	runDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID)
+	if !r.sinkOverride {
+		if r.cfg.Telemetry.Enabled {
+			fs := telemetry.NewFileSink(filepath.Join(runDir, "telemetry.jsonl"))
+			defer fs.Close() //nolint:errcheck
+			r.sink = fs
+		} else {
+			r.sink = telemetry.NoopSink{}
+		}
+	}
+
 	// ---- PS-006: Full orchestration ----
-	finalOutcome := r.orchestrate(writer, eventLogPath)
+	runSpanID, endRunSpan := telemetry.StartSpan(r.sink, r.traceID, "", telemetry.SpanRun, map[string]any{
+		"service.name": "golemic",
+		"run_id":       r.runID,
+		"issue":        r.issueNum,
+		"project":      r.project,
+		"pid":          os.Getpid(),
+	})
+
+	finalOutcome := r.orchestrate(writer, eventLogPath, runSpanID)
+
+	// Worktree cleanup spans (children of run span, only on success)
+	golemicDir2 := filepath.Join(r.homeDir, ".golemic", r.project)
+	if finalOutcome == outcomeSuccess {
+		_, endCleanDev := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCleanup,
+			map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
+		cleanDevErr := worktree.Cleanup(r.repoRoot, golemicDir2, r.issueNum, r.executor)
+		if cleanDevErr != nil {
+			fmt.Fprintf(r.stderr, "Warning: dev worktree cleanup failed: %v\n", cleanDevErr) //nolint:errcheck
+			endCleanDev(telemetry.StatusError, nil)
+		} else {
+			endCleanDev(telemetry.StatusOK, nil)
+		}
+
+		_, endCleanRev := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCleanup,
+			map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
+		cleanRevErr := worktree.CleanupReviewer(r.repoRoot, golemicDir2, r.issueNum, r.executor)
+		if cleanRevErr != nil {
+			fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", cleanRevErr) //nolint:errcheck
+			endCleanRev(telemetry.StatusError, nil)
+		} else {
+			endCleanRev(telemetry.StatusOK, nil)
+		}
+	}
+
+	// Close run span
+	runStatus := telemetry.StatusOK
+	if finalOutcome != outcomeSuccess {
+		runStatus = telemetry.StatusError
+	}
+	endRunSpan(runStatus, map[string]any{"outcome": finalOutcome})
 
 	// Write run_finished with final outcome (BR-001: always the last event)
 	finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: finalOutcome})
@@ -267,17 +334,6 @@ func (r *Runner) Run() int {
 		RunID:   r.runID,
 		Payload: finishedPayload,
 	})
-
-	// BR-006: Cleanup (worktree removal) only on success
-	if finalOutcome == outcomeSuccess {
-		golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-		if err := worktree.Cleanup(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
-			fmt.Fprintf(r.stderr, "Warning: dev worktree cleanup failed: %v\n", err)
-		}
-		if err := worktree.CleanupReviewer(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
-			fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", err)
-		}
-	}
 
 	// BR-007: Exit 0 only for success; exit != 0 otherwise
 	if finalOutcome == outcomeSuccess {
@@ -310,6 +366,32 @@ func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
 	})
 }
 
+// cleanupReviewerWorktree emits a worktree.cleanup span and cleans up the reviewer worktree.
+func (r *Runner) cleanupReviewerWorktree(golemicDir, parentSpanID string) {
+	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanWorktreeCleanup,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
+	if err := worktree.CleanupReviewer(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", err) //nolint:errcheck
+		endSpan(telemetry.StatusError, nil)
+	} else {
+		endSpan(telemetry.StatusOK, nil)
+	}
+}
+
+// postEscalationCommentWithSpan emits an escalation.comment span and posts the comment.
+func (r *Runner) postEscalationCommentWithSpan(eventLogPath, parentSpanID string, roundCount int) {
+	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanEscalationComment,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "round": roundCount})
+	prNumber, prErr := r.getPRNumber(eventLogPath)
+	if prErr == nil {
+		r.postEscalationComment(prNumber, roundCount)
+		endSpan(telemetry.StatusOK, nil)
+	} else {
+		fmt.Fprintf(r.stderr, "Warning: failed to get PR number for escalation comment: %v\n", prErr) //nolint:errcheck
+		endSpan(telemetry.StatusError, nil)
+	}
+}
+
 // postEscalationComment posts a deterministic escalation comment on the PR using
 // the reviewer token. Errors are logged but do not change the escalated outcome (BR-008).
 func (r *Runner) postEscalationComment(prNumber, roundCount int) {
@@ -330,8 +412,9 @@ func (r *Runner) postEscalationComment(prNumber, roundCount int) {
 }
 
 // orchestrate implements the bounded dev→reviewer ping-pong loop after collision check passes.
+// runSpanID is the parent telemetry span ID for all phases within orchestration.
 // Returns final outcome.
-func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) string {
+func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, runSpanID string) string {
 	const maxRounds = 3
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
@@ -343,13 +426,17 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 	}
 
 	// Create dev worktree
+	_, endCreateDevWT := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCreate,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
 	if err := worktree.Create(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer); err != nil {
+		endCreateDevWT(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "Failed to create dev worktree: %v\n", err)
 		return outcomeDevFailed
 	}
+	endCreateDevWT(telemetry.StatusOK, nil)
 
 	// Round 1 dev
-	devOutcome := r.runDevAgent(golemicDir, eventLogPath, timeoutDuration)
+	devOutcome := r.runDevAgent(golemicDir, eventLogPath, timeoutDuration, runSpanID, 1)
 	if devOutcome != outcomeSuccess {
 		return devOutcome
 	}
@@ -370,25 +457,32 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 		return ciGateOutcome
 	}
 
-	// Bounded ping-pong: up to maxRounds reviewer runs
+	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeoutDuration, runSpanID)
+}
+
+// pingPongLoop runs the bounded reviewer ping-pong loop (up to maxRounds).
+func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.EventWriter, timeout time.Duration, runSpanID string) string {
+	const maxRounds = 3
+
 	firstReviewerRound := true
+	round := 1
 	for {
-		// Clean up stale reviewer worktree before recreating on rounds 2+
 		if !firstReviewerRound {
-			if err := worktree.CleanupReviewer(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
-				fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", err) //nolint:errcheck
-			}
+			r.cleanupReviewerWorktree(golemicDir, runSpanID)
 		}
 		firstReviewerRound = false
 
+		_, endCreateRevWT := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCreate,
+			map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
 		if err := worktree.CreateForReviewer(r.repoRoot, golemicDir, r.runID, r.issueNum, r.branchName, "golemic-reviewer", r.executor, writer); err != nil {
+			endCreateRevWT(telemetry.StatusError, nil)
 			fmt.Fprintf(r.stderr, "Failed to create reviewer worktree: %v\n", err) //nolint:errcheck
 			return outcomeReviewFailed
 		}
+		endCreateRevWT(telemetry.StatusOK, nil)
 
-		reviewerOutcome := r.runReviewerAgent(golemicDir, eventLogPath, timeoutDuration)
-		if reviewerOutcome != outcomeSuccess {
-			return reviewerOutcome
+		if outcome := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round); outcome != outcomeSuccess {
+			return outcome
 		}
 
 		reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
@@ -402,42 +496,44 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 			return outcomeReviewFailed
 		}
 
-		verdict, err := r.latestReviewVerdict(eventLogPath)
-		if err != nil {
-			fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n") //nolint:errcheck
-			return outcomeReviewFailed
+		next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, &round)
+		if !next {
+			return outcome
 		}
+	}
+}
 
-		roundCount := r.countReviewSubmittedEvents(eventLogPath)
+// handleVerdict processes the latest review verdict and returns (continueLoop, outcome).
+// When continueLoop is true, outcome is empty and the caller should loop again.
+func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeout time.Duration, maxRounds int, round *int) (continueLoop bool, outcome string) {
+	verdict, err := r.latestReviewVerdict(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n") //nolint:errcheck
+		return false, outcomeReviewFailed
+	}
 
-		switch verdict {
-		case "approved":
-			return outcomeSuccess
-		case "changes_requested":
-			if roundCount >= maxRounds {
-				// Post deterministic escalation comment (BR-004, BR-007)
-				prNumber, prErr := r.getPRNumber(eventLogPath)
-				if prErr == nil {
-					r.postEscalationComment(prNumber, roundCount)
-				} else {
-					fmt.Fprintf(r.stderr, "Warning: failed to get PR number for escalation comment: %v\n", prErr) //nolint:errcheck
-				}
-				return outcomeEscalated
-			}
-			// Get verbatim findings for the next dev iteration (BR-002)
-			findings, bodyErr := r.latestReviewBody(eventLogPath)
-			if bodyErr != nil || findings == "" {
-				fmt.Fprintf(r.stderr, "review_failed: EMPTY_FINDINGS: changes_requested review has an empty body\n") //nolint:errcheck
-				return outcomeReviewFailed
-			}
-			devRetryOutcome := r.runDevRetryAgent(golemicDir, eventLogPath, timeoutDuration, findings)
-			if devRetryOutcome != outcomeSuccess {
-				return devRetryOutcome
-			}
-			// Loop continues: cleanup reviewer worktree and re-review
-		default:
-			fmt.Fprintf(r.stderr, "review_failed: unknown verdict %q\n", verdict) //nolint:errcheck
-			return outcomeReviewFailed
+	roundCount := r.countReviewSubmittedEvents(eventLogPath)
+
+	switch verdict {
+	case "approved":
+		return false, outcomeSuccess
+	case "changes_requested":
+		if roundCount >= maxRounds {
+			r.postEscalationCommentWithSpan(eventLogPath, runSpanID, roundCount)
+			return false, outcomeEscalated
 		}
+		findings, bodyErr := r.latestReviewBody(eventLogPath)
+		if bodyErr != nil || findings == "" {
+			fmt.Fprintf(r.stderr, "review_failed: EMPTY_FINDINGS: changes_requested review has an empty body\n") //nolint:errcheck
+			return false, outcomeReviewFailed
+		}
+		*round++
+		if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, runSpanID, *round); o != outcomeSuccess {
+			return false, o
+		}
+		return true, ""
+	default:
+		fmt.Fprintf(r.stderr, "review_failed: unknown verdict %q\n", verdict) //nolint:errcheck
+		return false, outcomeReviewFailed
 	}
 }

@@ -400,3 +400,55 @@ func TestLoadErrorsIsNotExist(t *testing.T) {
 		t.Errorf("errors.Is(err, os.ErrNotExist) = false for missing config file; err: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Telemetry config tests
+// ---------------------------------------------------------------------------
+
+func TestLoad_TelemetryEnabled_Default(t *testing.T) {
+	dir := t.TempDir()
+	cfg := writeAndLoad(t, dir, `{"project":"p","verify_command":"go test"}`)
+	if !cfg.Telemetry.Enabled {
+		t.Error("Telemetry.Enabled must default to true when field is absent")
+	}
+}
+
+func TestLoad_TelemetryEnabled_ExplicitTrue(t *testing.T) {
+	dir := t.TempDir()
+	cfg := writeAndLoad(t, dir, `{"project":"p","verify_command":"go test","telemetry":{"enabled":true}}`)
+	if !cfg.Telemetry.Enabled {
+		t.Error("Telemetry.Enabled must be true when explicitly set to true")
+	}
+}
+
+func TestLoad_TelemetryEnabled_ExplicitFalse(t *testing.T) {
+	dir := t.TempDir()
+	cfg := writeAndLoad(t, dir, `{"project":"p","verify_command":"go test","telemetry":{"enabled":false}}`)
+	if cfg.Telemetry.Enabled {
+		t.Error("Telemetry.Enabled must be false when explicitly set to false")
+	}
+}
+
+func TestDefaultConfig_TelemetryEnabled(t *testing.T) {
+	cfg := DefaultConfig("proj")
+	if !cfg.Telemetry.Enabled {
+		t.Error("DefaultConfig must set Telemetry.Enabled to true")
+	}
+}
+
+// writeAndLoad writes configJSON into dir/.golemic/config.json and calls Load.
+func writeAndLoad(t *testing.T, dir, configJSON string) *Config {
+	t.Helper()
+	golemicDir := filepath.Join(dir, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	return cfg
+}

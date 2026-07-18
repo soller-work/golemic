@@ -255,7 +255,7 @@ func runOrchestrate(t *testing.T, r *Runner, logPath string) string {
 	}
 	defer writer.Close() //nolint:errcheck
 
-	return r.orchestrate(writer, logPath)
+	return r.orchestrate(writer, logPath, "")
 }
 
 // ---------------------------------------------------------------------------
