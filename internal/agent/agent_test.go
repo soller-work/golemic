@@ -672,10 +672,21 @@ func TestRunRole_ProcessGroupKilled(t *testing.T) {
 
 	// Kill(pid, 0) checks if the process exists without sending a signal.
 	// ESRCH means "no such process" — the child was successfully killed.
-	if err := syscall.Kill(pid, 0); err == nil {
+	// SIGKILL delivery and teardown of the group's background child are
+	// asynchronous with respect to the parent's reap, so poll briefly rather
+	// than asserting the child is gone the instant RunRole returns.
+	var killErr error
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		killErr = syscall.Kill(pid, 0)
+		if errors.Is(killErr, syscall.ESRCH) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if killErr == nil {
 		t.Errorf("background child process (PID %d) is still alive after timeout (kill -0 did not return ESRCH)", pid)
-	} else if !errors.Is(err, syscall.ESRCH) {
-		t.Errorf("unexpected error checking child process PID %d: %v (want ESRCH)", pid, err)
+	} else if !errors.Is(killErr, syscall.ESRCH) {
+		t.Errorf("unexpected error checking child process PID %d: %v (want ESRCH)", pid, killErr)
 	}
 }
 
