@@ -256,13 +256,15 @@ unsichtbar. Nebeneffekt: validiert implizit, dass der Push vollständig ankam.
 
 ### 2.11 Fehlerpfade und Outcomes
 Geschlossenes Outcome-Enum für `run_finished`:
-`success` | `dev_failed` | `review_failed` | `timeout` | `aborted`.
+`success` | `dev_failed` | `review_failed` | `escalated` | `timeout` | `aborted`.
 
 - **Timeout pro Rollen-Lauf** (Config-Feld, Default 30 min): der Runner killt den
   Prozessbaum und beendet mit `timeout`.
 - **Fehlendes erwartetes Event** (`pr_opened` nach Dev, `review_submitted` nach
   Reviewer) = `dev_failed` / `review_failed` — **unabhängig vom Exit-Code**. Das
   Event ist die Wahrheit, der Exit-Code nur Log-Information.
+- **`escalated`** = Reviewer-Verdict `changes_requested`: Runner-Exit ≠ 0, beide
+  Worktrees bleiben erhalten (kein Cleanup), Basis für den Ping-Pong-Loop.
 - **Eskalation in Iteration 1** = Runner-Exit ≠ 0 mit klarer Meldung; das
   vollständige Event-Log und die Transkripte liegen unter `runs/<runId>/`. Der
   PR-Kommentar-Mechanismus kommt erst in Iteration 2.
