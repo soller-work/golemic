@@ -301,9 +301,30 @@ func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
 	})
 }
 
-// orchestrate implements the full dev→reviewer loop after collision check passes.
+// postEscalationComment posts a deterministic escalation comment on the PR using
+// the reviewer token. Errors are logged but do not change the escalated outcome (BR-008).
+func (r *Runner) postEscalationComment(prNumber, roundCount int) {
+	body := fmt.Sprintf(
+		"golemic has completed %d review round(s) for issue #%d (PR #%d). "+
+			"The reviewer requested changes in every round. "+
+			"No merge has happened. Human review is required.",
+		roundCount, r.issueNum, prNumber,
+	)
+	_, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
+		r.repoRoot,
+		"gh", "pr", "comment", fmt.Sprintf("%d", prNumber), "--body", body,
+	)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to post escalation comment: %v\n", err) //nolint:errcheck
+	}
+}
+
+// orchestrate implements the bounded dev→reviewer ping-pong loop after collision check passes.
 // Returns final outcome.
 func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) string {
+	const maxRounds = 3
+
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	var timeoutDuration time.Duration
 	if r.cfg.TimeoutSeconds > 0 {
@@ -312,61 +333,91 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 		timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 	}
 
-	// PS-002: Create dev worktree
+	// Create dev worktree
 	if err := worktree.Create(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer); err != nil {
 		fmt.Fprintf(r.stderr, "Failed to create dev worktree: %v\n", err)
 		return outcomeDevFailed
 	}
 
-	// PS-003: Run dev agent
+	// Round 1 dev
 	devOutcome := r.runDevAgent(golemicDir, eventLogPath, timeoutDuration)
 	if devOutcome != outcomeSuccess {
 		return devOutcome
 	}
 
-	// Check if pr_opened event exists and is valid
 	if !r.hasPROpenedEvent(eventLogPath) {
 		fmt.Fprintf(r.stderr, "dev_failed: pr_opened event missing or invalid\n")
 		return outcomeDevFailed
 	}
 
-	// PS-004: Create reviewer worktree
-	if err := worktree.CreateForReviewer(r.repoRoot, golemicDir, r.runID, r.issueNum, r.branchName, "golemic-reviewer", r.executor, writer); err != nil {
-		fmt.Fprintf(r.stderr, "Failed to create reviewer worktree: %v\n", err)
-		return outcomeReviewFailed
-	}
+	// Bounded ping-pong: up to maxRounds reviewer runs
+	firstReviewerRound := true
+	for {
+		// Clean up stale reviewer worktree before recreating on rounds 2+
+		if !firstReviewerRound {
+			if err := worktree.CleanupReviewer(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
+				fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", err) //nolint:errcheck
+			}
+		}
+		firstReviewerRound = false
 
-	// PS-005: Run reviewer agent
-	reviewerOutcome := r.runReviewerAgent(golemicDir, eventLogPath, timeoutDuration)
-	if reviewerOutcome != outcomeSuccess {
-		return reviewerOutcome
-	}
+		if err := worktree.CreateForReviewer(r.repoRoot, golemicDir, r.runID, r.issueNum, r.branchName, "golemic-reviewer", r.executor, writer); err != nil {
+			fmt.Fprintf(r.stderr, "Failed to create reviewer worktree: %v\n", err) //nolint:errcheck
+			return outcomeReviewFailed
+		}
 
-	// Dirty check
-	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
-	isDirty, err := worktree.IsDirty(reviewerWorktreePath, r.executor)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: failed to check dirty status: %v\n", err)
-		return outcomeReviewFailed
-	}
-	if isDirty {
-		fmt.Fprintf(r.stderr, "review_failed: reviewer worktree has uncommitted changes\n")
-		return outcomeReviewFailed
-	}
+		reviewerOutcome := r.runReviewerAgent(golemicDir, eventLogPath, timeoutDuration)
+		if reviewerOutcome != outcomeSuccess {
+			return reviewerOutcome
+		}
 
-	// Derive outcome from the review verdict
-	verdict, err := r.latestReviewVerdict(eventLogPath)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n")
-		return outcomeReviewFailed
-	}
-	switch verdict {
-	case "approved":
-		return outcomeSuccess
-	case "changes_requested":
-		return outcomeEscalated
-	default:
-		fmt.Fprintf(r.stderr, "review_failed: unknown verdict %q\n", verdict) //nolint:errcheck
-		return outcomeReviewFailed
+		reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+		isDirty, err := worktree.IsDirty(reviewerWorktreePath, r.executor)
+		if err != nil {
+			fmt.Fprintf(r.stderr, "review_failed: failed to check dirty status: %v\n", err) //nolint:errcheck
+			return outcomeReviewFailed
+		}
+		if isDirty {
+			fmt.Fprintf(r.stderr, "review_failed: reviewer worktree has uncommitted changes\n") //nolint:errcheck
+			return outcomeReviewFailed
+		}
+
+		verdict, err := r.latestReviewVerdict(eventLogPath)
+		if err != nil {
+			fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n") //nolint:errcheck
+			return outcomeReviewFailed
+		}
+
+		roundCount := r.countReviewSubmittedEvents(eventLogPath)
+
+		switch verdict {
+		case "approved":
+			return outcomeSuccess
+		case "changes_requested":
+			if roundCount >= maxRounds {
+				// Post deterministic escalation comment (BR-004, BR-007)
+				prNumber, prErr := r.getPRNumber(eventLogPath)
+				if prErr == nil {
+					r.postEscalationComment(prNumber, roundCount)
+				} else {
+					fmt.Fprintf(r.stderr, "Warning: failed to get PR number for escalation comment: %v\n", prErr) //nolint:errcheck
+				}
+				return outcomeEscalated
+			}
+			// Get verbatim findings for the next dev iteration (BR-002)
+			findings, bodyErr := r.latestReviewBody(eventLogPath)
+			if bodyErr != nil || findings == "" {
+				fmt.Fprintf(r.stderr, "review_failed: EMPTY_FINDINGS: changes_requested review has an empty body\n") //nolint:errcheck
+				return outcomeReviewFailed
+			}
+			devRetryOutcome := r.runDevRetryAgent(golemicDir, eventLogPath, timeoutDuration, findings)
+			if devRetryOutcome != outcomeSuccess {
+				return devRetryOutcome
+			}
+			// Loop continues: cleanup reviewer worktree and re-review
+		default:
+			fmt.Fprintf(r.stderr, "review_failed: unknown verdict %q\n", verdict) //nolint:errcheck
+			return outcomeReviewFailed
+		}
 	}
 }
