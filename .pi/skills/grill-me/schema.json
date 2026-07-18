@@ -7,6 +7,7 @@
   "required": [
     "schema_version",
     "slice_type",
+    "risk",
     "title",
     "summary",
     "readiness",
@@ -60,6 +61,13 @@
       "enum": [
         "ready",
         "blocked"
+      ]
+    },
+    "risk": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
       ]
     },
     "stakeholder_intent": {

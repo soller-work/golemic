@@ -25,6 +25,12 @@ SCHEMA_PATH = Path(__file__).parent.parent / "schema.json"
 DEFAULT_LABEL = "ready-for-agent"
 DETAILS_MARKER = "Implementation Slice (machine-readable)"
 
+RISK_LABEL_COLORS = {
+    "low": "0e8a16",
+    "medium": "e4e669",
+    "high": "d93f0b",
+}
+
 
 # ---------------------------------------------------------------------------
 # Injectable gh runner interface
@@ -117,6 +123,10 @@ def render_body(slice_data: dict, canonical_json: str) -> str:
     The embedded JSON block is the authoritative specification (BR-002).
     """
     parts: List[str] = []
+
+    slice_type = slice_data.get("slice_type", "")
+    risk = slice_data.get("risk", "")
+    parts.append(f"**Type:** {slice_type} | **Risk:** {risk}")
 
     parts.append(f"## Summary\n\n{slice_data['summary']}")
 
@@ -255,12 +265,12 @@ def _check_preconditions(gh: GhRunner, cwd: Path) -> List[str]:
 # Label helpers (SE-001)
 # ---------------------------------------------------------------------------
 
-def _ensure_label(gh: GhRunner, label_name: str) -> None:
+def _ensure_label(gh: GhRunner, label_name: str, color: str = "0075ca", description: str = "Ready for autonomous agent") -> None:
     result = gh.run(
         [
             "label", "create", label_name,
-            "--color", "0075ca",
-            "--description", "Ready for autonomous agent",
+            "--color", color,
+            "--description", description,
         ],
         check=False,
         capture_output=True,
@@ -273,11 +283,21 @@ def _ensure_label(gh: GhRunner, label_name: str) -> None:
         )
 
 
+def _ensure_risk_label(gh: GhRunner, risk_value: str) -> None:
+    color = RISK_LABEL_COLORS[risk_value]
+    _ensure_label(
+        gh,
+        f"risk:{risk_value}",
+        color=color,
+        description=f"Risk level: {risk_value}",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Dry-run command listing
 # ---------------------------------------------------------------------------
 
-def _planned_commands(title: str, blocked_by: List[int], label_name: str) -> List[str]:
+def _planned_commands(title: str, blocked_by: List[int], label_name: str, risk_value: str) -> List[str]:
     cmds = [f"gh issue create --title {title!r} --body <rendered-body>"]
     for n in blocked_by:
         cmds.append(
@@ -288,11 +308,17 @@ def _planned_commands(title: str, blocked_by: List[int], label_name: str) -> Lis
             f"/repos/{{owner}}/{{repo}}/issues/<new-number>/dependencies/blocked_by"
             f" -F issue_id=<id-of-{n}>"
         )
+    risk_label = f"risk:{risk_value}"
+    risk_color = RISK_LABEL_COLORS[risk_value]
+    cmds.append(
+        f"gh label create {risk_label!r} --color {risk_color}"
+        f" --description 'Risk level: {risk_value}'  (idempotent)"
+    )
     cmds.append(
         f"gh label create {label_name!r} --color 0075ca"
         f" --description 'Ready for autonomous agent'  (idempotent)"
     )
-    cmds.append(f"gh issue edit <new-number> --add-label {label_name!r}")
+    cmds.append(f"gh issue edit <new-number> --add-label {label_name!r},{risk_label!r}")
     return cmds
 
 
@@ -335,6 +361,7 @@ def run(
         return 1
 
     title = raw["title"]
+    risk_value = raw["risk"]
     config = _load_config(cwd)
     label_name = get_label_name(config)
 
@@ -343,7 +370,7 @@ def run(
         print("=== Rendered Body ===\n")
         print(body)
         print("\n=== Planned gh Commands ===\n")
-        for cmd in _planned_commands(title, blocked_by, label_name):
+        for cmd in _planned_commands(title, blocked_by, label_name, risk_value):
             print(cmd)
         return 0
 
@@ -400,17 +427,19 @@ def run(
             )
             return 1
 
-    # Step 3: label — LAST so a partially created issue is never takeable (BR-005, SC-003)
+    # Step 3: labels — LAST so a partially created issue is never takeable (BR-005, SC-003)
+    risk_label = f"risk:{risk_value}"
     try:
+        _ensure_risk_label(gh, risk_value)
         _ensure_label(gh, label_name)
-        gh.run(["issue", "edit", issue_number, "--add-label", label_name])
+        gh.run(["issue", "edit", issue_number, "--add-label", f"{label_name},{risk_label}"])
     except subprocess.CalledProcessError:
         print(
             f"PARTIAL_FAILURE: Issue #{issue_number} created at {issue_url}",
             file=sys.stderr,
         )
         print(
-            f"Unfinished steps: label '{label_name}' must be attached manually",
+            f"Unfinished steps: labels '{risk_label}' and '{label_name}' must be attached manually",
             file=sys.stderr,
         )
         return 1

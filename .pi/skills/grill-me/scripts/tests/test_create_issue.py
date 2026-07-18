@@ -18,6 +18,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from create_issue import (  # noqa: E402
     GITHUB_BODY_LIMIT,
+    RISK_LABEL_COLORS,
     render_body,
     run,
     get_label_name,
@@ -32,6 +33,7 @@ SCHEMA_PATH = SCRIPTS_DIR.parent / "schema.json"
 _MINIMAL_SLICE = {
     "schema_version": "1.1.0",
     "slice_type": "command",
+    "risk": "medium",
     "title": "Test slice",
     "summary": "A minimal slice for unit tests.",
     "readiness": "blocked",
@@ -203,6 +205,9 @@ class FakeGhRunner:
                 return FakeResult(returncode=1, stderr="label 'x' already exists in the repository")
             if self._label_create_fail:
                 return FakeResult(returncode=1, stderr="internal server error")
+            return FakeResult(returncode=0)
+
+        if verb == ("api", "--method") and "dependencies/blocked_by" not in " ".join(args):
             return FakeResult(returncode=0)
 
         if verb == ("issue", "edit"):
@@ -839,6 +844,176 @@ class TestAuthPrecondition(unittest.TestCase):
 
     def test_label_config_reads_from_config(self):
         self.assertEqual(get_label_name({"label": "my-label"}), "my-label")
+
+
+# ---------------------------------------------------------------------------
+# Issue #12: Risk label creation and rendering
+# ---------------------------------------------------------------------------
+
+class TestRiskLabelColors(unittest.TestCase):
+    def test_all_risk_values_have_colors(self):
+        for v in ("low", "medium", "high"):
+            self.assertIn(v, RISK_LABEL_COLORS)
+            self.assertTrue(RISK_LABEL_COLORS[v])
+
+    def test_risk_colors_are_distinct(self):
+        colors = list(RISK_LABEL_COLORS.values())
+        self.assertEqual(len(colors), len(set(colors)))
+
+
+class TestRiskLabelAttached(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cwd = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run_with_risk(self, risk_value):
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = risk_value
+        path = Path(self.tmp.name) / "slice.json"
+        _write_slice(data, path)
+        gh = FakeGhRunner()
+        with patch("subprocess.run") as mock_sub:
+            mock_sub.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+            rc = run(
+                slice_path=path,
+                blocked_by=[],
+                dry_run=False,
+                gh=gh,
+                cwd=self.cwd,
+                validate_fn=_noop_validate,
+            )
+        return rc, gh
+
+    def test_risk_label_created_for_low(self):
+        rc, gh = self._run_with_risk("low")
+        self.assertEqual(rc, 0)
+        label_creates = [c for c in gh.calls if tuple(c[:2]) == ("label", "create")]
+        created_names = [c[2] for c in label_creates]
+        self.assertIn("risk:low", created_names)
+
+    def test_risk_label_created_for_medium(self):
+        rc, gh = self._run_with_risk("medium")
+        self.assertEqual(rc, 0)
+        label_creates = [c for c in gh.calls if tuple(c[:2]) == ("label", "create")]
+        created_names = [c[2] for c in label_creates]
+        self.assertIn("risk:medium", created_names)
+
+    def test_risk_label_created_for_high(self):
+        rc, gh = self._run_with_risk("high")
+        self.assertEqual(rc, 0)
+        label_creates = [c for c in gh.calls if tuple(c[:2]) == ("label", "create")]
+        created_names = [c[2] for c in label_creates]
+        self.assertIn("risk:high", created_names)
+
+    def test_risk_label_attached_with_ready_for_agent(self):
+        rc, gh = self._run_with_risk("medium")
+        self.assertEqual(rc, 0)
+        edit_calls = [c for c in gh.calls if tuple(c[:2]) == ("issue", "edit")]
+        self.assertTrue(edit_calls)
+        label_arg = edit_calls[-1][-1]
+        self.assertIn("risk:medium", label_arg)
+        self.assertIn("ready-for-agent", label_arg)
+
+    def test_risk_label_idempotent_when_already_exists(self):
+        """label create returning 'already exists' must be treated as success for risk labels."""
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = "low"
+        path = Path(self.tmp.name) / "slice.json"
+        _write_slice(data, path)
+        gh = FakeGhRunner(label_already_exists=True)
+        with patch("subprocess.run") as mock_sub:
+            mock_sub.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+            rc = run(
+                slice_path=path,
+                blocked_by=[],
+                dry_run=False,
+                gh=gh,
+                cwd=self.cwd,
+                validate_fn=_noop_validate,
+            )
+        self.assertEqual(rc, 0)
+
+
+class TestRiskInRenderedBody(unittest.TestCase):
+    def test_render_body_contains_risk_value(self):
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = "medium"
+        canonical = json.dumps(data, indent=2, ensure_ascii=False)
+        body = render_body(data, canonical)
+        self.assertIn("medium", body)
+
+    def test_render_body_shows_risk_in_header(self):
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = "high"
+        canonical = json.dumps(data, indent=2, ensure_ascii=False)
+        body = render_body(data, canonical)
+        # Risk should appear before the first section header
+        risk_pos = body.index("high")
+        first_section = body.index("## ")
+        self.assertLess(risk_pos, first_section)
+
+    def test_render_body_shows_slice_type_in_header(self):
+        data = dict(_MINIMAL_SLICE)
+        canonical = json.dumps(data, indent=2, ensure_ascii=False)
+        body = render_body(data, canonical)
+        self.assertIn("command", body[:200])
+
+
+class TestSchemaValidationRiskField(unittest.TestCase):
+    def _validate(self, data):
+        try:
+            from jsonschema import Draft202012Validator
+        except ImportError:
+            self.skipTest("jsonschema not installed")
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        validator = Draft202012Validator(schema)
+        return list(validator.iter_errors(data))
+
+    def test_valid_risk_low_accepted(self):
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = "low"
+        self.assertEqual(self._validate(data), [])
+
+    def test_valid_risk_medium_accepted(self):
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = "medium"
+        self.assertEqual(self._validate(data), [])
+
+    def test_valid_risk_high_accepted(self):
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = "high"
+        self.assertEqual(self._validate(data), [])
+
+    def test_missing_risk_rejected(self):
+        data = dict(_MINIMAL_SLICE)
+        del data["risk"]
+        errors = self._validate(data)
+        self.assertTrue(errors)
+
+    def test_invalid_risk_value_rejected(self):
+        data = dict(_MINIMAL_SLICE)
+        data["risk"] = "critical"
+        errors = self._validate(data)
+        self.assertTrue(errors)
+
+
+class TestScaffoldIncludesRisk(unittest.TestCase):
+    def test_scaffold_contains_risk_field(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "schema_scaffold", SCRIPTS_DIR / "schema-scaffold.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.json"
+            mod.scaffold_from_schema(str(SCHEMA_PATH), "command", str(out))
+            data = json.loads(out.read_text())
+        self.assertIn("risk", data)
+        self.assertEqual(data["risk"], "FILL_IN")
 
 
 if __name__ == "__main__":
