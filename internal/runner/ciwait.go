@@ -216,6 +216,7 @@ func (r *Runner) writeCIWaitFinished(eventLogPath, result string, round int) {
 		Type:    eventlog.EventCIWaitFinished,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
+		TurnID:  r.turnCounter,
 		Payload: payload,
 	})
 }
@@ -277,6 +278,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		return outcomeDevFailed
 	}
 
+	r.turnCounter++ // CI retry dev agent gets its own turn
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
@@ -288,6 +290,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		WorktreeDir:       devWorktreePath,
 		RunID:             r.runID,
 		EventLogPath:      eventLogPath,
+		TurnID:            r.turnCounter,
 		GHToken:           r.creds.DevToken(),
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Dev,

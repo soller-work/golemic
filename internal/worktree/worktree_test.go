@@ -207,7 +207,7 @@ func TestCreate_GitCommandSequence(t *testing.T) {
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 	wtPath := expectedWorktreePath(golemicDir)
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestCreate_EventWritten(t *testing.T) {
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 	wtPath := expectedWorktreePath(golemicDir)
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestCreate_NoCleanupOnError(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err == nil {
 		t.Fatal("expected error from Create, got nil")
 	}
@@ -369,7 +369,7 @@ func TestCreate_NoCleanupOn_ConfigCredHelperFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err == nil {
 		t.Fatal("expected error from Create, got nil")
 	}
@@ -406,7 +406,7 @@ func TestCreate_NoCleanupOn_ConfigUserNameFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err == nil {
 		t.Fatal("expected error from Create, got nil")
 	}
@@ -442,7 +442,7 @@ func TestCreate_NoCleanupOn_ConfigUserEmailFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err == nil {
 		t.Fatal("expected error from Create, got nil")
 	}
@@ -475,7 +475,7 @@ func TestCreate_FetchFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -492,7 +492,7 @@ func TestCreate_RevParseFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -507,7 +507,7 @@ func TestCreate_EventWriteFails(t *testing.T) {
 	failWriter := &failEventWriter{}
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, failWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, failWriter, 1)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -560,7 +560,7 @@ func TestCreate_EventTimestamp(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
 
-	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter)
+	err := Create(defaultRepoRoot, golemicDir, runID, issueNum, botLogin, mockExec, eventWriter, 1)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -583,7 +583,7 @@ func TestCreate_RepoRootIsUsed(t *testing.T) {
 	mockExec := newMockExecutor(defaultSuccessResponses()...)
 	eventWriter := newMockEventWriter()
 
-	err := Create(distinctRepoRoot, "/tmp/.golemic/proj", "run-rr", 1, "bot", mockExec, eventWriter)
+	err := Create(distinctRepoRoot, "/tmp/.golemic/proj", "run-rr", 1, "bot", mockExec, eventWriter, 1)
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
@@ -651,7 +651,7 @@ func TestCreateForReviewer_GitCommandSequence(t *testing.T) {
 	branchName := "golemic/issue-42"
 	reviewer := "reviewer-bot"
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter, 2)
 	if err != nil {
 		t.Fatalf("CreateForReviewer returned error: %v", err)
 	}
@@ -701,7 +701,7 @@ func TestCreateForReviewer_EventHasReviewerRole(t *testing.T) {
 	branchName := "golemic/issue-42"
 	reviewer := "reviewer-bot"
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter, 2)
 	if err != nil {
 		t.Fatalf("CreateForReviewer returned error: %v", err)
 	}
@@ -833,7 +833,7 @@ func TestCreateForReviewer_IdentityIsReviewerBot(t *testing.T) {
 	branchName := "golemic/issue-42"
 	reviewer := "my-reviewer-bot"
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, reviewer, mockExec, eventWriter, 2)
 	if err != nil {
 		t.Fatalf("CreateForReviewer returned error: %v", err)
 	}
@@ -890,7 +890,7 @@ func TestCreateForReviewer_RemoteBranchNotFound(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-99", "bot", mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-99", "bot", mockExec, eventWriter, 2)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -914,7 +914,7 @@ func TestCreateForReviewer_InvalidIssueNumber(t *testing.T) {
 
 	testCases := []int{0, -1, -999}
 	for _, issueNum := range testCases {
-		err := CreateForReviewer(defaultRepoRoot, "/tmp", "run1", issueNum, "golemic/issue-1", "bot", mockExec, eventWriter)
+		err := CreateForReviewer(defaultRepoRoot, "/tmp", "run1", issueNum, "golemic/issue-1", "bot", mockExec, eventWriter, 2)
 		if err == nil {
 			t.Errorf("expected error for issueNumber %d, got nil", issueNum)
 		}
@@ -955,7 +955,7 @@ func TestCreateForReviewer_ReviewerBotLoginEdgeCases(t *testing.T) {
 			_, golemicDir, runID, issueNum, _ := testCreateArgs()
 			branchName := "golemic/issue-" + fmt.Sprintf("%d", issueNum)
 
-			err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, tc.reviewerLogin, mockExec, eventWriter)
+			err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, branchName, tc.reviewerLogin, mockExec, eventWriter, 2)
 			if err != nil {
 				t.Fatalf("CreateForReviewer failed: %v", err)
 			}
@@ -977,7 +977,7 @@ func TestCreateForReviewer_FetchFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter, 2)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -994,7 +994,7 @@ func TestCreateForReviewer_VerifyBranchFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter, 2)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -1012,7 +1012,7 @@ func TestCreateForReviewer_RevParseFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter, 2)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -1031,7 +1031,7 @@ func TestCreateForReviewer_WorktreeAddFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter, 2)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -1055,7 +1055,7 @@ func TestCreateForReviewer_ConfigFails(t *testing.T) {
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, eventWriter, 2)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -1081,7 +1081,7 @@ func TestCreateForReviewer_EventWriteFails(t *testing.T) {
 	failWriter := &failEventWriter{}
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
 
-	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, failWriter)
+	err := CreateForReviewer(defaultRepoRoot, golemicDir, runID, issueNum, "golemic/issue-42", "bot", mockExec, failWriter, 2)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

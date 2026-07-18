@@ -22,6 +22,7 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-1",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	exec := fakeExecutor{
@@ -126,6 +127,7 @@ func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-2",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	exec := fakeExecutor{
@@ -212,6 +214,7 @@ func TestRunSubmitReview_InvalidVerdictNoGhCall(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-invalid",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	var called bool
@@ -252,6 +255,7 @@ func TestRunSubmitReview_GhFailureNoEvent(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-gh-fail",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	exec := fakeExecutor{
@@ -294,6 +298,7 @@ func TestRunSubmitReview_MissingEnvVar_RunID(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	exec := fakeExecutor{
@@ -370,6 +375,7 @@ func TestRunSubmitReview_EmptyBody(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-empty-body",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	exec := fakeExecutor{
@@ -397,6 +403,7 @@ func TestRunSubmitReview_InvalidPRNumber(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-invalid-pr",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	exec := fakeExecutor{
@@ -422,6 +429,7 @@ func TestRunSubmitReview_CaseSensitiveVerdict(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-case",
 		"GOLEMIC_EVENT_LOG": filepath.Join(t.TempDir(), "events.jsonl"),
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -468,6 +476,7 @@ func TestRunSubmitReview_EventLogPathInvalidAborts(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-invalid-log",
 		"GOLEMIC_EVENT_LOG": t.TempDir(), // directory, not a file — NewWriter should fail
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var called bool
@@ -502,6 +511,7 @@ func TestRunSubmitReview_MissingMergeConfidence_AC009(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-mc-missing",
 		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
+		"GOLEMIC_TURN_ID":   "1",
 	}
 	var called bool
 	exec := fakeExecutor{
@@ -529,6 +539,7 @@ func TestRunSubmitReview_InvalidMergeConfidence_AC009(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-mc-invalid",
 		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
+		"GOLEMIC_TURN_ID":   "1",
 	}
 	var called bool
 	exec := fakeExecutor{
@@ -557,6 +568,7 @@ func TestRunSubmitReview_LabelSetFailed(t *testing.T) { //nolint:cyclop
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-label-fail",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 	exec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
@@ -589,6 +601,7 @@ func TestRunSubmitReview_MergeConfidenceLow_WrittenToPayload(t *testing.T) { //n
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-mc-low",
 		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":    "1",
 	}
 	exec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {

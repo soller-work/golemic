@@ -59,13 +59,14 @@ type Runner struct {
 	ciTimeoutOverride      time.Duration
 
 	// Resolved during Run
-	repoRoot   string
-	project    string
-	runID      string
-	branchName string
-	cfg        *config.Config
-	creds      *credentials.Credentials
-	issue      *issueData
+	repoRoot     string
+	project      string
+	runID        string
+	branchName   string
+	cfg          *config.Config
+	creds        *credentials.Credentials
+	issue        *issueData
+	turnCounter  int // monotonic, incremented once per agent turn; 0 before first turn
 
 	// Telemetry
 	sink         telemetry.Sink
@@ -209,6 +210,7 @@ func (r *Runner) Run() int {
 		Type:    eventlog.EventRunStarted,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
+		TurnID:  r.turnCounter,
 		Payload: startPayload,
 	}); err != nil {
 		fmt.Fprintf(r.stderr, "Failed to write run_started event: %v\n", err)
@@ -235,6 +237,7 @@ func (r *Runner) Run() int {
 				Type:    eventlog.EventRunFinished,
 				Ts:      time.Now().Format(time.RFC3339),
 				RunID:   r.runID,
+				TurnID:  r.turnCounter,
 				Payload: finishedPayload,
 			})
 			fmt.Fprintf(r.stdout, "runs/%s\n", r.runID) //nolint:errcheck
@@ -252,6 +255,7 @@ func (r *Runner) Run() int {
 			Type:    eventlog.EventRunFinished,
 			Ts:      time.Now().Format(time.RFC3339),
 			RunID:   r.runID,
+			TurnID:  r.turnCounter,
 			Payload: finishedPayload,
 		})
 		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
@@ -265,6 +269,7 @@ func (r *Runner) Run() int {
 			Type:    eventlog.EventRunFinished,
 			Ts:      time.Now().Format(time.RFC3339),
 			RunID:   r.runID,
+			TurnID:  r.turnCounter,
 			Payload: finishedPayload,
 		})
 		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
@@ -332,6 +337,7 @@ func (r *Runner) Run() int {
 		Type:    eventlog.EventRunFinished,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
+		TurnID:  r.turnCounter,
 		Payload: finishedPayload,
 	})
 
@@ -362,6 +368,7 @@ func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
 		Type:    eventlog.EventAgentCompleted,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
+		TurnID:  r.turnCounter,
 		Payload: payload,
 	})
 }
@@ -425,10 +432,11 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 		timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 	}
 
-	// Create dev worktree
+	// Create dev worktree (turn 1: initial dev)
+	r.turnCounter++
 	_, endCreateDevWT := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCreate,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
-	if err := worktree.Create(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer); err != nil {
+	if err := worktree.Create(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer, r.turnCounter); err != nil {
 		endCreateDevWT(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "Failed to create dev worktree: %v\n", err)
 		return outcomeDevFailed
@@ -472,9 +480,10 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 		}
 		firstReviewerRound = false
 
+		r.turnCounter++ // each reviewer round gets its own turn
 		_, endCreateRevWT := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCreate,
 			map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
-		if err := worktree.CreateForReviewer(r.repoRoot, golemicDir, r.runID, r.issueNum, r.branchName, "golemic-reviewer", r.executor, writer); err != nil {
+		if err := worktree.CreateForReviewer(r.repoRoot, golemicDir, r.runID, r.issueNum, r.branchName, "golemic-reviewer", r.executor, writer, r.turnCounter); err != nil {
 			endCreateRevWT(telemetry.StatusError, nil)
 			fmt.Fprintf(r.stderr, "Failed to create reviewer worktree: %v\n", err) //nolint:errcheck
 			return outcomeReviewFailed
@@ -531,6 +540,7 @@ func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeo
 			return false, outcomeReviewFailed
 		}
 		*round++
+		r.turnCounter++ // each dev-retry round gets its own turn
 		if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, runSpanID, *round); o != outcomeSuccess {
 			return false, o
 		}

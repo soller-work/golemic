@@ -115,11 +115,16 @@ der Shell des LLM und finden ihren Lauf-Kontext über Umgebungsvariablen, die de
 Runner beim Headless-Aufruf setzt:
 - `GOLEMIC_RUN_ID` — die Lauf-ID.
 - `GOLEMIC_EVENT_LOG` — absoluter Pfad zum JSONL-Event-Log.
+- `GOLEMIC_TURN_ID` — monoton steigender Turn-Zähler (Integer ≥ 1), einmal pro
+  Agenten-Turn inkrementiert. Die Agent-Subcommands `emit`, `open-pr` und
+  `submit-review` verlangen diese Variable (fail-closed) und unterdrücken eine
+  zweite Emission desselben `(turnId, type)`-Paares als No-Op (Idempotenz
+  innerhalb eines Turns).
 - `GH_TOKEN` — bereits rollenspezifisch gesetzt (§2.8).
 - Das `golemic`-Binary wird dem `PATH` des Kindprozesses vorangestellt.
 
-Die Subcommands sind **fail-closed**: fehlt `GOLEMIC_EVENT_LOG`, brechen sie mit
-klarer Fehlermeldung ab.
+Die Subcommands sind **fail-closed**: fehlt `GOLEMIC_EVENT_LOG` oder
+`GOLEMIC_TURN_ID`, brechen sie mit klarer Fehlermeldung ab.
 
 **Fail-closed:** Der LLM lässt sich nicht zwingen, ein Tool zu rufen. Fehlt ein
 erwartetes Event oder ist es malformed, behandelt der Runner das als Fehlerpfad

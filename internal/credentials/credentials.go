@@ -25,6 +25,16 @@ type Credentials struct {
 	reviewerSource string
 }
 
+// NewFromTokens creates a Credentials from raw token strings. Used in tests.
+func NewFromTokens(devToken, reviewerToken string) *Credentials {
+	return &Credentials{
+		devToken:       devToken,
+		reviewerToken:  reviewerToken,
+		devSource:      "literal",
+		reviewerSource: "literal",
+	}
+}
+
 // DevToken returns the dev bot token.
 func (c *Credentials) DevToken() string { return c.devToken }
 

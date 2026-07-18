@@ -48,7 +48,7 @@ func branchName(issueNumber int) string {
 //
 // If any step fails, the partial worktree is left in place for debugging
 // (no cleanup is called — see BR-005).
-func Create(repoRoot, golemicDir, runID string, issueNumber int, botLogin string, executor preflight.Executor, eventWriter EventWriter) error {
+func Create(repoRoot, golemicDir, runID string, issueNumber int, botLogin string, executor preflight.Executor, eventWriter EventWriter, turnID int) error {
 	if issueNumber <= 0 {
 		return fmt.Errorf("INVALID_ISSUE_NUMBER: %d", issueNumber)
 	}
@@ -100,6 +100,7 @@ func Create(repoRoot, golemicDir, runID string, issueNumber int, botLogin string
 		Type:    eventlog.EventWorktreeCreated,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   runID,
+		TurnID:  turnID,
 		Payload: rawPayload,
 	}
 	if err := eventWriter.Write(event); err != nil {
@@ -122,7 +123,7 @@ func Create(repoRoot, golemicDir, runID string, issueNumber int, botLogin string
 //
 // Returns REMOTE_BRANCH_NOT_FOUND if origin/<branchName> doesn't exist.
 // If any other step fails, the partial worktree is left in place for debugging.
-func CreateForReviewer(repoRoot, golemicDir, runID string, issueNumber int, branchName, reviewerBotLogin string, executor preflight.Executor, eventWriter EventWriter) error {
+func CreateForReviewer(repoRoot, golemicDir, runID string, issueNumber int, branchName, reviewerBotLogin string, executor preflight.Executor, eventWriter EventWriter, turnID int) error { //nolint:cyclop
 	if issueNumber <= 0 {
 		return fmt.Errorf("INVALID_ISSUE_NUMBER: %d", issueNumber)
 	}
@@ -178,6 +179,7 @@ func CreateForReviewer(repoRoot, golemicDir, runID string, issueNumber int, bran
 		Type:    eventlog.EventWorktreeCreated,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   runID,
+		TurnID:  turnID,
 		Payload: rawPayload,
 	}
 	if err := eventWriter.Write(event); err != nil {
