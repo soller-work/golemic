@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -446,6 +447,75 @@ func TestTelemetry_FailingSink_ViaRun_AC004(t *testing.T) {
 	exitCode := r.Run()
 	if exitCode != 0 {
 		t.Errorf("failing sink must not affect exit code; got %d, stderr: %s", exitCode, stderr.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-006: Telemetry records contain no secrets or content
+// ---------------------------------------------------------------------------
+
+func TestTelemetry_NoSecretsInRecords_AC006(t *testing.T) {
+	exec := pingPongExecutor(false, nil)
+	r, logPath, _ := setupPingPongRunner(t, exec)
+
+	sink := &recordingSink{}
+	r.sink = sink
+	r.traceID = telemetry.TraceID(r.runID)
+
+	// findings contains a ghp_-like token to prove it does not leak from
+	// reviewer body into telemetry attributes.
+	findings := "Fix the null-pointer in auth.go; token ref: ghp_FINDINGS_BODY_MUST_NOT_APPEAR"
+
+	// Credentials written by setupRunnerTest contain ghp_dev_test_token and
+	// ghp_rev_test_token; the sink must never record those either.
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: findings, exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "approved", body: "LGTM", exitCode: 0},
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeSuccess {
+		t.Fatalf("expected success, got %q", outcome)
+	}
+
+	allowedAttrKeys := map[string]bool{
+		"run_id": true, "issue": true, "project": true, "role": true,
+		"round": true, "model": true, "status": true, "outcome": true,
+		"pid": true, "worktree": true,
+	}
+
+	secretStrings := []string{
+		"ghp_dev_test_token",
+		"ghp_rev_test_token",
+		findings,
+		"ghp_FINDINGS_BODY_MUST_NOT_APPEAR",
+	}
+
+	for _, rec := range sink.all() {
+		data, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatalf("marshal record: %v", err)
+		}
+		line := string(data)
+
+		for _, secret := range secretStrings {
+			if strings.Contains(line, secret) {
+				t.Errorf("telemetry record contains secret/findings %q: %s", secret, line)
+			}
+		}
+
+		// Catch any ghp_ token not already listed above.
+		if strings.Contains(line, "ghp_") {
+			t.Errorf("telemetry record contains a ghp_ token: %s", line)
+		}
+
+		for key := range rec.Attrs {
+			if !allowedAttrKeys[key] {
+				t.Errorf("unexpected attribute key %q in record: %s", key, line)
+			}
+		}
 	}
 }
 
