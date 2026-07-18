@@ -32,6 +32,22 @@ func newIssueRunner(exec *fakeExecutor) *Runner {
 	}
 }
 
+// issueExecutor builds a fakeExecutor that routes gh issue view and gh api comments calls.
+// commentsResp is returned for comments API calls; pass "" to disallow comments calls.
+func issueExecutor(issueViewResp, commentsResp string) *fakeExecutor { //nolint:cyclop // routing dispatcher; branches are inherent
+	return &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if len(args) >= 3 && args[0] == "issue" && args[1] == "view" {
+				return issueViewResp, nil
+			}
+			if commentsResp != "" && len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "comments") {
+				return commentsResp, nil
+			}
+			return "", fmt.Errorf("unexpected call: %s %v", name, args)
+		},
+	}
+}
+
 const compactBody = "**Type:** command | **Risk:** medium\n\n## Summary\n\nTest summary\n\n" + sliceCommentMarker + "\n_Slice JSON is in the first bot comment._"
 
 const sliceJSON = `{"schema_version":"1.1.0","title":"test"}`
@@ -40,20 +56,10 @@ const wellFormedComment = sliceCommentMarker + "\n\n```json\n" + sliceJSON + "\n
 
 // TestLoadIssueInjectsSliceCommentJSON (AC-004): body with marker → fetch comment → inject JSON.
 func TestLoadIssueInjectsSliceCommentJSON(t *testing.T) {
-	issueViewResp := ghIssueViewResponse("Test Issue", compactBody)
-	commentsResp := ghCommentsResponse(99, wellFormedComment)
-
-	exec := &fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if len(args) >= 3 && args[0] == "issue" && args[1] == "view" {
-				return issueViewResp, nil
-			}
-			if len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "comments") {
-				return commentsResp, nil
-			}
-			return "", fmt.Errorf("unexpected call: %s %v", name, args)
-		},
-	}
+	exec := issueExecutor(
+		ghIssueViewResponse("Test Issue", compactBody),
+		ghCommentsResponse(99, wellFormedComment),
+	)
 
 	r := newIssueRunner(exec)
 	issue, err := r.loadIssue()
@@ -72,32 +78,13 @@ func TestLoadIssueInjectsSliceCommentJSON(t *testing.T) {
 	if !strings.Contains(issue.Body, "```json\n"+sliceJSON+"\n```") {
 		t.Errorf("Body does not contain injected JSON block\nBody: %q", issue.Body)
 	}
-
-	// Verify comments API was called.
-	apiCalls := 0
-	for _, c := range exec.calls {
-		if c.name == "gh" && len(c.args) >= 2 && c.args[0] == "api" {
-			apiCalls++
-		}
-	}
-	if apiCalls == 0 {
-		t.Error("expected gh api call for comments, got none")
-	}
 }
 
 // TestLoadIssueSoftFallbackWhenNoMarker (AC-005): no marker in body → return body unchanged, no comments call.
 func TestLoadIssueSoftFallbackWhenNoMarker(t *testing.T) {
 	legacyBody := "Some legacy issue body without any marker."
-	issueViewResp := ghIssueViewResponse("Legacy Issue", legacyBody)
-
-	exec := &fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if len(args) >= 3 && args[0] == "issue" && args[1] == "view" {
-				return issueViewResp, nil
-			}
-			return "", fmt.Errorf("unexpected call: %s %v", name, args)
-		},
-	}
+	// commentsResp is "" so any api/comments call will error via issueExecutor.
+	exec := issueExecutor(ghIssueViewResponse("Legacy Issue", legacyBody), "")
 
 	r := newIssueRunner(exec)
 	issue, err := r.loadIssue()
@@ -106,13 +93,6 @@ func TestLoadIssueSoftFallbackWhenNoMarker(t *testing.T) {
 	}
 	if issue.Body != legacyBody {
 		t.Errorf("Body = %q, want original %q", issue.Body, legacyBody)
-	}
-
-	// No gh api comments call should have been made.
-	for _, c := range exec.calls {
-		if c.name == "gh" && len(c.args) >= 2 && c.args[0] == "api" {
-			t.Errorf("unexpected gh api call: %v", c.args)
-		}
 	}
 }
 
@@ -142,17 +122,7 @@ func TestLoadIssueSliceJSONMalformed(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			commentsResp := ghCommentsResponse(77, tt.comment)
 
-			exec := &fakeExecutor{
-				runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-					if len(args) >= 3 && args[0] == "issue" && args[1] == "view" {
-						return issueViewResp, nil
-					}
-					if len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "comments") {
-						return commentsResp, nil
-					}
-					return "", fmt.Errorf("unexpected call: %s %v", name, args)
-				},
-			}
+			exec := issueExecutor(issueViewResp, commentsResp)
 
 			r := newIssueRunner(exec)
 			_, err := r.loadIssue()
