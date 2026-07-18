@@ -22,79 +22,117 @@ import sys
 import argparse
 
 
+def resolve_ref(schema, node):
+    """Resolve a $ref against $defs, returning the referenced definition."""
+    if not isinstance(node, dict) or '$ref' not in node:
+        return node
+    ref = node['$ref']
+    if ref.startswith('#/$defs/'):
+        def_name = ref[len('#/$defs/'):]
+        resolved = schema.get('$defs', {}).get(def_name)
+        if resolved is not None:
+            return resolved
+    return node
+
+
 def navigate_schema_path(schema, path):
     """
-    Navigate a dot-separated path through the schema, handling array notation.
-    
+    Navigate a dot-separated path through the schema, handling array notation
+    and resolving $ref at every step.
+
     Examples:
       "interfaces" -> schema['properties']['interfaces']
-      "interfaces[].kind" -> schema['properties']['interfaces']['items']['properties']['kind']
-      "decision_tables[].rows[]" -> schema['properties']['decision_tables']['items']['properties']['rows']['items']
+      "interfaces[].kind" -> interfaces items object -> kind field
+      "process_steps[]" -> process_steps items object (returns the object schema)
     """
     parts = path.split('.')
-    current = schema['properties']
+    current_props = schema.get('properties', {})
 
-    for part in parts:
-        # Handle array notation: "interfaces[]" means "items of interfaces"
+    for i, part in enumerate(parts):
+        is_last = (i == len(parts) - 1)
+
         if part.endswith('[]'):
-            base = part[:-2]  # Remove []
-            if base not in current:
+            base = part[:-2]
+            if base not in current_props:
                 return None, f"Field not found: {base}"
-            current = current[base]
-            if 'items' not in current:
-                return None, f"Field {base} is not an array type"
-            current = current['items']
-            # If items has properties, we're inside an object array
-            if 'properties' in current:
-                current = current['properties']
+            array_node = resolve_ref(schema, current_props[base])
+            if array_node.get('type') != 'array' or 'items' not in array_node:
+                return None, f"Field '{base}' is not an array type"
+            items_node = resolve_ref(schema, array_node['items'])
+            if is_last:
+                return items_node, None
+            if 'properties' not in items_node:
+                return None, f"Field '{part}' has no subfields to navigate"
+            current_props = items_node['properties']
         else:
-            # Regular field navigation
-            if part not in current:
+            if part not in current_props:
                 return None, f"Field not found: {part}"
-            current = current[part]
-            # If it's an object, move to properties for next level
-            if isinstance(current, dict) and 'properties' in current:
-                current = current['properties']
+            node = resolve_ref(schema, current_props[part])
+            if is_last:
+                return node, None
+            if 'properties' not in node:
+                return None, f"Field '{part}' has no subfields to navigate"
+            current_props = node['properties']
 
-    return current, None
+    return None, "Empty path"
 
 
-def print_field_info(field_path, field_schema):
+def print_object_overview(schema, field_path, obj_schema):
+    """Print a one-level-deep overview of an object's subfields."""
+    print(f"\n📋 Field: {field_path}")
+    print("-" * 60)
+    print("Type: object\n")
+    required = set(obj_schema.get('required', []))
+    properties = obj_schema.get('properties', {})
+    print("Fields:")
+    for fname, fnode in properties.items():
+        resolved = resolve_ref(schema, fnode)
+        ftype = resolved.get('type', 'object')
+        req_str = 'required' if fname in required else 'optional'
+        line = f"   {fname} ({ftype}, {req_str})"
+        enum_vals = resolved.get('enum', [])
+        if enum_vals:
+            line += f" — enum: {', '.join(str(v) for v in enum_vals)}"
+        if ftype == 'array' and 'items' in resolved:
+            item_node = resolve_ref(schema, resolved['items'])
+            item_type = item_node.get('type', 'object')
+            line += f" — items: {item_type}"
+        print(line)
+    print()
+
+
+def print_field_info(schema, field_path, field_schema):
     """Print human-readable information about a schema field."""
+    if 'properties' in field_schema:
+        print_object_overview(schema, field_path, field_schema)
+        return
+
     print(f"\n📋 Field: {field_path}")
     print("-" * 60)
 
-    # Type
     if 'type' in field_schema:
         print(f"Type: {field_schema['type']}")
 
-    # Enum values (most useful)
     if 'enum' in field_schema:
         print(f"\n✅ Allowed Values:")
         for val in field_schema['enum']:
             print(f"   - {val}")
 
-    # Required fields for objects
     if 'required' in field_schema:
         print(f"\n📌 Required subfields:")
         for req in field_schema['required']:
             print(f"   - {req}")
 
-    # Const value (only one choice)
     if 'const' in field_schema:
         print(f"\n🔒 Constant value: {field_schema['const']}")
 
-    # Description
     if 'description' in field_schema:
         print(f"\n📝 Description: {field_schema['description']}")
 
-    # Reference ($ref)
-    if '$ref' in field_schema:
-        print(f"\n🔗 References: {field_schema['$ref']}")
-
-    # Type details for arrays
-    if 'type' in field_schema and field_schema['type'] == 'array':
-        print(f"   Array element type: {field_schema.get('items', {}).get('type', 'object')}")
+    if field_schema.get('type') == 'array':
+        items = field_schema.get('items', {})
+        resolved_items = resolve_ref(schema, items)
+        print(f"   Array element type: {resolved_items.get('type', 'object')}")
 
     print()
 
@@ -121,7 +159,7 @@ def query_schema(schema_path, field_path):
         print(f"❌ Field not found: {field_path}", file=sys.stderr)
         sys.exit(1)
 
-    print_field_info(field_path, field_schema)
+    print_field_info(schema, field_path, field_schema)
 
 
 if __name__ == '__main__':
