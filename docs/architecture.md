@@ -345,3 +345,70 @@ Bot-Tokens in `~/.golemic/<projekt>/credentials.json`, testet die Verbindung
 (`gh auth status`), meldet Login-Fehler.
 
 *(Reihenfolge korrektheitsgetrieben: robuster Loop vor Autonomie. Anpassbar.)*
+
+## 4. Remote Gate: GitHub Actions verify
+
+**Workflow:** `.github/workflows/verify.yml`
+
+Jeder PR gegen `main` und jeder Push auf `main` durchläuft den `verify`-Job:
+
+1. `actions/checkout`
+2. `actions/setup-go` — Go-Version aus `go.mod` (aktuell 1.21)
+3. `go build ./...`
+4. `go test ./...`
+
+Das spiegelt exakt `verify_command` aus `.golemic/config.json` — kein Drift zwischen lokalem und remote Urteil.
+
+**Concurrency-Gruppe** `verify-${{ github.ref }}` mit `cancel-in-progress: true`: überholte Runs werden abgebrochen, sobald ein neuer Push eintrifft.
+
+**Timeout:** 15 Minuten (abgestimmt auf den geplanten `ci_timeout_minutes`-Default des Runners — ein hängender Job schlägt fehl, bevor der golemic-Wait-Schritt abbricht).
+
+**Berechtigungen:** `contents: read` — der Job braucht keine Schreibrechte.
+
+**Branch-Protection `main` — erforderliche Konfiguration:**
+
+Der `verify`-Check muss als *required strict status check* auf `main` registriert sein:
+
+```
+required_status_checks:
+  strict: true
+  checks:
+    - context: verify
+```
+
+`strict: true` erzwingt, dass ein Branch aktuell mit `main` ist, bevor er gemergt werden darf — GitHub blockiert den Merge, wenn `main` seit dem letzten Rebase/Merge des Branches vorangeschritten ist.
+
+Die bestehende Review-Anforderung (1 Approval, `dismiss_stale_reviews: false`) bleibt unverändert.
+
+**Squash-Merge:** Für den Auto-Merge-Flow bestätigt — `allow_squash_merge: true` ist im Repo gesetzt.
+
+**Manuelle Einrichtung (Admin-Schritt):**
+
+Da die Branch-Protection-API Admin-Berechtigung erfordert, muss ein Repo-Admin folgenden Befehl ausführen (nach dem Mergen dieses PRs, damit `verify` als Check-Name existiert):
+
+```bash
+gh api \
+  --method PUT \
+  repos/soller-work/golemic/branches/main/protection \
+  --input - <<'EOF'
+{
+  "required_status_checks": {
+    "strict": true,
+    "checks": [{"context": "verify"}]
+  },
+  "enforce_admins": null,
+  "required_pull_request_reviews": {
+    "required_approving_review_count": 1,
+    "dismiss_stale_reviews": false
+  },
+  "restrictions": null
+}
+EOF
+```
+
+Verifikation nach dem Ausführen:
+
+```bash
+gh api repos/soller-work/golemic/branches/main/protection --jq .required_status_checks
+# Erwartet: {"strict":true,"checks":[{"context":"verify"}],...}
+```
