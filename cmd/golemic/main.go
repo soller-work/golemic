@@ -209,19 +209,18 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 	return 0
 }
 
+var issueBranchRe = regexp.MustCompile(`^golemic/issue-([1-9][0-9]*)$`)
+
 // ensureBodyClosesIssue appends a "Closes #<N>" line to the PR body when the
 // branch is a golemic issue branch (golemic/issue-<N>) and the body does not
 // already contain a GitHub closing keyword for that issue. Without a closing
 // keyword, merging the PR does not auto-close the issue.
 func ensureBodyClosesIssue(body, branch string) string {
-	const prefix = "golemic/issue-"
-	if !strings.HasPrefix(branch, prefix) {
+	m := issueBranchRe.FindStringSubmatch(branch)
+	if m == nil {
 		return body
 	}
-	num := strings.TrimPrefix(branch, prefix)
-	if _, err := strconv.Atoi(num); err != nil {
-		return body
-	}
+	num := m[1]
 
 	closing := regexp.MustCompile(`(?i)\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+#` + num + `\b`)
 	if closing.MatchString(body) {
