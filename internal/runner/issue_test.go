@@ -96,6 +96,25 @@ func TestLoadIssueSoftFallbackWhenNoMarker(t *testing.T) {
 	}
 }
 
+// TestLoadIssueMarkerOnlyInProseIsIgnored: marker embedded in backticks/prose (e.g. a
+// legacy issue that documents the feature and carries slice JSON inline) must not
+// trigger a comments fetch — body is returned verbatim.
+func TestLoadIssueMarkerOnlyInProseIsIgnored(t *testing.T) {
+	proseBody := "See the marker `" + sliceCommentMarker + "` in the docs.\n\n" +
+		"```json\n" + sliceJSON + "\n```"
+	// commentsResp "" makes any api/comments call fail via issueExecutor.
+	exec := issueExecutor(ghIssueViewResponse("Legacy Inline", proseBody), "")
+
+	r := newIssueRunner(exec)
+	issue, err := r.loadIssue()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if issue.Body != proseBody {
+		t.Errorf("Body = %q, want original %q", issue.Body, proseBody)
+	}
+}
+
 // TestLoadIssueSliceJSONMalformed (AC-006): marker present but json block malformed → SLICE_JSON_MALFORMED error.
 func TestLoadIssueSliceJSONMalformed(t *testing.T) {
 	issueViewResp := ghIssueViewResponse("Broken Issue", compactBody)

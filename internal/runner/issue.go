@@ -30,8 +30,11 @@ func (r *Runner) loadIssue() (*issueData, error) {
 		return nil, fmt.Errorf("invalid gh response: %w", err)
 	}
 
-	// BR-005: soft fallback — no marker means not a grill-me issue; return body unchanged.
-	if !strings.Contains(data.Body, sliceCommentMarker) {
+	// BR-005: soft fallback — the marker only triggers comment injection when it appears
+	// as its own line (per BR-001, the comment must start with the marker on line 1).
+	// Prose mentions of the marker inside backticks or fenced blocks (e.g. legacy issues
+	// that document the feature or carry the slice JSON inline) must not trigger a fetch.
+	if !bodyRequestsCommentInjection(data.Body) {
 		return &issueData{
 			Number: r.issueNum,
 			Title:  data.Title,
@@ -77,6 +80,17 @@ func (r *Runner) loadIssue() (*issueData, error) {
 
 	// Marker in body but no matching comment — anomalous; fail per BR-006.
 	return nil, fmt.Errorf("SLICE_JSON_MALFORMED: no comment with marker %q found", sliceCommentMarker)
+}
+
+// bodyRequestsCommentInjection reports whether the issue body contains the slice
+// marker as its own (trimmed) line — the shape produced by the grill-me compact body.
+func bodyRequestsCommentInjection(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		if strings.TrimSpace(line) == sliceCommentMarker {
+			return true
+		}
+	}
+	return false
 }
 
 // extractFencedJSON extracts and validates the JSON content from the first ```json
