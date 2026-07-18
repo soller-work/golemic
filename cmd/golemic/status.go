@@ -46,14 +46,19 @@ func runStatus(args []string, stdout, stderr io.Writer, executor preflight.Execu
 		return 1
 	}
 
-	runsDir, ok := resolveRunsDir(executor, stderr)
+	runsDir, cfgTimeout, ok := resolveRunsDir(executor, stderr)
 	if !ok {
 		return 1
 	}
 
+	effectiveStalledAfter := stalledAfter
+	if effectiveStalledAfter == 0 {
+		effectiveStalledAfter = cfgTimeout
+	}
+
 	classifier := &health.Classifier{
 		Probe:        health.OsLivenessProbe,
-		StalledAfter: stalledAfter,
+		StalledAfter: effectiveStalledAfter,
 	}
 
 	return dispatchStatus(runIDFilter, runsDir, jsonFlag, classifier, stdout, stderr)
@@ -71,28 +76,34 @@ func parseStalledAfter(flag string, stderr io.Writer) (time.Duration, bool) {
 	return d, true
 }
 
-func resolveRunsDir(executor preflight.Executor, stderr io.Writer) (string, bool) {
+func resolveRunsDir(executor preflight.Executor, stderr io.Writer) (string, time.Duration, bool) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(stderr, "failed to get home directory: %v\n", err) //nolint:errcheck
-		return "", false
+		return "", 0, false
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		fmt.Fprintf(stderr, "failed to get current directory: %v\n", err) //nolint:errcheck
-		return "", false
+		return "", 0, false
 	}
 	repoRoot, err := repo.ResolveHostRepo(executor, cwd)
 	if err != nil {
 		fmt.Fprintf(stderr, "failed to resolve host repo: %v\n", err) //nolint:errcheck
-		return "", false
+		return "", 0, false
 	}
 	cfg, err := config.Load(repoRoot)
 	if err != nil {
 		fmt.Fprintf(stderr, "failed to load config: %v\n", err) //nolint:errcheck
-		return "", false
+		return "", 0, false
 	}
-	return filepath.Join(homeDir, ".golemic", cfg.Project, "runs"), true
+	var cfgTimeout time.Duration
+	if cfg.TimeoutSeconds > 0 {
+		cfgTimeout = time.Duration(cfg.TimeoutSeconds) * time.Second
+	} else {
+		cfgTimeout = time.Duration(cfg.TimeoutMinutes) * time.Minute
+	}
+	return filepath.Join(homeDir, ".golemic", cfg.Project, "runs"), cfgTimeout, true
 }
 
 func dispatchStatus(runIDFilter, runsDir string, jsonFlag bool, classifier *health.Classifier, stdout, stderr io.Writer) int {

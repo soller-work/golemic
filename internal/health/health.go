@@ -41,14 +41,14 @@ const DefaultStalledAfter = 30 * time.Minute
 
 // RunHealth is the per-run health verdict (RM-001).
 type RunHealth struct {
-	RunID         string  `json:"run_id"`
-	Issue         int     `json:"issue"`
-	Status        string  `json:"status"`
-	CurrentPhase  string  `json:"current_phase"`
-	AgeOrDuration string  `json:"age_or_duration"`
-	Outcome       string  `json:"outcome,omitempty"`
-	PID           *int    `json:"pid"`
-	Liveness      string  `json:"liveness"`
+	RunID         string `json:"run_id"`
+	Issue         int    `json:"issue"`
+	Status        string `json:"status"`
+	CurrentPhase  string `json:"current_phase"`
+	AgeOrDuration string `json:"age_or_duration"`
+	Outcome       string `json:"outcome"`
+	PID           *int   `json:"pid"`
+	Liveness      string `json:"liveness"`
 }
 
 // LivenessProbe checks whether a process with the given pid is alive.
@@ -209,7 +209,7 @@ func (c *Classifier) classify(runID string, issue int, ev eventsData, tel *telem
 			RunID: runID, Issue: issue,
 			Status: StatusRunning, CurrentPhase: "-",
 			AgeOrDuration: ageStr,
-			PID: nil, Liveness: LivenessIndeterminate,
+			PID:           nil, Liveness: LivenessIndeterminate,
 		}
 	}
 
@@ -221,7 +221,7 @@ func (c *Classifier) classify(runID string, issue int, ev eventsData, tel *telem
 			RunID: runID, Issue: issue,
 			Status: StatusWedged, CurrentPhase: "-",
 			AgeOrDuration: ageStr,
-			PID: pid, Liveness: LivenessDead,
+			PID:           pid, Liveness: LivenessDead,
 		}
 	case LivenessAlive:
 		return c.classifyAlive(runID, issue, pid, ageStr, tel.OpenSpans, now)
@@ -230,7 +230,7 @@ func (c *Classifier) classify(runID string, issue int, ev eventsData, tel *telem
 			RunID: runID, Issue: issue,
 			Status: StatusIndeterminate, CurrentPhase: "-",
 			AgeOrDuration: ageStr,
-			PID: pid, Liveness: LivenessIndeterminate,
+			PID:           pid, Liveness: LivenessIndeterminate,
 		}
 	}
 }
@@ -253,14 +253,14 @@ func (c *Classifier) classifyAlive(runID string, issue int, pid *int, ageStr str
 			RunID: runID, Issue: issue,
 			Status: StatusStalled, CurrentPhase: stalledPhase,
 			AgeOrDuration: ageStr,
-			PID: pid, Liveness: LivenessAlive,
+			PID:           pid, Liveness: LivenessAlive,
 		}
 	}
 	return RunHealth{
 		RunID: runID, Issue: issue,
 		Status: StatusRunning, CurrentPhase: currentPhase,
 		AgeOrDuration: ageStr,
-		PID: pid, Liveness: LivenessAlive,
+		PID:           pid, Liveness: LivenessAlive,
 	}
 }
 
