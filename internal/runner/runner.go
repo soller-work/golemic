@@ -354,11 +354,19 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 		return outcomeReviewFailed
 	}
 
-	// Check if review_submitted event exists and is valid
-	if !r.hasReviewSubmittedEvent(eventLogPath) {
+	// Derive outcome from the review verdict
+	verdict, err := r.latestReviewVerdict(eventLogPath)
+	if err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n")
 		return outcomeReviewFailed
 	}
-
-	return outcomeSuccess
+	switch verdict {
+	case "approved":
+		return outcomeSuccess
+	case "changes_requested":
+		return outcomeEscalated
+	default:
+		fmt.Fprintf(r.stderr, "review_failed: unknown verdict %q\n", verdict) //nolint:errcheck
+		return outcomeReviewFailed
+	}
 }
