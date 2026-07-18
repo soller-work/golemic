@@ -12,10 +12,11 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/eventlog"
 	"golemic/internal/prompt"
+	"golemic/internal/telemetry"
 )
 
 // runReviewerAgent runs the reviewer agent and returns the outcome.
-func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration) string {
+func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int) string {
 	golemicBinaryPath, _ := os.Executable()
 	binaryDir := filepath.Dir(golemicBinaryPath)
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
@@ -44,6 +45,9 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		return outcomeReviewFailed
 	}
 
+	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": r.cfg.Models.Reviewer})
+
 	// Run reviewer agent
 	runFn := r.runAgentFn
 	if runFn == nil {
@@ -66,9 +70,11 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 
 	if err != nil {
 		if errors.Is(err, agent.ErrTimeout) {
+			endSpan(telemetry.StatusKilled, nil)
 			fmt.Fprintf(r.stderr, "review_failed: reviewer agent exceeded timeout\n") //nolint:errcheck
 			return outcomeTimeout
 		}
+		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "review_failed: agent failed: %v\n", err) //nolint:errcheck
 		return outcomeReviewFailed
 	}
@@ -78,10 +84,12 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 
 	// Fail on non-zero exit (BR-001, BR-002)
 	if exitCode != 0 {
+		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "review_failed: reviewer agent exited with code %d; see %s\n", exitCode, paths.Stderr) //nolint:errcheck
 		return outcomeReviewFailed
 	}
 
+	endSpan(telemetry.StatusOK, nil)
 	return outcomeSuccess
 }
 

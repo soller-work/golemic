@@ -10,11 +10,12 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/prompt"
+	"golemic/internal/telemetry"
 )
 
 // runDevRetryAgent runs the dev agent in the existing worktree to address reviewer findings.
 // findings must be non-empty (enforced by RenderDevRetry).
-func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, findings string) string {
+func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, findings, parentSpanID string, round int) string {
 	golemicBinaryPath, _ := os.Executable()
 	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
@@ -35,6 +36,9 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
 		return outcomeReviewFailed
 	}
+
+	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": r.cfg.Models.Dev})
 
 	runFn := r.runAgentFn
 	if runFn == nil {
@@ -57,9 +61,11 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 
 	if err != nil {
 		if errors.Is(err, agent.ErrTimeout) {
+			endSpan(telemetry.StatusKilled, nil)
 			fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n") //nolint:errcheck
 			return outcomeTimeout
 		}
+		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed
 	}
@@ -67,15 +73,17 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	r.writeAgentCompleted(eventLogPath, "dev", exitCode)
 
 	if exitCode != 0 {
+		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent exited with code %d; see %s\n", exitCode, paths.Stderr) //nolint:errcheck
 		return outcomeDevFailed
 	}
 
+	endSpan(telemetry.StatusOK, nil)
 	return outcomeSuccess
 }
 
 // runDevAgent runs the dev agent and returns the outcome.
-func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Duration) string {
+func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int) string {
 	golemicBinaryPath, _ := os.Executable()
 	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
@@ -96,6 +104,9 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		fmt.Fprintf(r.stderr, "Failed to render dev prompt: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed
 	}
+
+	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": r.cfg.Models.Dev})
 
 	// Run dev agent
 	runFn := r.runAgentFn
@@ -119,9 +130,11 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 
 	if err != nil {
 		if errors.Is(err, agent.ErrTimeout) {
+			endSpan(telemetry.StatusKilled, nil)
 			fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n") //nolint:errcheck
 			return outcomeTimeout
 		}
+		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed
 	}
@@ -131,9 +144,11 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 
 	// Fail on non-zero exit (BR-001, BR-002)
 	if exitCode != 0 {
+		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent exited with code %d; see %s\n", exitCode, paths.Stderr) //nolint:errcheck
 		return outcomeDevFailed
 	}
 
+	endSpan(telemetry.StatusOK, nil)
 	return outcomeSuccess
 }
