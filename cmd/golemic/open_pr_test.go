@@ -33,6 +33,9 @@ func TestRunOpenPR_Success(t *testing.T) { //nolint:cyclop // moved verbatim; cy
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "list" {
+				return "[]", nil
+			}
 			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "create" {
 				return "https://github.com/owner/repo/pull/42\n", nil
 			}
@@ -107,6 +110,9 @@ func TestRunOpenPR_Success_StdoutPRURL(t *testing.T) {
 			return "feature/branch", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[1] == "list" {
+				return "[]", nil
+			}
 			return "https://github.com/owner/repo/pull/123\n", nil
 		},
 	}
@@ -140,6 +146,9 @@ func TestRunOpenPR_GhFailure(t *testing.T) {
 			return "feature/branch", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[1] == "list" {
+				return "[]", nil
+			}
 			return "", &preflight.ErrExit{ExitCode: 1, Stderr: "pull request create failed: graphql error"}
 		},
 	}
@@ -402,7 +411,10 @@ func TestRunOpenPR_PRParseFailure_EmptyOutput(t *testing.T) {
 			return "feature/branch", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			return "", nil // empty output
+			if name == "gh" && len(args) >= 2 && args[1] == "list" {
+				return "[]", nil
+			}
+			return "", nil // empty output from gh pr create
 		},
 	}
 
@@ -434,6 +446,9 @@ func TestRunOpenPR_PRParseFailure_NoNumericSuffix(t *testing.T) {
 			return "feature/branch", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[1] == "list" {
+				return "[]", nil
+			}
 			return "https://github.com/owner/repo/pull/abc\n", nil
 		},
 	}
@@ -466,6 +481,9 @@ func TestRunOpenPR_ArbitraryFlagOrder(t *testing.T) {
 			return "feature/branch", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[1] == "list" {
+				return "[]", nil
+			}
 			return "https://github.com/owner/repo/pull/7\n", nil
 		},
 	}
