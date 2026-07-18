@@ -263,6 +263,54 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		// AC-008: ci_timeout_minutes config tests
+		{
+			name: "ci_timeout_minutes absent defaults to 15",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test"
+			}`,
+			wantErr: false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.CITimeoutMinutes != 15 {
+					t.Errorf("CITimeoutMinutes = %d, want 15 (default)", cfg.CITimeoutMinutes)
+				}
+			},
+		},
+		{
+			name: "ci_timeout_minutes zero is rejected",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"ci_timeout_minutes": 0
+			}`,
+			wantErr:     true,
+			errContains: "ci_timeout_minutes",
+		},
+		{
+			name: "ci_timeout_minutes negative is rejected",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"ci_timeout_minutes": -5
+			}`,
+			wantErr:     true,
+			errContains: "ci_timeout_minutes",
+		},
+		{
+			name: "ci_timeout_minutes valid value is accepted",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"ci_timeout_minutes": 30
+			}`,
+			wantErr: false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.CITimeoutMinutes != 30 {
+					t.Errorf("CITimeoutMinutes = %d, want 30", cfg.CITimeoutMinutes)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -335,6 +383,9 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.TimeoutMinutes != 30 {
 		t.Errorf("TimeoutMinutes = %d, want %d", cfg.TimeoutMinutes, 30)
+	}
+	if cfg.CITimeoutMinutes != 15 {
+		t.Errorf("CITimeoutMinutes = %d, want %d", cfg.CITimeoutMinutes, 15)
 	}
 }
 

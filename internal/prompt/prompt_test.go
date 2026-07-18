@@ -353,3 +353,44 @@ func TestRenderReviewer_NonZeroPR(t *testing.T) {
 		t.Error("userPrompt should contain PR number 1")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RenderDevCIRetry tests (issue-13)
+// ---------------------------------------------------------------------------
+
+func TestRenderDevCIRetry_ContainsFailedCheckInfo(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+	failedCheckInfo := "### verify\n```\ngo test failed\n```\n"
+
+	p, err := RenderDevCIRetry(failedCheckInfo, testIssue, "golemic/issue-42", "go test", guidelinesPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mustContain(t, p, []string{
+		failedCheckInfo,
+		"golemic/issue-42",
+		"go test",
+		"Do not open a new PR",
+	})
+}
+
+func TestRenderDevCIRetry_EmptyInfoError(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+	_, err := RenderDevCIRetry("", testIssue, "golemic/issue-42", "go test", guidelinesPath)
+	if err == nil {
+		t.Fatal("expected EMPTY_FAILED_CHECKS error, got nil")
+	}
+	if !strings.Contains(err.Error(), "EMPTY_FAILED_CHECKS") {
+		t.Errorf("expected EMPTY_FAILED_CHECKS in error, got: %v", err)
+	}
+}
+
+func TestRenderDevCIRetry_InjectedIssueContext(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+	issue := Issue{Number: 99, Title: "Test CI retry", Body: "Body content"}
+	p, err := RenderDevCIRetry("check info", issue, "golemic/issue-99", "make test", guidelinesPath)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	mustContain(t, p, []string{"99", "Test CI retry", "Body content", "make test"})
+}

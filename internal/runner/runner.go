@@ -53,6 +53,9 @@ type Runner struct {
 	clean bool
 	quiet bool
 
+	ciPollIntervalOverride time.Duration
+	ciTimeoutOverride      time.Duration
+
 	// Resolved during Run
 	repoRoot   string
 	project    string
@@ -99,6 +102,12 @@ func (r *Runner) SetRunAgentFn(fn func(ctx context.Context, cfg agent.RoleConfig
 
 // SetClean enables pre-run artifact cleanup for the target issue.
 func (r *Runner) SetClean(clean bool) { r.clean = clean }
+
+// SetCIPollInterval overrides the CI check poll interval (for tests only).
+func (r *Runner) SetCIPollInterval(d time.Duration) { r.ciPollIntervalOverride = d }
+
+// SetCITimeout overrides the CI check timeout (for tests only).
+func (r *Runner) SetCITimeout(d time.Duration) { r.ciTimeoutOverride = d }
 
 // SetQuiet suppresses the run-setup header when set to true.
 func (r *Runner) SetQuiet(quiet bool) { r.quiet = quiet }
@@ -348,6 +357,17 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 	if !r.hasPROpenedEvent(eventLogPath) {
 		fmt.Fprintf(r.stderr, "dev_failed: pr_opened event missing or invalid\n")
 		return outcomeDevFailed
+	}
+
+	// CI gate: wait for PR checks to pass before allowing the reviewer to start
+	prNumber, err := r.getPRNumber(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: failed to get PR number for CI gate: %v\n", err) //nolint:errcheck
+		return outcomeDevFailed
+	}
+	ciGateOutcome := r.runCIGate(prNumber, eventLogPath, timeoutDuration)
+	if ciGateOutcome != outcomeSuccess {
+		return ciGateOutcome
 	}
 
 	// Bounded ping-pong: up to maxRounds reviewer runs
