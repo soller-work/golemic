@@ -498,6 +498,9 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 
 		next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, &round)
 		if !next {
+			if outcome == outcomeSuccess {
+				return r.runMergePhase(writer, eventLogPath)
+			}
 			return outcome
 		}
 	}

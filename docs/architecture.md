@@ -147,10 +147,14 @@ Lifecycle-Events schreibt der Runner selbst.
 | Runner | `worktree_created` | `path`, `branch`, `baseSha`, `role` |
 | Dev (`emit`) | `dev_started` | – |
 | Dev (`open-pr`) | `pr_opened` | `prNumber`, `url`, `branch` |
-| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber` |
+| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`high`/`low`) |
+| Runner | `ci_wait_finished` | `result`, `round` |
+| Runner | `automerge_skipped` | `reason` |
+| Runner | `automerge_failed` | `reason` |
+| Runner | `pr_merged` | `prNumber`, `mergedSHA` |
 | Runner | `run_finished` | `outcome` (§2.11) |
 
-Loop-Entscheidung in Iteration 1 = `verdict` aus `review_submitted`.
+Loop-Entscheidung: `verdict` aus `review_submitted` → merge gate → rebase/verify/merge.
 
 ### 2.7 Golemic ist ein Werkzeug, das auf das Host-Repo wirkt
 Golemic wird per Installer in ein **Unterverzeichnis** eines ausgecheckten
@@ -371,7 +375,62 @@ At most 2 fix rounds are allowed (3 total dev agent runs per run). Exhausted ret
 - `internal/eventlog/eventlog.go` — `ci_wait_finished` event type and payload validation
 - `internal/prompt/prompt.go` — `RenderDevCIRetry` template
 
-## 5. Remote Gate: GitHub Actions verify
+## 5. Auto-Merge Phase
+
+After a successful reviewer phase (valid `review_submitted` event, clean worktree), the runner executes a deterministic merge phase. No LLM participates in this phase — all decisions are deterministic Go code.
+
+### Gate (DT-001)
+
+The merge phase evaluates three conditions in order:
+
+1. **Verdict** from the latest `review_submitted` event must be `approved`.
+2. **Merge confidence** from the same event must be `high`. The reviewer sets this via `golemic submit-review --merge-confidence high|low`. The event payload is authoritative; the `confidence:*` PR label is a read-only projection.
+3. **Risk label** on the originating issue must be `risk:low` or `risk:medium`. Read via `gh issue view --json labels` with the dev token. Missing label = `risk:high` (fail-closed). When multiple risk labels are present the most restrictive wins.
+
+If any condition is not met, the runner writes an `automerge_skipped` event (with a reason: `confidence low`, `risk:high`, or `no risk label`) and finishes with outcome `success` — a PR left open for the human is a valid delivery. Exit code 0, cleanup runs.
+
+### Rebase and Verification
+
+When the gate passes:
+
+1. `git fetch origin` in the dev worktree.
+2. `git merge-base --is-ancestor origin/main HEAD`: if true, the branch is already up to date → skip to merge.
+3. Otherwise: `git rebase origin/main`. On conflict: `git rebase --abort`, post PR comment, write `automerge_failed`, outcome `merge_failed`, exit 1. Worktrees left in place (BR-005).
+4. After a successful rebase:
+   - If the PR has configured CI checks: push with `--force-with-lease`, then poll `gh pr checks` every 10 seconds until all pass or `ci_timeout_minutes` expires.
+   - If no CI checks are configured: run `verify_command` in the dev worktree, then push with `--force-with-lease`.
+   - Any failure (red/timeout checks, rejected push, failed verify): post PR comment, write `automerge_failed`, outcome `merge_failed`, exit 1 (BR-006).
+
+### Squash Merge
+
+`gh pr merge <prNumber> --squash --delete-branch` executed with the **reviewer token** (BR-007). The squash creates one commit per issue on `main`; the remote branch is deleted; the originating issue closes via the `Closes #N` body keyword. On failure: post PR comment, write `automerge_failed`, outcome `merge_failed`, exit 1. No retry.
+
+### Events and Outcomes
+
+| Event | When |
+|---|---|
+| `automerge_skipped` | Gate not met; payload: `reason` |
+| `automerge_failed` | Merge attempt failed; payload: `reason` |
+| `pr_merged` | Merge succeeded; payload: `prNumber`, `mergedSHA` |
+
+| Outcome | Meaning | Exit |
+|---|---|---|
+| `success` | Merged or skipped (PR left for human) | 0 |
+| `merge_failed` | Merge attempted but failed | 1 |
+
+On `merge_failed`, worktrees are left in place for debugging. Cleanup only runs on `success`.
+
+### submit-review Extension
+
+`golemic submit-review` gains a required `--merge-confidence high|low` flag (BR-009). It is validated fail-fast before any `gh` call. The value is written into the `review_submitted` event payload and mirrored as a `confidence:*` label on the PR (label created on demand).
+
+**Implementation modules:**
+- `internal/runner/merge.go` — gate, rebase, verify, push, squash merge
+- `internal/eventlog/eventlog.go` — `pr_merged`, `automerge_skipped`, `automerge_failed` event types; `mergeConfidence` in `review_submitted` payload
+- `cmd/golemic/main.go` — `--merge-confidence` flag and PR label mirroring
+- `prompts/reviewer.md` — criteria for merge confidence high
+
+## 6. Remote Gate: GitHub Actions verify
 
 **Workflow:** `.github/workflows/verify.yml`
 

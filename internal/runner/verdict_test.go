@@ -11,8 +11,15 @@ import (
 )
 
 // writeReviewSubmittedEvent appends a review_submitted event with the given verdict
-// to the event log at logPath.
+// and mergeConfidence "high" to the event log at logPath.
 func writeReviewSubmittedEvent(t *testing.T, logPath, verdict string) {
+	t.Helper()
+	writeReviewSubmittedEventWithConfidence(t, logPath, verdict, "high")
+}
+
+// writeReviewSubmittedEventWithConfidence appends a review_submitted event with
+// the given verdict and mergeConfidence to the event log at logPath.
+func writeReviewSubmittedEventWithConfidence(t *testing.T, logPath, verdict, confidence string) {
 	t.Helper()
 	w, err := eventlog.NewWriter(logPath)
 	if err != nil {
@@ -20,7 +27,7 @@ func writeReviewSubmittedEvent(t *testing.T, logPath, verdict string) {
 	}
 	defer w.Close() //nolint:errcheck
 
-	payload, _ := json.Marshal(map[string]string{"verdict": verdict})
+	payload, _ := json.Marshal(map[string]string{"verdict": verdict, "mergeConfidence": confidence})
 	if err := w.Write(eventlog.Event{
 		Type:    eventlog.EventReviewSubmitted,
 		Ts:      time.Now().Format(time.RFC3339),

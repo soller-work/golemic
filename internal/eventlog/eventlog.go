@@ -21,14 +21,17 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	EventRunStarted      = "run_started"
-	EventWorktreeCreated = "worktree_created"
-	EventDevStarted      = "dev_started"
-	EventPROpened        = "pr_opened"
-	EventReviewSubmitted = "review_submitted"
-	EventRunFinished     = "run_finished"
-	EventAgentCompleted  = "agent_completed"
-	EventCIWaitFinished  = "ci_wait_finished"
+	EventRunStarted       = "run_started"
+	EventWorktreeCreated  = "worktree_created"
+	EventDevStarted       = "dev_started"
+	EventPROpened         = "pr_opened"
+	EventReviewSubmitted  = "review_submitted"
+	EventRunFinished      = "run_finished"
+	EventAgentCompleted   = "agent_completed"
+	EventCIWaitFinished   = "ci_wait_finished"
+	EventPRMerged         = "pr_merged"
+	EventAutomergeSkipped = "automerge_skipped"
+	EventAutomergeFailed  = "automerge_failed"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -42,6 +45,9 @@ func AllEventTypes() []string {
 		EventRunFinished,
 		EventAgentCompleted,
 		EventCIWaitFinished,
+		EventPRMerged,
+		EventAutomergeSkipped,
+		EventAutomergeFailed,
 	}
 }
 
@@ -122,11 +128,12 @@ func ValidatePROpenedPayload(raw json.RawMessage) error {
 
 // reviewSubmittedData is the expected payload shape for review_submitted events.
 type reviewSubmittedData struct {
-	Verdict string `json:"verdict"`
+	Verdict         string `json:"verdict"`
+	MergeConfidence string `json:"mergeConfidence"`
 }
 
 // ValidateReviewSubmittedPayload checks that payload decodes to an object with
-// verdict ∈ {approved, changes_requested}.
+// verdict ∈ {approved, changes_requested} and mergeConfidence ∈ {high, low}.
 func ValidateReviewSubmittedPayload(raw json.RawMessage) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("review_submitted payload is empty")
@@ -137,10 +144,16 @@ func ValidateReviewSubmittedPayload(raw json.RawMessage) error {
 	}
 	switch d.Verdict {
 	case "approved", "changes_requested":
-		return nil
 	default:
 		return fmt.Errorf("review_submitted payload: verdict must be %q or %q, got %q",
 			"approved", "changes_requested", d.Verdict)
+	}
+	switch d.MergeConfidence {
+	case "high", "low":
+		return nil
+	default:
+		return fmt.Errorf("review_submitted payload: mergeConfidence must be %q or %q, got %q",
+			"high", "low", d.MergeConfidence)
 	}
 }
 

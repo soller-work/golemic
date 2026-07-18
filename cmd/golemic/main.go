@@ -377,15 +377,17 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 	var verdictFlag string
 	var bodyFlag string
 	var prFlag int
+	var mergeConfidenceFlag string
 	fs.StringVar(&verdictFlag, "verdict", "", "Verdict: 'approved' or 'changes_requested' (required)")
 	fs.StringVar(&bodyFlag, "body", "", "Review body (required)")
 	fs.IntVar(&prFlag, "pr", 0, "PR number (required)")
+	fs.StringVar(&mergeConfidenceFlag, "merge-confidence", "", "Merge confidence: 'high' or 'low' (required)")
 
 	if err := fs.Parse(args[2:]); err != nil {
 		return 1
 	}
 
-	// BR-004: Check env vars before any gh/git call.
+	// Check env vars before any gh/git call.
 	runID := getenv("GOLEMIC_RUN_ID")
 	eventLogPath := getenv("GOLEMIC_EVENT_LOG")
 
@@ -401,7 +403,13 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 1
 	}
 
-	// BR-001, BR-005: Validate verdict before any gh call (fail-fast).
+	// BR-009: Validate --merge-confidence fail-fast before any gh call.
+	if mergeConfidenceFlag != "high" && mergeConfidenceFlag != "low" {
+		fmt.Fprintf(stderr, "Invalid merge confidence: must be 'high' or 'low', got %q\n", mergeConfidenceFlag) //nolint:errcheck
+		return 1
+	}
+
+	// Validate verdict before any gh call (fail-fast).
 	if verdictFlag != "approved" && verdictFlag != "changes_requested" {
 		fmt.Fprintf(stderr, "Invalid verdict: must be 'approved' or 'changes_requested', got %q\n", verdictFlag)
 		return 1
@@ -449,12 +457,13 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 1
 	}
 
-	// BR-004: Write review_submitted event (only reached if gh succeeds).
+	// Write review_submitted event (only reached if gh succeeds).
 
 	payload := map[string]interface{}{
-		"verdict":  verdictFlag,
-		"body":     bodyFlag,
-		"prNumber": prFlag,
+		"verdict":         verdictFlag,
+		"body":            bodyFlag,
+		"prNumber":        prFlag,
+		"mergeConfidence": mergeConfidenceFlag,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -471,6 +480,17 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 
 	if err := writer.Write(event); err != nil {
 		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		return 1
+	}
+
+	// Mirror confidence as PR label (SC-001). Label is created on demand; the event
+	// payload is the authoritative source so a label failure is reported but not fatal
+	// to the merge decision.
+	confidenceLabel := "confidence:" + mergeConfidenceFlag
+	// Ignore error: label may already exist.
+	_, _ = executor.RunWithEnv(nil, "gh", "label", "create", confidenceLabel, "--color", "0075ca", "--description", "merge confidence")
+	if _, err := executor.RunWithEnv(nil, "gh", "pr", "edit", strconv.Itoa(prFlag), "--add-label", confidenceLabel); err != nil {
+		fmt.Fprintf(stderr, "Review submitted but PR label could not be set: %v\n", err) //nolint:errcheck
 		return 1
 	}
 

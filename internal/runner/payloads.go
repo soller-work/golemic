@@ -11,9 +11,15 @@ type runFinishedPayload struct {
 	Outcome string `json:"outcome"`
 }
 
-// issueData holds the parsed result of gh issue view --json title,body.
+// issueLabel holds the name of a GitHub issue label.
+type issueLabel struct {
+	Name string `json:"name"`
+}
+
+// issueData holds the parsed result of gh issue view --json title,body,labels.
 type issueData struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
+	Number int          `json:"number"`
+	Title  string       `json:"title"`
+	Body   string       `json:"body"`
+	Labels []issueLabel `json:"labels"`
 }
