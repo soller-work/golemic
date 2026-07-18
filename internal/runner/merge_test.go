@@ -3,6 +3,7 @@ package runner
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
+	"golemic/internal/preflight"
 )
 
 // ---------------------------------------------------------------------------
@@ -571,4 +573,246 @@ func mustLoadCreds(t *testing.T) *credentials.Credentials { //nolint:unused
 		t.Fatalf("load credentials: %v", err)
 	}
 	return creds
+}
+
+// ---------------------------------------------------------------------------
+// verifyAndPush unit tests — PS-003 branches (AC-001, AC-007, AC-008)
+// ---------------------------------------------------------------------------
+
+// makeVerifyRunner builds a minimal Runner for verifyAndPush tests.
+func makeVerifyRunner(t *testing.T, exec *fakeExecutor, verifyCmds ...string) *Runner {
+	t.Helper()
+	homeDir := t.TempDir()
+	project := "proj"
+	credDir := mkCredDir(t, homeDir, project)
+	_ = credDir
+
+	verifyCmd := "echo ok"
+	if len(verifyCmds) > 0 {
+		verifyCmd = verifyCmds[0]
+	}
+
+	creds := mustLoadCredsFromDir(t, homeDir, project)
+
+	r := &Runner{
+		executor:              exec,
+		issueNum:              50,
+		runID:                 "test-run",
+		repoRoot:              "/repo",
+		homeDir:               homeDir,
+		issue:                 &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                   &config.Config{Project: project, VerifyCommand: verifyCmd},
+		creds:                 creds,
+		branchName:            "golemic/issue-50",
+		ciTimeoutOverride:     100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
+	}
+	buf := &strings.Builder{}
+	r.stderr = buf
+	return r
+}
+
+func mkCredDir(t *testing.T, homeDir, project string) string {
+	t.Helper()
+	d := homeDir + "/.golemic/" + project
+	if err := os.MkdirAll(d, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(d+"/credentials.json",
+		[]byte(`{"dev_token":"ghp_dev","reviewer_token":"ghp_rev"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func mustLoadCredsFromDir(t *testing.T, homeDir, project string) *credentials.Credentials {
+	t.Helper()
+	loader := credentials.NewLoader(homeDir)
+	creds, err := loader.Load(project)
+	if err != nil {
+		t.Fatalf("load credentials: %v", err)
+	}
+	return creds
+}
+
+// AC-001: branch has CI checks; after push checks turn green → squash merge succeeds.
+func TestVerifyAndPush_GreenCI_MergesSuccessfully_AC001(t *testing.T) { //nolint:cyclop
+	checksCall := 0
+	exec := &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			switch {
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
+				checksCall++
+				if checksCall == 1 {
+					// Initial query: pending
+					return `[{"name":"build","bucket":"waiting","link":""}]`, nil
+				}
+				// Subsequent polls: green
+				return `[{"name":"build","bucket":"pass","link":""}]`, nil
+			case name == "git" && len(args) >= 1 && args[0] == "push":
+				return "", nil
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "merge":
+				return "sha-abc", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
+	r := makeVerifyRunner(t, exec)
+	var written []eventlog.Event
+	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	found := false
+	for _, ev := range written {
+		if ev.Type == eventlog.EventPRMerged {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("pr_merged event not written")
+	}
+	if checksCall < 2 {
+		t.Errorf("expected at least 2 gh pr checks calls (initial + poll); got %d", checksCall)
+	}
+}
+
+// AC-007: CI checks fail after the rebase push → automerge_failed, no merge.
+func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolint:cyclop
+	checksCall := 0
+	exec := &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			switch {
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
+				checksCall++
+				if checksCall == 1 {
+					return `[{"name":"build","bucket":"waiting","link":""}]`, nil // pending → has CI
+				}
+				return `[{"name":"build","bucket":"fail","link":""}]`, nil // red after push
+			case name == "git" && len(args) >= 1 && args[0] == "push":
+				return "", nil
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "comment":
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
+	r := makeVerifyRunner(t, exec)
+	var written []eventlog.Event
+	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+	found := false
+	for _, ev := range written {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("automerge_failed event not written")
+	}
+	// Merge must not have been attempted
+	for _, ev := range written {
+		if ev.Type == eventlog.EventPRMerged {
+			t.Error("pr_merged must not be written when CI is red")
+		}
+	}
+}
+
+// AC-008 (success): no CI configured → verify_command passes → push → squash merge.
+func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) { //nolint:cyclop
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			// verify_command: echo ok → success
+			if name == "echo" {
+				return "ok", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			switch {
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
+				// no_checks: gh exits 1 with the exact message
+				return "", noChecksErr()
+			case name == "git" && len(args) >= 1 && args[0] == "push":
+				return "", nil
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "merge":
+				return "sha-abc", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
+	r := makeVerifyRunner(t, exec, "echo ok")
+	var written []eventlog.Event
+	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	found := false
+	for _, ev := range written {
+		if ev.Type == eventlog.EventPRMerged {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("pr_merged event not written")
+	}
+}
+
+// AC-008 (failure): no CI configured → verify_command fails → no push, automerge_failed.
+func TestVerifyAndPush_NoCI_VerifyFails_MergeFailed_AC008(t *testing.T) { //nolint:cyclop
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "false" {
+				return "", fmt.Errorf("exit status 1")
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			switch {
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
+				return "", noChecksErr()
+			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "comment":
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
+	r := makeVerifyRunner(t, exec, "false")
+	var written []eventlog.Event
+	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+	found := false
+	for _, ev := range written {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("automerge_failed event not written")
+	}
+	// No push should have been issued
+	for _, ev := range written {
+		if ev.Type == eventlog.EventPRMerged {
+			t.Error("pr_merged must not be written when verify_command fails")
+		}
+	}
+}
+
+// noChecksErr returns the exact error that gh emits for a PR with no CI checks.
+// queryCIChecks uses errors.As to detect *preflight.ErrExit, so we must return
+// the real struct, not a custom interface.
+func noChecksErr() error {
+	return &preflight.ErrExit{ExitCode: 1, Stderr: "no checks reported on the 'golemic/issue-50' branch"}
 }

@@ -10,7 +10,7 @@ func (r *Runner) loadIssue() (*issueData, error) {
 	out, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.DevToken()},
 		r.repoRoot,
-			"gh", "issue", "view", fmt.Sprintf("%d", r.issueNum), "--json", "title,body,labels",
+		"gh", "issue", "view", fmt.Sprintf("%d", r.issueNum), "--json", "title,body,labels",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("gh issue view: %w", err)
