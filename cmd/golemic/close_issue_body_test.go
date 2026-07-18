@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestEnsureBodyClosesIssue(t *testing.T) {
 	cases := []struct {
@@ -45,6 +50,17 @@ func TestEnsureBodyClosesIssue(t *testing.T) {
 			branch: "golemic/issue-abc",
 			want:   "Description",
 		},
+		{
+			name:   "negative-signed branch left untouched",
+			body:   "Description",
+			branch: "golemic/issue--6",
+			want:   "Description",
+		},
+		{name: "positive-signed branch left untouched", body: "Description", branch: "golemic/issue-+6", want: "Description"},
+		{name: "issue zero left untouched", body: "Description", branch: "golemic/issue-0", want: "Description"},
+		{name: "branch with trailing suffix left untouched", body: "Description", branch: "golemic/issue-6-fix", want: "Description"},
+		{name: "empty body appends Closes", body: "", branch: "golemic/issue-6", want: "\n\nCloses #6\n"},
+		{name: "prefix-collision issue number still appends", body: "Closes #16", branch: "golemic/issue-1", want: "Closes #16\n\nCloses #1\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -53,5 +69,37 @@ func TestEnsureBodyClosesIssue(t *testing.T) {
 				t.Errorf("ensureBodyClosesIssue(%q, %q) = %q, want %q", c.body, c.branch, got, c.want)
 			}
 		})
+	}
+}
+
+func TestRunOpenPR_AppendsClosesToGhBody(t *testing.T) {
+	dir := t.TempDir()
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-pr-close",
+		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
+	}
+
+	var sentBody string
+	exec := fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			return "golemic/issue-6\n", nil
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			for i, a := range args[:len(args)-1] {
+				if a == "--body" {
+					sentBody = args[i+1]
+				}
+			}
+			return "https://github.com/owner/repo/pull/43\n", nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "open-pr", "--title", "My PR", "--body", "Implements issue #6"}
+	if got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec); got != 0 {
+		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(sentBody, "Closes #6") {
+		t.Errorf("gh pr create --body should contain %q, got: %q", "Closes #6", sentBody)
 	}
 }
