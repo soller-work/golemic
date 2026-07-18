@@ -244,6 +244,85 @@ func RenderDevRetry(findings string, issue Issue, branch string, verifyCommand s
 	return sb.String(), nil
 }
 
+// devCIRetryTemplateData holds the template variables for the dev CI retry user prompt.
+type devCIRetryTemplateData struct {
+	Issue          Issue
+	Branch         string
+	FailedCheckInfo string
+	VerifyCommand  string
+	Guidelines     string
+}
+
+const devCIRetryUserTemplate = `# CI Retry: Fix Failing Checks for Issue #{{.Issue.Number}}
+
+**Title:** {{.Issue.Title}}
+
+**Description:**
+{{.Issue.Body}}
+
+**Branch:** {{.Branch}}
+
+**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
+
+---
+
+## Failing CI Checks
+
+The following CI checks failed on the PR. Fix the failures and push to the same branch:
+
+{{.FailedCheckInfo}}
+
+---
+
+## Guidelines
+
+{{.Guidelines}}
+
+---
+
+## Instructions
+
+1. Diagnose and fix the failing CI checks described above on branch ` + "`" + `{{.Branch}}` + "`" + `.
+2. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + `
+3. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
+4. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
+5. **Do not open a new PR** \u2014 the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will update automatically.
+`
+
+// RenderDevCIRetry renders a dev CI retry user prompt injecting failed check info.
+//
+// Returns EMPTY_FAILED_CHECKS error if failedCheckInfo is empty.
+func RenderDevCIRetry(failedCheckInfo string, issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+	if failedCheckInfo == "" {
+		return "", fmt.Errorf("EMPTY_FAILED_CHECKS: no failed check info provided")
+	}
+
+	guidelines, err := readGuidelines(guidelinesPath)
+	if err != nil {
+		return "", err
+	}
+
+	data := devCIRetryTemplateData{
+		Issue:          issue,
+		Branch:         branch,
+		FailedCheckInfo: failedCheckInfo,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+	}
+
+	tmpl, err := template.New("devCIRetry").Parse(devCIRetryUserTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse dev CI retry prompt template: %w", err)
+	}
+
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return "", fmt.Errorf("failed to render dev CI retry prompt template: %w", err)
+	}
+
+	return sb.String(), nil
+}
+
 // readGuidelines reads the guidelines file at the given path.
 // Returns an error if the file does not exist or cannot be read.
 func readGuidelines(path string) (string, error) {

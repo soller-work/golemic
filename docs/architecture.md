@@ -346,7 +346,32 @@ Bot-Tokens in `~/.golemic/<projekt>/credentials.json`, testet die Verbindung
 
 *(Reihenfolge korrektheitsgetrieben: robuster Loop vor Autonomie. Anpassbar.)*
 
-## 4. Remote Gate: GitHub Actions verify
+## 4. CI Gate: Check Wait Between Dev and Reviewer
+
+After the dev agent opens the PR (`pr_opened` event), the runner inserts a **CI gate phase** before creating the reviewer worktree. The gate ensures the reviewer only ever reviews a green build.
+
+**Poll loop (BR-002):** `gh pr checks <prNumber> --json name,bucket,link` is queried every 10 seconds (configurable via `ciPollIntervalOverride` in tests; hardcoded in production). If all checks report `pass` or `skipping`, the gate passes. A PR without any configured checks (`no_checks`) passes immediately. A poll that exceeds `ci_timeout_minutes` (config field, default 15) is treated the same as a red build.
+
+**Retry loop (BR-003, BR-004):** A red or timed-out build triggers a dev retry. The runner:
+1. Collects failed check names and truncated log excerpts (via `gh run view --log-failed`).
+2. Renders a `RenderDevCIRetry` prompt containing the check names and excerpts, instructing the dev to fix and push to the **same branch** without opening a new PR.
+3. Re-invokes the dev agent in the **existing dev worktree**.
+4. Verifies that the dev pushed new commits (compares remote branch SHA before/after).
+5. Restarts the poll loop from the beginning for the new head.
+
+At most 2 fix rounds are allowed (3 total dev agent runs per run). Exhausted retries, a non-zero dev exit, or a missing push trigger **escalation**: a PR comment is posted and the run finishes with outcome `dev_failed`, exit 1. Worktrees are left in place for debugging.
+
+**Event log (BR-006):** Every completed poll cycle writes a `ci_wait_finished` event with `result` (`green`|`red`|`timeout`|`no_checks`) and `round` (0-based). All gate decisions are reconstructable from the event log.
+
+**Config:** `ci_timeout_minutes` in `.golemic/config.json` (default 15, must be > 0 if set). The existing `timeout_minutes` field governs per-agent wall-clock timeouts and is unchanged.
+
+**Implementation modules:**
+- `internal/runner/ciwait.go` — poll loop, retry loop, escalation, CI-specific prompt dispatch
+- `internal/config/config.go` — `CITimeoutMinutes` field
+- `internal/eventlog/eventlog.go` — `ci_wait_finished` event type and payload validation
+- `internal/prompt/prompt.go` — `RenderDevCIRetry` template
+
+## 5. Remote Gate: GitHub Actions verify
 
 **Workflow:** `.github/workflows/verify.yml`
 
