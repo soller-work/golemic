@@ -66,12 +66,23 @@ Walk dependencies in this order unless the feature requires a different dependen
 5. happy-path behavior;
 6. alternate, error, retry, and cancellation behavior;
 7. business rules and decision tables;
-8. inputs, outputs, validation, and error contracts;
-9. type-specific contract: state mutation, read model, ordered process, or external integration;
-10. state changes, events, and external side effects where relevant;
-11. idempotency, concurrency, freshness, consistency, retry, timeout, compensation, and failure handling where relevant;
-12. codebase integration points and change boundaries;
-13. acceptance scenarios, required tests, and quality commands.
+8. **risk classification**: propose `low`, `medium`, or `high` with rationale using the DT-001 guidance below; record the confirmed value in the decision log with source `user` or `confirmed_recommendation`;
+9. inputs, outputs, validation, and error contracts;
+10. type-specific contract: state mutation, read model, ordered process, or external integration;
+11. state changes, events, and external side effects where relevant;
+12. idempotency, concurrency, freshness, consistency, retry, timeout, compensation, and failure handling where relevant;
+13. codebase integration points and change boundaries;
+14. acceptance scenarios, required tests, and quality commands.
+
+#### DT-001 — Risk value guidance
+
+| Change characteristics | Recommended risk | Downstream effect |
+|---|---|---|
+| Small, local, well-covered by tests, no critical paths (auth, migrations, CI config, release tooling) | `low` | Eligible for auto-merge |
+| Moderate scope or touches shared components, still well-testable | `medium` | Eligible for auto-merge |
+| Architectural change, critical path, migration, security-relevant, or hard to verify | `high` | Always requires human merge |
+
+When uncertain, recommend the higher value. The user confirms or overrides; their confirmed value is what lands in the slice.
 
 Normalize every resolved answer into the draft decision log. Use only these decision sources:
 
@@ -87,6 +98,7 @@ Set `readiness` to `ready` only when all of the following are true:
 
 - the artifact describes exactly one vertical slice;
 - stakeholder intent, trigger, success outcome, and scope boundaries are explicit;
+- the `risk` field is set to `low`, `medium`, or `high` with a decision log entry recording the rationale;
 - all material behavior branches and business rules are resolved;
 - inputs, outputs, errors, permissions, and applicable state transitions are specified;
 - the selected `slice_type` satisfies its type-specific contract: commands define mutations, queries define complete read models without domain state changes, processes define ordered steps and terminal behavior, and integrations define reliability and compatibility contracts;
