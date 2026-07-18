@@ -271,6 +271,10 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   printf '[]'
   exit 0
 fi
+if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
+  printf '[]'
+  exit 0
+fi
 printf "gh shim: unhandled command: %s\n" "$*" >&2
 exit 1
 `
@@ -282,7 +286,7 @@ exit 1
 // TIMEOUT_MODE controls behaviour:
 //   - "dev_hangs":      pi always sleeps; runner kills it when the 2s timeout fires (AC-001).
 //   - "reviewer_hangs": dev role succeeds (commit + push + pr_opened event); reviewer
-//                       role sleeps until killed (AC-002).
+//     role sleeps until killed (AC-002).
 func toWritePiShim(t *testing.T, binDir string) {
 	t.Helper()
 	script := `#!/bin/sh

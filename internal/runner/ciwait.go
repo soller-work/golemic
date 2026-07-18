@@ -13,6 +13,7 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/eventlog"
+	"golemic/internal/preflight"
 	"golemic/internal/prompt"
 )
 
@@ -21,6 +22,9 @@ const (
 	maxCILogBytes         = 8000
 	maxCIFixRounds        = 2
 )
+
+// noChecksRe matches the exact stderr line gh emits for a PR on a branch with no CI checks.
+var noChecksRe = regexp.MustCompile(`^no checks reported on the '.+' branch$`)
 
 // ghCheckItem is one entry from `gh pr checks --json name,bucket,link`.
 type ghCheckItem struct {
@@ -51,6 +55,10 @@ func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
 		"gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "name,bucket,link",
 	)
 	if err != nil {
+		var ee *preflight.ErrExit
+		if errors.As(err, &ee) && ee.ExitCode == 1 && noChecksRe.MatchString(strings.TrimSpace(ee.Stderr)) {
+			return "no_checks", nil, nil
+		}
 		return "", nil, fmt.Errorf("CHECKS_QUERY_FAILED: %w", err)
 	}
 
