@@ -1,0 +1,277 @@
+{
+  "schema_version": "1.1.0",
+  "slice_type": "query",
+  "risk": "low",
+  "title": "Search open orders for warehouse staff",
+  "summary": "STRUCTURAL EXAMPLE — query slice type. This file demonstrates the structural shape of a query slice, including a read model with source-to-field mapping, freshness policy, cursor-based pagination, and empty-result handling. The domain content is fictional and must not be copied.",
+  "readiness": "ready",
+  "stakeholder_intent": {
+    "actor": "Warehouse staff member assigned to a fulfilment zone",
+    "goal": "Find open orders in their zone so they can begin picking without navigating unrelated orders",
+    "business_value": "Reduces order processing time by surfacing only actionable orders; replaces a full-table dump that warehouse staff previously filtered manually",
+    "trigger": "A warehouse staff member opens the order queue dashboard",
+    "success_outcome": "A paginated, zone-filtered list of open orders is returned within 200 ms"
+  },
+  "scope": {
+    "in_scope": [
+      "Return a paginated list of open orders visible to the requesting staff member",
+      "Filter by fulfilment zone and order status subset (OPEN, PICKING)",
+      "Sort by creation time descending"
+    ],
+    "out_of_scope": [
+      "Updating order state",
+      "Fetching individual order line-item detail",
+      "Customer-facing order lookup"
+    ]
+  },
+  "preconditions": [
+    "The requester is an authenticated warehouse staff member",
+    "The fulfilment zone identifier is valid and assigned to the requester"
+  ],
+  "business_rules": [
+    {
+      "id": "BR-001",
+      "rule": "Only orders whose zone matches the staff member's assigned zone are returned",
+      "applies_when": "A search request is received",
+      "outcome": "Zone-filtered order list is returned; no cross-zone data leaks"
+    },
+    {
+      "id": "BR-002",
+      "rule": "Cursor-based pagination is applied with a page size capped at 50",
+      "applies_when": "Applying pagination to the result set",
+      "outcome": "Clients receive a stable, bounded page and an opaque cursor for the next page"
+    }
+  ],
+  "decision_tables": [],
+  "interfaces": [
+    {
+      "id": "IF-001",
+      "kind": "http_api",
+      "name": "Open orders search endpoint",
+      "operation": "GET /warehouse/orders",
+      "inputs": [
+        {
+          "name": "zone",
+          "type": "string",
+          "required": true,
+          "constraints": ["Must match the staff member's assigned zone"],
+          "source": "Query parameter"
+        },
+        {
+          "name": "cursor",
+          "type": "string",
+          "required": false,
+          "constraints": ["Opaque cursor returned by a previous response; omit on first page"],
+          "source": "Query parameter"
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "constraints": ["1 to 50; defaults to 20 when absent"],
+          "source": "Query parameter"
+        }
+      ],
+      "outputs": [
+        {
+          "condition": "Query succeeds",
+          "status": "200",
+          "body": "JSON object with items array of OpenOrderSummary and optional nextCursor string"
+        }
+      ],
+      "errors": [
+        {
+          "condition": "Staff member requests a zone they are not assigned to",
+          "code": "ZONE_ACCESS_DENIED",
+          "status": "403",
+          "message": "Zone is not assigned to the requesting staff member"
+        },
+        {
+          "condition": "Cursor value is malformed or has expired",
+          "code": "INVALID_CURSOR",
+          "status": "400",
+          "message": "Pagination cursor is invalid or has expired"
+        }
+      ]
+    }
+  ],
+  "read_models": [
+    {
+      "id": "RM-001",
+      "name": "OpenOrderSummary",
+      "purpose": "Provides a compact, zone-filtered view of open orders for the warehouse queue dashboard",
+      "sources": ["orders table", "order_lines table (aggregated count only)"],
+      "fields": [
+        {
+          "name": "orderId",
+          "type": "UUID",
+          "source": "orders.id",
+          "nullable": false,
+          "meaning": "Unique order identifier"
+        },
+        {
+          "name": "customerReference",
+          "type": "string",
+          "source": "orders.customer_reference",
+          "nullable": false,
+          "meaning": "Human-readable customer reference code printed on the pick slip"
+        },
+        {
+          "name": "status",
+          "type": "string",
+          "source": "orders.status",
+          "nullable": false,
+          "meaning": "Current lifecycle status; only OPEN and PICKING are returned by this query"
+        },
+        {
+          "name": "lineCount",
+          "type": "integer",
+          "source": "COUNT(*) from order_lines where order_id = orders.id",
+          "nullable": false,
+          "meaning": "Number of distinct line items in the order; used for pick complexity estimation"
+        },
+        {
+          "name": "createdAt",
+          "type": "ISO-8601 datetime",
+          "source": "orders.created_at",
+          "nullable": false,
+          "meaning": "Order creation timestamp; primary sort key (descending)"
+        },
+        {
+          "name": "zone",
+          "type": "string",
+          "source": "orders.fulfilment_zone",
+          "nullable": false,
+          "meaning": "Fulfilment zone the order is assigned to"
+        }
+      ],
+      "freshness": "Read from the primary replica with a replication lag of at most 2 seconds; staleness is acceptable because warehouse staff refresh the view manually",
+      "filtering_sorting_pagination": "Filter by orders.fulfilment_zone = :zone and orders.status IN ('OPEN','PICKING'); sort by orders.created_at DESC; cursor encodes last seen (created_at, id) pair; page size capped at 50",
+      "empty_result": "Return HTTP 200 with an empty items array and no nextCursor field; do not return 404",
+      "authorization_filtering": "Reject requests where the authenticated staff member's assigned_zone does not equal the requested zone parameter; apply the check before executing the database query"
+    }
+  ],
+  "process_steps": [],
+  "integration_contracts": [],
+  "state_changes": [],
+  "side_effects": [],
+  "security": {
+    "authentication": "Validate the warehouse staff session token from the Authorization header using the existing WarehouseAuthMiddleware",
+    "authorization_rules": [
+      "The authenticated staff member's assigned zone must equal the requested zone parameter"
+    ],
+    "data_classification": "Internal operational data; does not contain customer PII",
+    "audit_requirements": []
+  },
+  "implementation_context": {
+    "target_modules": [
+      "src/warehouse/query",
+      "src/warehouse/http"
+    ],
+    "integration_points": [
+      "OrderReadRepository",
+      "WarehouseAuthMiddleware",
+      "CursorCodec"
+    ],
+    "architecture_constraints": [
+      "HTTP handlers call query use cases and never access repositories directly"
+    ],
+    "allowed_changes": [
+      "Add the open-orders query handler, use case, and read model projector"
+    ],
+    "forbidden_changes": [
+      "Do not add any write path or domain event publication"
+    ],
+    "dependencies": [
+      "Reuse the existing CursorCodec from the inventory query module"
+    ],
+    "migration_strategy": "No schema migration required; orders and order_lines tables already contain all projected fields",
+    "consistency_and_concurrency": "Read-only query against the replica; no locking or concurrency control required"
+  },
+  "acceptance_scenarios": [
+    {
+      "id": "AC-001",
+      "title": "Staff member retrieves first page of open orders for their zone",
+      "given": [
+        "An authenticated warehouse staff member is assigned to zone NORTH",
+        "Three open orders exist in zone NORTH and two in zone SOUTH"
+      ],
+      "when": [
+        "The staff member calls GET /warehouse/orders?zone=NORTH"
+      ],
+      "then": [
+        "The response contains three orders all with zone NORTH",
+        "Orders are sorted by createdAt descending",
+        "No orders from zone SOUTH appear",
+        "HTTP 200 is returned"
+      ],
+      "traces_to": ["BR-001", "BR-002", "IF-001", "RM-001"]
+    },
+    {
+      "id": "AC-002",
+      "title": "Staff member is denied access to a zone they are not assigned to",
+      "given": [
+        "An authenticated warehouse staff member is assigned to zone NORTH"
+      ],
+      "when": [
+        "The staff member calls GET /warehouse/orders?zone=SOUTH"
+      ],
+      "then": [
+        "The response is HTTP 403 with code ZONE_ACCESS_DENIED",
+        "No order data is returned"
+      ],
+      "traces_to": ["BR-001", "IF-001"]
+    }
+  ],
+  "quality": {
+    "required_test_levels": ["unit", "integration"],
+    "test_cases": [
+      "Unit-test zone authorization check for matching and non-matching zone",
+      "Unit-test cursor encoding and decoding round-trip",
+      "Integration-test paginated result against a seeded replica database"
+    ],
+    "quality_commands": [
+      "pytest -q",
+      "ruff check src/"
+    ],
+    "non_functional_requirements": [
+      "Response time must be under 200 ms at the 99th percentile under normal warehouse load"
+    ],
+    "definition_of_done": [
+      "All acceptance scenarios pass",
+      "All quality commands exit successfully",
+      "No write path or domain event is introduced"
+    ]
+  },
+  "decision_log": [
+    {
+      "id": "D-001",
+      "topic": "Pagination strategy",
+      "decision": "Use cursor-based pagination instead of offset-based pagination",
+      "source": "codebase",
+      "evidence_ids": ["EV-001"],
+      "rationale": "The inventory query module already provides CursorCodec; offset pagination produces inconsistent results when orders are inserted concurrently during a page fetch"
+    },
+    {
+      "id": "D-002",
+      "topic": "Freshness tolerance",
+      "decision": "Read from the primary replica with up to 2 seconds of replication lag",
+      "source": "user",
+      "evidence_ids": [],
+      "rationale": "Warehouse staff refresh the view manually; sub-second freshness is not required and replica reads reduce load on the primary"
+    }
+  ],
+  "codebase_evidence": [
+    {
+      "id": "EV-001",
+      "path": "src/inventory/query/cursor_codec.py",
+      "symbol": "CursorCodec",
+      "location": "lines 12-45",
+      "finding": "CursorCodec encodes and decodes opaque pagination cursors using a (created_at, id) pair; already used by the inventory listing query and confirmed reusable",
+      "verified": true
+    }
+  ],
+  "open_questions": [],
+  "assumptions_requiring_confirmation": [],
+  "blockers": []
+}
