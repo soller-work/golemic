@@ -246,11 +246,11 @@ func RenderDevRetry(findings string, issue Issue, branch string, verifyCommand s
 
 // devCIRetryTemplateData holds the template variables for the dev CI retry user prompt.
 type devCIRetryTemplateData struct {
-	Issue          Issue
-	Branch         string
+	Issue           Issue
+	Branch          string
 	FailedCheckInfo string
-	VerifyCommand  string
-	Guidelines     string
+	VerifyCommand   string
+	Guidelines      string
 }
 
 const devCIRetryUserTemplate = `# CI Retry: Fix Failing Checks for Issue #{{.Issue.Number}}
@@ -286,7 +286,7 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 2. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 3. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
 4. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
-5. **Do not open a new PR** \u2014 the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will update automatically.
+5. **Do not open a new PR** — the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will update automatically.
 `
 
 // RenderDevCIRetry renders a dev CI retry user prompt injecting failed check info.
@@ -303,11 +303,11 @@ func RenderDevCIRetry(failedCheckInfo string, issue Issue, branch string, verify
 	}
 
 	data := devCIRetryTemplateData{
-		Issue:          issue,
-		Branch:         branch,
+		Issue:           issue,
+		Branch:          branch,
 		FailedCheckInfo: failedCheckInfo,
-		VerifyCommand:  verifyCommand,
-		Guidelines:     guidelines,
+		VerifyCommand:   verifyCommand,
+		Guidelines:      guidelines,
 	}
 
 	tmpl, err := template.New("devCIRetry").Parse(devCIRetryUserTemplate)

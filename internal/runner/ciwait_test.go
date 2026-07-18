@@ -14,6 +14,7 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/eventlog"
+	"golemic/internal/preflight"
 )
 
 // ---------------------------------------------------------------------------
@@ -202,7 +203,9 @@ func readCIWaitEvents(t *testing.T, logPath string) []eventlog.Event {
 // ciWaitResult extracts the result field from a ci_wait_finished event payload.
 func ciWaitResult(t *testing.T, ev eventlog.Event) string {
 	t.Helper()
-	var p struct{ Result string `json:"result"` }
+	var p struct {
+		Result string `json:"result"`
+	}
 	if err := json.Unmarshal(ev.Payload, &p); err != nil {
 		t.Fatalf("unmarshal ci_wait_finished payload: %v", err)
 	}
@@ -284,6 +287,25 @@ func TestQueryCIChecks_StillPending(t *testing.T) {
 	}
 }
 
+// AC-002 (real-error shape): gh exits non-zero with "no checks reported" → no_checks, not CHECKS_QUERY_FAILED.
+// Reproduces the actual gh CLI behavior for a PR on a branch with no CI checks.
+func TestQueryCIChecks_NoChecksRealGhError_AC002(t *testing.T) {
+	stderr := "no checks reported on the 'golemic/issue-42' branch"
+	ghErr := &preflight.ErrExit{ExitCode: 1, Stderr: stderr}
+	r, _, _ := buildCIGateRunner(t, ciWaitExecutor("", ghErr, nil))
+
+	result, failed, err := r.queryCIChecks(99)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "no_checks" {
+		t.Errorf("result: got %q, want %q (gh 'no checks reported' must map to no_checks, not CHECKS_QUERY_FAILED)", result, "no_checks")
+	}
+	if len(failed) != 0 {
+		t.Errorf("failed items: got %d, want 0", len(failed))
+	}
+}
+
 // AC-007: gh error → CHECKS_QUERY_FAILED
 func TestQueryCIChecks_GhError_AC007(t *testing.T) {
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor("", fmt.Errorf("network error"), nil))
@@ -294,6 +316,40 @@ func TestQueryCIChecks_GhError_AC007(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "CHECKS_QUERY_FAILED") {
 		t.Errorf("error should contain CHECKS_QUERY_FAILED, got: %v", err)
+	}
+}
+
+// TestQueryCIChecks_FailClosed_AC007 proves the no-checks detector is fail-closed:
+// only ErrExit{ExitCode:1} with the exact gh message maps to no_checks;
+// any other error shape must return CHECKS_QUERY_FAILED.
+func TestQueryCIChecks_FailClosed_AC007(t *testing.T) {
+	noChecksMsg := "no checks reported on the 'x' branch"
+	cases := []struct {
+		name  string
+		ghErr error
+	}{
+		{
+			name:  "ErrExit_401_bad_credentials",
+			ghErr: &preflight.ErrExit{ExitCode: 1, Stderr: "HTTP 401: Bad credentials"},
+		},
+		{
+			// Right message, wrong exit code — must NOT be treated as no_checks.
+			name:  "ErrExit_exitcode2_no_checks_message",
+			ghErr: &preflight.ErrExit{ExitCode: 2, Stderr: noChecksMsg},
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			r, _, _ := buildCIGateRunner(t, ciWaitExecutor("", tc.ghErr, nil))
+			result, _, err := r.queryCIChecks(99)
+			if err == nil {
+				t.Fatalf("want CHECKS_QUERY_FAILED error, got nil (result=%q)", result)
+			}
+			if !strings.Contains(err.Error(), "CHECKS_QUERY_FAILED") {
+				t.Errorf("error should contain CHECKS_QUERY_FAILED, got: %v", err)
+			}
+		})
 	}
 }
 
