@@ -57,19 +57,20 @@ var knownCommands = []struct {
 	{"open-pr", "Open a pull request"},
 	{"submit-review", "Submit a review"},
 	{"status", "Show run health status"},
+	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, "Usage: golemic <command>\n\n")
-	fmt.Fprintf(w, "Available commands:\n")
+	fmt.Fprintf(w, "Usage: golemic <command>\n\n") //nolint:errcheck
+	fmt.Fprintf(w, "Available commands:\n")        //nolint:errcheck
 	for _, c := range knownCommands {
-		fmt.Fprintf(w, "  %-13s %s\n", c.name, c.desc)
+		fmt.Fprintf(w, "  %-13s %s\n", c.name, c.desc) //nolint:errcheck
 	}
 }
 
 // run dispatches subcommands. All error and usage output goes to stderr.
 // stdout is left untouched for error states. Returns the process exit code.
-func run(args []string, stdout, stderr io.Writer) int {
+func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop
 	if len(args) < 2 {
 		usage(stderr)
 		return 1
@@ -88,20 +89,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			fmt.Fprintf(stderr, "failed to get home directory: %v\n", err)
+			fmt.Fprintf(stderr, "failed to get home directory: %v\n", err) //nolint:errcheck
 			return 1
 		}
 
 		cwd, err := os.Getwd()
 		if err != nil {
-			fmt.Fprintf(stderr, "failed to get current directory: %v\n", err)
+			fmt.Fprintf(stderr, "failed to get current directory: %v\n", err) //nolint:errcheck
 			return 1
 		}
 
 		// Resolve host repo (handles symlinked golemic)
 		repoRoot, err := repo.ResolveHostRepo(osExecutor{}, cwd)
 		if err != nil {
-			fmt.Fprintf(stderr, "failed to resolve host repo: %v\n", err)
+			fmt.Fprintf(stderr, "failed to resolve host repo: %v\n", err) //nolint:errcheck
 			return 1
 		}
 
@@ -128,14 +129,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runStatus(args, stdout, stderr, osExecutor{})
 	}
 
+	if command == "next-issue" {
+		return runNextIssue(args, stdout, stderr, osExecutor{})
+	}
+
 	for _, c := range knownCommands {
 		if c.name == command {
-			fmt.Fprintln(stderr, "not implemented")
+			fmt.Fprintln(stderr, "not implemented") //nolint:errcheck
 			return 1
 		}
 	}
 
-	fmt.Fprintf(stderr, "Unknown command: %s\n", command)
+	fmt.Fprintf(stderr, "Unknown command: %s\n", command) //nolint:errcheck
 	usage(stderr)
 	return 1
 }
@@ -162,7 +167,7 @@ func runPreflight(executor preflight.Executor, homeDir, repoRoot string, stdout,
 // runEmit executes the emit subcommand: golemic emit --type <t> --payload '<json>'
 // It reads GOLEMIC_RUN_ID and GOLEMIC_EVENT_LOG from the environment via getenv,
 // validates inputs, and appends one event to the JSONL event log.
-func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string) int { //nolint:cyclop,funlen
 	fs := flag.NewFlagSet("emit", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -188,7 +193,7 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 		if eventLogPath == "" {
 			missing = append(missing, "GOLEMIC_EVENT_LOG")
 		}
-		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", ")) //nolint:errcheck
 		return 1
 	}
 
@@ -200,28 +205,28 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 
 	// BR-001: --type must be non-empty.
 	if typeFlag == "" {
-		fmt.Fprintln(stderr, "--type must not be empty")
+		fmt.Fprintln(stderr, "--type must not be empty") //nolint:errcheck
 		return 1
 	}
 
 	// BR-002: --payload must be valid JSON that decodes to a JSON object.
 	var payloadObj interface{}
 	if err := json.Unmarshal([]byte(payloadFlag), &payloadObj); err != nil {
-		fmt.Fprintf(stderr, "Invalid --payload: %v\n", err)
+		fmt.Fprintf(stderr, "Invalid --payload: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
 	// Verify it is a JSON object (not array, string, number, or null).
 	payloadMap, isObject := payloadObj.(map[string]interface{})
 	if !isObject {
-		fmt.Fprintf(stderr, "Invalid --payload: JSON value must be an object, got %T\n", payloadObj)
+		fmt.Fprintf(stderr, "Invalid --payload: JSON value must be an object, got %T\n", payloadObj) //nolint:errcheck
 		return 1
 	}
 
 	// Re-encode to normalise formatting.
 	normalizedPayload, err := json.Marshal(payloadMap)
 	if err != nil {
-		fmt.Fprintf(stderr, "Invalid --payload: %v\n", err)
+		fmt.Fprintf(stderr, "Invalid --payload: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
@@ -239,10 +244,10 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 	// Create writer and append the event.
 	writer, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	defer writer.Close()
+	defer writer.Close() //nolint:errcheck
 
 	event := eventlog.Event{
 		Type:    typeFlag,
@@ -253,7 +258,7 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 	}
 
 	if err := writer.Write(event); err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
@@ -283,7 +288,7 @@ func ensureBodyClosesIssue(body, branch string) string {
 // runOpenPR executes the open-pr subcommand: golemic open-pr --title <t> --body <b>
 // It validates env var context, resolves the current branch, creates a PR via gh,
 // parses the PR number and URL, and writes a pr_opened event atomically.
-func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int {
+func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int { //nolint:gocognit,cyclop,funlen,maintidx
 	fs := flag.NewFlagSet("open-pr", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -308,7 +313,7 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		if eventLogPath == "" {
 			missing = append(missing, "GOLEMIC_EVENT_LOG")
 		}
-		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", ")) //nolint:errcheck
 		return 1
 	}
 
@@ -320,23 +325,23 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 
 	// Validate --title and --body must be non-empty (IF-001 constraints).
 	if titleFlag == "" {
-		fmt.Fprintln(stderr, "--title must not be empty")
+		fmt.Fprintln(stderr, "--title must not be empty") //nolint:errcheck
 		return 1
 	}
 	if bodyFlag == "" {
-		fmt.Fprintln(stderr, "--body must not be empty")
+		fmt.Fprintln(stderr, "--body must not be empty") //nolint:errcheck
 		return 1
 	}
 
 	// BR-001: Get current branch via git branch --show-current.
 	branchOut, err := executor.Run("git", "branch", "--show-current")
 	if err != nil {
-		fmt.Fprintf(stderr, "Failed to determine current branch: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to determine current branch: %v\n", err) //nolint:errcheck
 		return 1
 	}
 	branch := strings.TrimSpace(branchOut)
 	if branch == "" {
-		fmt.Fprintln(stderr, "Failed to determine current branch: detached HEAD or not on a branch")
+		fmt.Fprintln(stderr, "Failed to determine current branch: detached HEAD or not on a branch") //nolint:errcheck
 		return 1
 	}
 
@@ -430,9 +435,9 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	if err != nil {
 		var ee *preflight.ErrExit
 		if errors.As(err, &ee) {
-			fmt.Fprintf(stderr, "Failed to create PR: %s\n", strings.TrimSpace(ee.Stderr))
+			fmt.Fprintf(stderr, "Failed to create PR: %s\n", strings.TrimSpace(ee.Stderr)) //nolint:errcheck
 		} else {
-			fmt.Fprintf(stderr, "Failed to create PR: %v\n", err)
+			fmt.Fprintf(stderr, "Failed to create PR: %v\n", err) //nolint:errcheck
 		}
 		return 1
 	}
@@ -442,7 +447,7 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	//   https://github.com/owner/repo/pull/123
 	prURL := strings.TrimSpace(prOut)
 	if prURL == "" {
-		fmt.Fprintln(stderr, "Failed to parse PR number/URL from gh output: empty output")
+		fmt.Fprintln(stderr, "Failed to parse PR number/URL from gh output: empty output") //nolint:errcheck
 		return 1
 	}
 
@@ -455,17 +460,17 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		}
 	}
 	if prNumber == "" {
-		fmt.Fprintf(stderr, "Failed to parse PR number/URL from gh output: %s\n", prURL)
+		fmt.Fprintf(stderr, "Failed to parse PR number/URL from gh output: %s\n", prURL) //nolint:errcheck
 		return 1
 	}
 
 	// Write pr_opened event (SC-002). Event is written only after gh succeeds.
 	writer, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	defer writer.Close()
+	defer writer.Close() //nolint:errcheck
 
 	payload := map[string]string{
 		"prNumber": prNumber,
@@ -474,7 +479,7 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
@@ -487,12 +492,12 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	}
 
 	if err := writer.Write(event); err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
 	// Print PR URL to stdout for the caller.
-	fmt.Fprintln(stdout, prURL)
+	fmt.Fprintln(stdout, prURL) //nolint:errcheck
 	return 0
 }
 
@@ -500,7 +505,7 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 // golemic submit-review --verdict approved|changes_requested --body <text> --pr <n>
 // It validates env var context and verdict (fail-fast), submits a review via gh pr review,
 // and writes a review_submitted event atomically (only on gh success).
-func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int {
+func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int { //nolint:gocognit,cyclop,funlen
 	fs := flag.NewFlagSet("submit-review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -529,7 +534,7 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		if eventLogPath == "" {
 			missing = append(missing, "GOLEMIC_EVENT_LOG")
 		}
-		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", ")) //nolint:errcheck
 		return 1
 	}
 
@@ -547,17 +552,17 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 
 	// Validate verdict before any gh call (fail-fast).
 	if verdictFlag != "approved" && verdictFlag != "changes_requested" {
-		fmt.Fprintf(stderr, "Invalid verdict: must be 'approved' or 'changes_requested', got %q\n", verdictFlag)
+		fmt.Fprintf(stderr, "Invalid verdict: must be 'approved' or 'changes_requested', got %q\n", verdictFlag) //nolint:errcheck
 		return 1
 	}
 
 	// Validate required flags.
 	if bodyFlag == "" {
-		fmt.Fprintln(stderr, "--body must not be empty")
+		fmt.Fprintln(stderr, "--body must not be empty") //nolint:errcheck
 		return 1
 	}
 	if prFlag <= 0 {
-		fmt.Fprintln(stderr, "--pr must be a positive integer")
+		fmt.Fprintln(stderr, "--pr must be a positive integer") //nolint:errcheck
 		return 1
 	}
 
@@ -574,10 +579,10 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 	// Validate event log path is writable BEFORE calling gh (atomic coupling: fail-closed).
 	writer, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
-	defer writer.Close()
+	defer writer.Close() //nolint:errcheck
 
 	// BR-003/BR-004: dedup on (turnId, review_submitted) — check BEFORE gh call.
 	existingEvents, err := readEventsForDedup(eventLogPath)
@@ -597,9 +602,9 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 	if err != nil {
 		var ee *preflight.ErrExit
 		if errors.As(err, &ee) {
-			fmt.Fprintf(stderr, "Failed to submit review: %s\n", strings.TrimSpace(ee.Stderr))
+			fmt.Fprintf(stderr, "Failed to submit review: %s\n", strings.TrimSpace(ee.Stderr)) //nolint:errcheck
 		} else {
-			fmt.Fprintf(stderr, "Failed to submit review: %v\n", err)
+			fmt.Fprintf(stderr, "Failed to submit review: %v\n", err) //nolint:errcheck
 		}
 		return 1
 	}
@@ -614,7 +619,7 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
@@ -627,7 +632,7 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 	}
 
 	if err := writer.Write(event); err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
@@ -666,19 +671,19 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if issueNum <= 0 {
-		fmt.Fprintln(stderr, "--issue must be a positive integer")
+		fmt.Fprintln(stderr, "--issue must be a positive integer") //nolint:errcheck
 		return 1
 	}
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(stderr, "failed to get home directory: %v\n", err)
+		fmt.Fprintf(stderr, "failed to get home directory: %v\n", err) //nolint:errcheck
 		return 1
 	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(stderr, "failed to get current directory: %v\n", err)
+		fmt.Fprintf(stderr, "failed to get current directory: %v\n", err) //nolint:errcheck
 		return 1
 	}
 

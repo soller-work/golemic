@@ -27,7 +27,7 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 
 	exec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 3 && args[0] == "pr" && args[1] == "review" && args[2] == "123" {
+			if name == "gh" && len(args) >= 3 && args[0] == "pr" && args[1] == "review" && args[2] == "123" { //nolint:nestif
 				// Verify --approve and --body are present, --request-changes is not.
 				hasApprove := false
 				hasBody := false

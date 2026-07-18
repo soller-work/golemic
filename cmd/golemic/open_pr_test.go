@@ -14,7 +14,7 @@ import (
 	"golemic/internal/preflight"
 )
 
-func TestRunOpenPR_Success(t *testing.T) { //nolint:cyclop // moved verbatim; cyclomatic complexity 21 exceeds threshold
+func TestRunOpenPR_Success(t *testing.T) { //nolint:cyclop,gocognit // moved verbatim; complexity exceeds threshold
 	// AC-001: Successful open-pr writes event with prNumber, url, branch (exit 0).
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
