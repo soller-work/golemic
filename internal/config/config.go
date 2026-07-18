@@ -183,7 +183,7 @@ func Load(repoRoot string) (*Config, error) {
 			config.TimeoutSeconds, configPath)
 	}
 
-	// Extract telemetry.enabled (optional; default true per BR-007)
+	// Extract telemetry.enabled (optional; default true per BR-003 / D-007)
 	if raw.Telemetry != nil && raw.Telemetry.Enabled != nil {
 		config.Telemetry.Enabled = *raw.Telemetry.Enabled
 	} else {

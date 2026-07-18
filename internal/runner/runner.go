@@ -68,8 +68,9 @@ type Runner struct {
 	issue      *issueData
 
 	// Telemetry
-	sink    telemetry.Sink
-	traceID string
+	sink         telemetry.Sink
+	traceID      string
+	sinkOverride bool // when true, Run() does not overwrite r.sink from config
 }
 
 // New creates a new Runner. executor is used for all gh/git commands, homeDir is
@@ -118,6 +119,13 @@ func (r *Runner) SetCITimeout(d time.Duration) { r.ciTimeoutOverride = d }
 
 // SetQuiet suppresses the run-setup header when set to true.
 func (r *Runner) SetQuiet(quiet bool) { r.quiet = quiet }
+
+// SetSink injects a telemetry sink, bypassing the config-driven sink selection in Run.
+// Used by tests to inject a recording or failing sink at the runner level.
+func (r *Runner) SetSink(s telemetry.Sink) {
+	r.sink = s
+	r.sinkOverride = true
+}
 
 // ---------------------------------------------------------------------------
 // Run
@@ -266,10 +274,14 @@ func (r *Runner) Run() int {
 	// ---- Telemetry sink setup ----
 	r.traceID = telemetry.TraceID(r.runID)
 	runDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID)
-	if r.cfg.Telemetry.Enabled {
-		r.sink = telemetry.NewFileSink(filepath.Join(runDir, "telemetry.jsonl"))
-	} else {
-		r.sink = telemetry.NoopSink{}
+	if !r.sinkOverride {
+		if r.cfg.Telemetry.Enabled {
+			fs := telemetry.NewFileSink(filepath.Join(runDir, "telemetry.jsonl"))
+			defer fs.Close() //nolint:errcheck
+			r.sink = fs
+		} else {
+			r.sink = telemetry.NoopSink{}
+		}
 	}
 
 	// ---- PS-006: Full orchestration ----
