@@ -19,7 +19,9 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from create_issue import (  # noqa: E402
     GITHUB_BODY_LIMIT,
     RISK_LABEL_COLORS,
+    SLICE_COMMENT_MARKER,
     render_body,
+    render_slice_comment,
     run,
     get_label_name,
 )
@@ -160,6 +162,7 @@ class FakeGhRunner:
         self,
         auth_ok: bool = True,
         create_url: str = FAKE_ISSUE_URL,
+        comment_post_fail: bool = False,
         blocked_by_fail: bool = False,
         label_create_fail: bool = False,
         label_already_exists: bool = False,
@@ -168,6 +171,7 @@ class FakeGhRunner:
         self.calls: list = []
         self._auth_ok = auth_ok
         self._create_url = create_url
+        self._comment_post_fail = comment_post_fail
         self._blocked_by_fail = blocked_by_fail
         self._label_create_fail = label_create_fail
         self._label_already_exists = label_already_exists
@@ -187,6 +191,9 @@ class FakeGhRunner:
         if verb == ("issue", "create"):
             return FakeResult(returncode=0, stdout=self._create_url)
 
+        if verb == ("issue", "close"):
+            return FakeResult(returncode=0)
+
         if args[0] == "api" and "-q" in args and ".id" in args:
             # dependency id resolution (GET /repos/.../issues/<n> -q .id)
             return FakeResult(returncode=0, stdout="424242")
@@ -197,6 +204,14 @@ class FakeGhRunner:
                     raise subprocess.CalledProcessError(1, "gh", stderr="blocked-by failed")
                 return FakeResult(returncode=1, stderr="blocked-by failed")
             return FakeResult(returncode=0, stdout="{}")
+
+        # Comment POST: gh api --method POST .../comments -f body=...
+        if args[0] == "api" and "--method" in args and any(a.endswith("/comments") for a in args):
+            if self._comment_post_fail:
+                if check:
+                    raise subprocess.CalledProcessError(1, "gh", stderr="comment post failed")
+                return FakeResult(returncode=1, stderr="comment post failed")
+            return FakeResult(returncode=0, stdout='{"id": 99}')
 
         if verb == ("label", "create"):
             # _ensure_label always uses check=False, so check is always False here.
@@ -229,6 +244,9 @@ class FakeGhRunner:
             write_verbs.intersection(self.call_verbs()) or api_calls
         )
 
+    def had_close(self) -> bool:
+        return any(tuple(c[:2]) == ("issue", "close") for c in self.calls)
+
 
 def _fake_git_ok(args, *, check=False, capture_output=False, text=False, cwd=None):
     return FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
@@ -240,30 +258,26 @@ def _fake_git_ok(args, *, check=False, capture_output=False, text=False, cwd=Non
 
 class TestDeterminism(unittest.TestCase):
     def test_render_body_is_byte_identical_on_repeated_calls(self):
-        canonical = json.dumps(_MINIMAL_SLICE, indent=2, ensure_ascii=False)
-        body1 = render_body(_MINIMAL_SLICE, canonical)
-        body2 = render_body(_MINIMAL_SLICE, canonical)
+        body1 = render_body(_MINIMAL_SLICE)
+        body2 = render_body(_MINIMAL_SLICE)
         self.assertEqual(body1, body2)
 
-    def test_embedded_json_round_trips_to_exact_input(self):
+    def test_compact_body_has_no_json_block(self):
+        body = render_body(_MINIMAL_SLICE)
+        self.assertNotIn("```json", body)
+
+    def test_compact_body_contains_slice_comment_marker(self):
+        body = render_body(_MINIMAL_SLICE)
+        self.assertIn(SLICE_COMMENT_MARKER, body)
+
+    def test_slice_comment_starts_with_marker_and_has_json_block(self):
         canonical = json.dumps(_MINIMAL_SLICE, indent=2, ensure_ascii=False)
-        body = render_body(_MINIMAL_SLICE, canonical)
-        # Extract content between ```json ... ```
-        start = body.index("```json\n") + len("```json\n")
-        end = body.index("\n```", start)
-        extracted = body[start:end]
+        comment = render_slice_comment(canonical)
+        self.assertTrue(comment.startswith(SLICE_COMMENT_MARKER))
+        start = comment.index("```json\n") + len("```json\n")
+        end = comment.index("\n```", start)
+        extracted = comment[start:end]
         self.assertEqual(json.loads(extracted), _MINIMAL_SLICE)
-
-    def test_body_contains_authoritative_spec_statement(self):
-        canonical = json.dumps(_MINIMAL_SLICE, indent=2)
-        body = render_body(_MINIMAL_SLICE, canonical)
-        self.assertIn("authoritative machine-readable specification", body)
-
-    def test_body_contains_details_marker(self):
-        from create_issue import DETAILS_MARKER
-        canonical = json.dumps(_MINIMAL_SLICE, indent=2)
-        body = render_body(_MINIMAL_SLICE, canonical)
-        self.assertIn(DETAILS_MARKER, body)
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +314,10 @@ class TestWriteSequence(unittest.TestCase):
         self.assertEqual(verbs[0], ("auth", "status"))
         # issue create
         create_idx = next(i for i, v in enumerate(verbs) if v == ("issue", "create"))
-        # api calls: one id-resolution GET + one POST per dependency
+        # api calls: 1 comment POST + (1 id-resolution GET + 1 POST) * 2 blocked_by = 5 total
         api_calls = [c for c in gh.calls if c[0] == "api"]
-        self.assertEqual(len(api_calls), 4)
+        self.assertEqual(len(api_calls), 5)
+        # first api --method call is the comment POST
         api_idx = next(i for i, v in enumerate(verbs) if v == ("api", "--method"))
         # label create + attach come after api calls
         label_create_idx = next(
@@ -387,49 +402,16 @@ class TestValidationFailure(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# AC-004: Body size limit fail-closed
+# AC-004 / AC-007: Body size limit fail-closed
 # ---------------------------------------------------------------------------
 
-def _body_len_for_summary(summary: str) -> int:
-    data = dict(_MINIMAL_SLICE)
-    data["summary"] = summary
-    canonical = json.dumps(data, indent=2, ensure_ascii=False)
-    return len(render_body(data, canonical))
-
-
-def _find_boundary_sizes():
-    """Binary-search for smallest summary size where render_body exceeds GITHUB_BODY_LIMIT."""
-    lo, hi = 0, GITHUB_BODY_LIMIT * 2
-    while lo < hi:
-        mid = (lo + hi) // 2
-        if _body_len_for_summary("x" * mid) <= GITHUB_BODY_LIMIT:
-            lo = mid + 1
-        else:
-            hi = mid
-    # lo = first size where body > limit; lo-1 = last size where body <= limit
-    return lo - 1, lo  # (under_size, over_size)
-
-
 class TestBodySizeLimit(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        under_size, over_size = _find_boundary_sizes()
-        cls._under_size = under_size
-        cls._over_size = over_size
-        cls._under_body_len = _body_len_for_summary("x" * under_size)
-        cls._over_body_len = _body_len_for_summary("x" * over_size)
-
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.cwd = Path(self.tmp.name)
 
     def tearDown(self):
         self.tmp.cleanup()
-
-    def _make_slice(self, summary_size: int) -> dict:
-        data = dict(_MINIMAL_SLICE)
-        data["summary"] = "x" * summary_size
-        return data
 
     def _run_slice(self, data: dict) -> tuple:
         path = Path(self.tmp.name) / "slice.json"
@@ -445,29 +427,53 @@ class TestBodySizeLimit(unittest.TestCase):
         )
         return rc, gh
 
-    def test_boundary_sizes_are_adjacent(self):
-        """Sanity: over_size = under_size + 1 and body lengths straddle the limit."""
-        self.assertEqual(self._over_size, self._under_size + 1)
-        self.assertLessEqual(self._under_body_len, GITHUB_BODY_LIMIT)
-        self.assertGreater(self._over_body_len, GITHUB_BODY_LIMIT)
-
     @patch("subprocess.run")
-    def test_body_at_limit_write_proceeds(self, mock_subprocess):
-        """Body <= 65536 chars: issue create is called and run exits 0."""
+    def test_normal_slice_proceeds(self, mock_subprocess):
+        """Minimal slice (well under limit for both body and comment) should succeed."""
         mock_subprocess.return_value = FakeResult(
             returncode=0, stdout="https://github.com/owner/repo.git"
         )
-        self.assertLessEqual(self._under_body_len, GITHUB_BODY_LIMIT)
-        rc, gh = self._run_slice(self._make_slice(self._under_size))
+        body = render_body(_MINIMAL_SLICE)
+        canonical = json.dumps(_MINIMAL_SLICE, indent=2, ensure_ascii=False)
+        comment = render_slice_comment(canonical)
+        self.assertLessEqual(len(body), GITHUB_BODY_LIMIT)
+        self.assertLessEqual(len(comment), GITHUB_BODY_LIMIT)
+        rc, gh = self._run_slice(dict(_MINIMAL_SLICE))
         self.assertEqual(rc, 0)
         self.assertIn(("issue", "create"), gh.call_verbs())
 
-    def test_body_over_limit_fail_closed_no_write(self):
-        """Body > 65536 chars: exit non-zero before any write, no gh write calls."""
-        self.assertGreater(self._over_body_len, GITHUB_BODY_LIMIT)
-        rc, gh = self._run_slice(self._make_slice(self._over_size))
+    def test_oversized_body_fail_closed_no_write(self):
+        """Body > 65536 chars: exit non-zero before any write."""
+        # Pad summary to ensure compact body exceeds the limit.
+        data = dict(_MINIMAL_SLICE)
+        data["summary"] = "x" * GITHUB_BODY_LIMIT
+        body = render_body(data)
+        self.assertGreater(len(body), GITHUB_BODY_LIMIT)
+        rc, gh = self._run_slice(data)
         self.assertNotEqual(rc, 0)
         self.assertFalse(gh.had_write())
+
+    def test_oversized_comment_fail_closed_no_write(self):
+        """Slice comment > 65536 chars while body is OK: exit non-zero before any write.
+
+        Pad a field that is NOT rendered in the compact body (business_rules[0].rule)
+        so only the canonical JSON (and thus the comment) grows beyond the limit.
+        """
+        import copy
+        data = copy.deepcopy(_MINIMAL_SLICE)
+        data["business_rules"][0]["rule"] = "x" * GITHUB_BODY_LIMIT
+        body = render_body(data)
+        canonical = json.dumps(data, indent=2, ensure_ascii=False)
+        comment = render_slice_comment(canonical)
+        self.assertLessEqual(len(body), GITHUB_BODY_LIMIT, "body should be under limit")
+        self.assertGreater(len(comment), GITHUB_BODY_LIMIT, "comment should exceed limit")
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            rc, gh = self._run_slice(data)
+        self.assertNotEqual(rc, 0)
+        self.assertFalse(gh.had_write())
+        self.assertIn("BODY_TOO_LARGE", mock_err.getvalue())
+        self.assertIn("slice comment", mock_err.getvalue())
 
 
 # ---------------------------------------------------------------------------
@@ -941,15 +947,13 @@ class TestRiskInRenderedBody(unittest.TestCase):
     def test_render_body_contains_risk_value(self):
         data = dict(_MINIMAL_SLICE)
         data["risk"] = "medium"
-        canonical = json.dumps(data, indent=2, ensure_ascii=False)
-        body = render_body(data, canonical)
+        body = render_body(data)
         self.assertIn("medium", body)
 
     def test_render_body_shows_risk_in_header(self):
         data = dict(_MINIMAL_SLICE)
         data["risk"] = "high"
-        canonical = json.dumps(data, indent=2, ensure_ascii=False)
-        body = render_body(data, canonical)
+        body = render_body(data)
         # Risk should appear before the first section header
         risk_pos = body.index("high")
         first_section = body.index("## ")
@@ -957,8 +961,7 @@ class TestRiskInRenderedBody(unittest.TestCase):
 
     def test_render_body_shows_slice_type_in_header(self):
         data = dict(_MINIMAL_SLICE)
-        canonical = json.dumps(data, indent=2, ensure_ascii=False)
-        body = render_body(data, canonical)
+        body = render_body(data)
         self.assertIn("command", body[:200])
 
 
@@ -1014,6 +1017,270 @@ class TestScaffoldIncludesRisk(unittest.TestCase):
             data = json.loads(out.read_text())
         self.assertIn("risk", data)
         self.assertEqual(data["risk"], "FILL_IN")
+
+
+# ---------------------------------------------------------------------------
+# AC-001: Happy path posts compact body and slice comment
+# ---------------------------------------------------------------------------
+
+class TestHappyPathPostsCompactBodyAndSliceComment(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.slice_path = Path(self.tmp.name) / "slice.json"
+        _write_slice(_MINIMAL_SLICE, self.slice_path)
+        self.cwd = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @patch("subprocess.run")
+    def test_compact_body_has_no_json_block(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner()
+        rc = run(
+            slice_path=self.slice_path,
+            blocked_by=[],
+            dry_run=False,
+            gh=gh,
+            cwd=self.cwd,
+            validate_fn=_noop_validate,
+        )
+        self.assertEqual(rc, 0)
+        issue_create_call = next(c for c in gh.calls if tuple(c[:2]) == ("issue", "create"))
+        body_idx = issue_create_call.index("--body") + 1
+        body = issue_create_call[body_idx]
+        self.assertNotIn("```json", body)
+
+    @patch("subprocess.run")
+    def test_issue_body_has_slice_comment_marker(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner()
+        run(
+            slice_path=self.slice_path,
+            blocked_by=[],
+            dry_run=False,
+            gh=gh,
+            cwd=self.cwd,
+            validate_fn=_noop_validate,
+        )
+        issue_create_call = next(c for c in gh.calls if tuple(c[:2]) == ("issue", "create"))
+        body_idx = issue_create_call.index("--body") + 1
+        body = issue_create_call[body_idx]
+        self.assertIn(SLICE_COMMENT_MARKER, body)
+
+    @patch("subprocess.run")
+    def test_slice_comment_posted_with_marker_and_json(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner()
+        run(
+            slice_path=self.slice_path,
+            blocked_by=[],
+            dry_run=False,
+            gh=gh,
+            cwd=self.cwd,
+            validate_fn=_noop_validate,
+        )
+        comment_calls = [
+            c for c in gh.calls
+            if c[0] == "api" and "--method" in c and any(a.endswith("/comments") for a in c)
+        ]
+        self.assertEqual(len(comment_calls), 1)
+        comment_body_idx = comment_calls[0].index("-f") + 1
+        comment_body = comment_calls[0][comment_body_idx][len("body="):]
+        self.assertTrue(comment_body.startswith(SLICE_COMMENT_MARKER))
+        self.assertIn("```json", comment_body)
+
+    @patch("subprocess.run")
+    def test_comment_post_before_labels(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner()
+        run(
+            slice_path=self.slice_path,
+            blocked_by=[],
+            dry_run=False,
+            gh=gh,
+            cwd=self.cwd,
+            validate_fn=_noop_validate,
+        )
+        verbs = gh.call_verbs()
+        comment_idx = next(
+            i for i, c in enumerate(gh.calls)
+            if c[0] == "api" and any(a.endswith("/comments") for a in c)
+        )
+        label_idx = next(i for i, v in enumerate(verbs) if v == ("issue", "edit"))
+        self.assertLess(comment_idx, label_idx)
+
+
+# ---------------------------------------------------------------------------
+# AC-002: --dry-run prints rendered artifacts and planned commands
+# ---------------------------------------------------------------------------
+
+class TestDryRunListsCommentPostAndCloseBranch(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.slice_path = Path(self.tmp.name) / "slice.json"
+        _write_slice(_MINIMAL_SLICE, self.slice_path)
+        self.cwd = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_dry_run_prints_slice_comment_section(self):
+        import io
+        from unittest.mock import patch as _patch
+        gh = FakeGhRunner()
+        with _patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            rc = run(
+                slice_path=self.slice_path,
+                blocked_by=[],
+                dry_run=True,
+                gh=gh,
+                cwd=self.cwd,
+                validate_fn=_noop_validate,
+            )
+        self.assertEqual(rc, 0)
+        output = mock_out.getvalue()
+        self.assertIn(SLICE_COMMENT_MARKER, output)
+        self.assertIn("```json", output)
+
+    def test_dry_run_planned_commands_include_comment_post(self):
+        import io
+        from unittest.mock import patch as _patch
+        gh = FakeGhRunner()
+        with _patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            run(
+                slice_path=self.slice_path,
+                blocked_by=[],
+                dry_run=True,
+                gh=gh,
+                cwd=self.cwd,
+                validate_fn=_noop_validate,
+            )
+        output = mock_out.getvalue()
+        self.assertIn("/comments", output)
+
+    def test_dry_run_planned_commands_include_compensation_note(self):
+        import io
+        from unittest.mock import patch as _patch
+        gh = FakeGhRunner()
+        with _patch("sys.stdout", new_callable=io.StringIO) as mock_out:
+            run(
+                slice_path=self.slice_path,
+                blocked_by=[],
+                dry_run=True,
+                gh=gh,
+                cwd=self.cwd,
+                validate_fn=_noop_validate,
+            )
+        output = mock_out.getvalue()
+        self.assertIn("issue close", output)
+
+
+# ---------------------------------------------------------------------------
+# AC-003: Slice-comment POST fails → issue closed, no labels attached
+# ---------------------------------------------------------------------------
+
+class TestSliceCommentFailureClosesIssue(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.slice_path = Path(self.tmp.name) / "slice.json"
+        _write_slice(_MINIMAL_SLICE, self.slice_path)
+        self.cwd = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @patch("subprocess.run")
+    def test_comment_post_fail_returns_nonzero(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner(comment_post_fail=True)
+        rc = run(
+            slice_path=self.slice_path,
+            blocked_by=[],
+            dry_run=False,
+            gh=gh,
+            cwd=self.cwd,
+            validate_fn=_noop_validate,
+        )
+        self.assertEqual(rc, 1)
+
+    @patch("subprocess.run")
+    def test_comment_post_fail_closes_issue(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner(comment_post_fail=True)
+        run(
+            slice_path=self.slice_path,
+            blocked_by=[],
+            dry_run=False,
+            gh=gh,
+            cwd=self.cwd,
+            validate_fn=_noop_validate,
+        )
+        self.assertTrue(gh.had_close())
+
+    @patch("subprocess.run")
+    def test_comment_post_fail_no_label_attached(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner(comment_post_fail=True)
+        run(
+            slice_path=self.slice_path,
+            blocked_by=[],
+            dry_run=False,
+            gh=gh,
+            cwd=self.cwd,
+            validate_fn=_noop_validate,
+        )
+        self.assertNotIn(("issue", "edit"), gh.call_verbs())
+
+    @patch("subprocess.run")
+    def test_comment_post_fail_stderr_contains_error_code(self, mock_subprocess):
+        mock_subprocess.return_value = FakeResult(returncode=0, stdout="https://github.com/owner/repo.git")
+        gh = FakeGhRunner(comment_post_fail=True)
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            run(
+                slice_path=self.slice_path,
+                blocked_by=[],
+                dry_run=False,
+                gh=gh,
+                cwd=self.cwd,
+                validate_fn=_noop_validate,
+            )
+        self.assertIn("SLICE_COMMENT_FAILED", mock_err.getvalue())
+
+
+# ---------------------------------------------------------------------------
+# AC-007: Slice comment body exceeds GITHUB_BODY_LIMIT → abort before any write
+# ---------------------------------------------------------------------------
+
+class TestSliceCommentBodyTooLarge(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.cwd = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_oversized_json_fails_before_write(self):
+        # Pad the summary so the canonical JSON (and thus slice comment) exceeds the limit.
+        data = dict(_MINIMAL_SLICE)
+        data["summary"] = "x" * GITHUB_BODY_LIMIT  # guarantees oversized comment
+        path = Path(self.tmp.name) / "slice.json"
+        _write_slice(data, path)
+        gh = FakeGhRunner()
+        import io
+        with patch("sys.stderr", new_callable=io.StringIO) as mock_err:
+            rc = run(
+                slice_path=path,
+                blocked_by=[],
+                dry_run=False,
+                gh=gh,
+                cwd=self.cwd,
+                validate_fn=_noop_validate,
+            )
+        self.assertEqual(rc, 1)
+        self.assertIn("BODY_TOO_LARGE", mock_err.getvalue())
+        self.assertFalse(gh.had_write())
 
 
 if __name__ == "__main__":

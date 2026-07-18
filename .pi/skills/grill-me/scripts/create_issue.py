@@ -23,7 +23,7 @@ from typing import Callable, List, Optional, Protocol
 GITHUB_BODY_LIMIT = 65536
 SCHEMA_PATH = Path(__file__).parent.parent / "schema.json"
 DEFAULT_LABEL = "ready-for-agent"
-DETAILS_MARKER = "Implementation Slice (machine-readable)"
+SLICE_COMMENT_MARKER = "<!-- golemic:slice-json v=1 -->"
 
 RISK_LABEL_COLORS = {
     "low": "0e8a16",
@@ -116,11 +116,12 @@ def get_label_name(config: dict) -> str:
 # Deterministic Markdown renderer (BR-001, BR-002, D-008)
 # ---------------------------------------------------------------------------
 
-def render_body(slice_data: dict, canonical_json: str) -> str:
-    """Render a deterministic Markdown body from slice data.
+def render_body(slice_data: dict) -> str:
+    """Render a compact Markdown issue body per BR-002.
 
+    Contains only: Type/Risk header, Summary, Stakeholder Intent (actor/goal/success_outcome),
+    Scope, and a footer with the slice-comment marker so the runner can locate the JSON.
     Identical input always yields byte-identical output.
-    The embedded JSON block is the authoritative specification (BR-002).
     """
     parts: List[str] = []
 
@@ -135,8 +136,6 @@ def render_body(slice_data: dict, canonical_json: str) -> str:
         "## Stakeholder Intent\n\n"
         f"**Actor:** {si.get('actor', '')}\n\n"
         f"**Goal:** {si.get('goal', '')}\n\n"
-        f"**Business Value:** {si.get('business_value', '')}\n\n"
-        f"**Trigger:** {si.get('trigger', '')}\n\n"
         f"**Success Outcome:** {si.get('success_outcome', '')}"
     )
 
@@ -150,87 +149,21 @@ def render_body(slice_data: dict, canonical_json: str) -> str:
         f"## Scope\n\n**In Scope:**\n\n{in_items}\n\n**Out of Scope:**\n\n{out_items}"
     )
 
-    pre_items = "\n".join(f"- {p}" for p in slice_data.get("preconditions", []))
-    parts.append(f"## Preconditions\n\n{pre_items}")
-
-    rule_blocks: List[str] = []
-    for r in slice_data.get("business_rules", []):
-        rule_blocks.append(
-            f"**{r['id']}:** {r['rule']}\n\n"
-            f"_Applies when:_ {r['applies_when']}\n\n"
-            f"_Outcome:_ {r['outcome']}"
-        )
-    if rule_blocks:
-        parts.append("## Business Rules\n\n" + "\n\n---\n\n".join(rule_blocks))
-
-    iface_blocks: List[str] = []
-    for iface in slice_data.get("interfaces", []):
-        text = (
-            f"**{iface['id']} \u2014 {iface['name']}** (`{iface['kind']}`)\n\n"
-            f"Operation: `{iface['operation']}`"
-        )
-        inputs = iface.get("inputs", [])
-        if inputs:
-            input_lines = "\n".join(
-                "- `{name}` ({type}, {req}){constraints}".format(
-                    name=inp["name"],
-                    type=inp["type"],
-                    req="required" if inp["required"] else "optional",
-                    constraints=(
-                        ": " + "; ".join(inp["constraints"])
-                        if inp.get("constraints")
-                        else ""
-                    ),
-                )
-                for inp in inputs
-            )
-            text += f"\n\n**Inputs:**\n\n{input_lines}"
-        errors = iface.get("errors", [])
-        if errors:
-            error_lines = "\n".join(
-                f"- `{e['code']}`: {e['message']}" for e in errors
-            )
-            text += f"\n\n**Errors:**\n\n{error_lines}"
-        iface_blocks.append(text)
-    if iface_blocks:
-        parts.append("## Interfaces\n\n" + "\n\n---\n\n".join(iface_blocks))
-
-    scenario_blocks: List[str] = []
-    for sc in slice_data.get("acceptance_scenarios", []):
-        given = "\n".join(f"- {g}" for g in sc.get("given", []))
-        when = "\n".join(f"- {w}" for w in sc.get("when", []))
-        then = "\n".join(f"- {t}" for t in sc.get("then", []))
-        scenario_blocks.append(
-            f"**{sc['id']} \u2014 {sc['title']}**\n\n"
-            f"_Given:_\n{given}\n\n"
-            f"_When:_\n{when}\n\n"
-            f"_Then:_\n{then}"
-        )
-    if scenario_blocks:
-        parts.append(
-            "## Acceptance Scenarios\n\n" + "\n\n---\n\n".join(scenario_blocks)
-        )
-
-    quality = slice_data.get("quality", {})
-    dod_items = "\n".join(f"- {d}" for d in quality.get("definition_of_done", []))
-    qcmd_items = "\n".join(f"- `{c}`" for c in quality.get("quality_commands", []))
-    parts.append(
-        f"## Definition of Done\n\n{dod_items}\n\n**Quality Commands:**\n\n{qcmd_items}"
-    )
-
     body = "\n\n".join(parts)
-
     body += (
         "\n\n---\n\n"
-        "> The embedded JSON block below is the authoritative machine-readable "
-        "specification. The Markdown sections above are its human-readable "
-        "projection. In any conflict, the JSON is correct.\n\n"
-        f"<details>\n<summary>{DETAILS_MARKER}</summary>\n\n"
-        f"```json\n{canonical_json}\n```\n\n"
-        "</details>"
+        f"{SLICE_COMMENT_MARKER}\n"
+        "_The canonical machine-readable slice JSON is posted as the first bot comment on this issue._"
     )
-
     return body
+
+
+def render_slice_comment(canonical_json: str) -> str:
+    """Render the slice comment body per BR-001.
+
+    Starts with the exact marker on line 1, blank line, then a single ```json``` block.
+    """
+    return f"{SLICE_COMMENT_MARKER}\n\n```json\n{canonical_json}\n```"
 
 
 # ---------------------------------------------------------------------------
@@ -298,14 +231,22 @@ def _ensure_risk_label(gh: GhRunner, risk_value: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _planned_commands(title: str, blocked_by: List[int], label_name: str, risk_value: str) -> List[str]:
-    cmds = [f"gh issue create --title {title!r} --body <rendered-body>"]
+    cmds = [f"gh issue create --title {title!r} --body <compact-body>"]
+    cmds.append(
+        "gh api --method POST repos/:owner/:repo/issues/<N>/comments"
+        " -f body=<slice-comment-body>  # BR-001: post canonical JSON as first bot comment"
+    )
+    cmds.append(
+        "# if above fails: gh issue close <N> --comment 'slice-comment post failed: <stderr>'"
+        "  # BR-003: compensation — no labels attached"
+    )
     for n in blocked_by:
         cmds.append(
             f"gh api /repos/{{owner}}/{{repo}}/issues/{n} -q .id  (resolve internal id)"
         )
         cmds.append(
             f"gh api --method POST "
-            f"/repos/{{owner}}/{{repo}}/issues/<new-number>/dependencies/blocked_by"
+            f"/repos/{{owner}}/{{repo}}/issues/<N>/dependencies/blocked_by"
             f" -F issue_id=<id-of-{n}>"
         )
     risk_label = f"risk:{risk_value}"
@@ -318,7 +259,7 @@ def _planned_commands(title: str, blocked_by: List[int], label_name: str, risk_v
         f"gh label create {label_name!r} --color 0075ca"
         f" --description 'Ready for autonomous agent'  (idempotent)"
     )
-    cmds.append(f"gh issue edit <new-number> --add-label {label_name!r},{risk_label!r}")
+    cmds.append(f"gh issue edit <N> --add-label {label_name!r},{risk_label!r}")
     return cmds
 
 
@@ -349,12 +290,20 @@ def run(
 
     raw = json.loads(slice_path.read_text(encoding="utf-8"))
     canonical_json = json.dumps(raw, indent=2, ensure_ascii=False)
-    body = render_body(raw, canonical_json)
+    body = render_body(raw)
+    slice_comment = render_slice_comment(canonical_json)
 
-    # BR-007: fail-closed body size check before any write
+    # BR-007: fail-closed size check for both artifacts before any write
     if len(body) > GITHUB_BODY_LIMIT:
         print(
             f"BODY_TOO_LARGE: Rendered body is {len(body)} chars; "
+            f"limit is {GITHUB_BODY_LIMIT}",
+            file=sys.stderr,
+        )
+        return 1
+    if len(slice_comment) > GITHUB_BODY_LIMIT:
+        print(
+            f"BODY_TOO_LARGE: Rendered slice comment is {len(slice_comment)} chars; "
             f"limit is {GITHUB_BODY_LIMIT}",
             file=sys.stderr,
         )
@@ -365,10 +314,12 @@ def run(
     config = _load_config(cwd)
     label_name = get_label_name(config)
 
-    # --dry-run: print and exit without any write (AC-007)
+    # --dry-run: print and exit without any write (AC-002)
     if dry_run:
         print("=== Rendered Body ===\n")
         print(body)
+        print("\n=== Rendered Slice Comment ===\n")
+        print(slice_comment)
         print("\n=== Planned gh Commands ===\n")
         for cmd in _planned_commands(title, blocked_by, label_name, risk_value):
             print(cmd)
@@ -394,7 +345,29 @@ def run(
     issue_url = result.stdout.strip()
     issue_number = issue_url.rstrip("/").split("/")[-1]
 
-    # Step 2: blocked_by relations (SC-002, BR-004) — one gh api call per number.
+    # Step 2: post slice comment (SC-002, BR-001, BR-003, BR-004)
+    try:
+        gh.run(
+            [
+                "api", "--method", "POST",
+                f"repos/:owner/:repo/issues/{issue_number}/comments",
+                "-f", f"body={slice_comment}",
+            ],
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr_text = exc.stderr or ""
+        try:
+            gh.run(
+                ["issue", "close", issue_number,
+                 "--comment", f"slice-comment post failed: {stderr_text}"],
+            )
+        except subprocess.CalledProcessError:
+            pass
+        print(f"SLICE_COMMENT_FAILED: {stderr_text}", file=sys.stderr)
+        return 1
+
+    # Step 3: blocked_by relations (SC-003-after, BR-004) — one gh api call per number.
     # The dependencies API keys on the internal issue id, not the issue number,
     # so each dependency number is resolved to its id first.
     for i, dep_num in enumerate(blocked_by):
@@ -427,7 +400,7 @@ def run(
             )
             return 1
 
-    # Step 3: labels — LAST so a partially created issue is never takeable (BR-005, SC-003)
+    # Step 4: labels — LAST so a partially created issue is never takeable (BR-004, SC-004)
     risk_label = f"risk:{risk_value}"
     try:
         _ensure_risk_label(gh, risk_value)
