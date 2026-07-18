@@ -30,7 +30,7 @@ func testEvent(t *testing.T, typ, runID, ts string, payload interface{}) Event {
 }
 
 func testPayload(verdict string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"verdict": verdict})
+	b, _ := json.Marshal(map[string]string{"verdict": verdict, "mergeConfidence": "high"})
 	return b
 }
 
@@ -313,7 +313,7 @@ func TestWriteReviewSubmitted_Valid(t *testing.T) {
 	}
 	defer w.Close()
 
-	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]string{"verdict": "approved"})
+	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]string{"verdict": "approved", "mergeConfidence": "high"})
 	if err := w.Write(ev); err != nil {
 		t.Fatal(err)
 	}
@@ -393,8 +393,8 @@ func TestResolveContext_EmptyProject(t *testing.T) {
 
 func TestAllEventTypes(t *testing.T) {
 	types := AllEventTypes()
-	if len(types) != 8 {
-		t.Errorf("expected 8 event types, got %d", len(types))
+	if len(types) != 11 {
+		t.Errorf("expected 11 event types, got %d", len(types))
 	}
 }
 

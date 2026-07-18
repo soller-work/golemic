@@ -78,10 +78,11 @@ func TestRun(t *testing.T) {
 			wantStderrSubs: []string{"Missing required environment variable"},
 		},
 		{
-			name:           "submit-review without flags fails with env var error",
-			args:           []string{"golemic", "submit-review"},
-			wantExit:       1,
-			wantStderrSubs: []string{"Missing required environment variable"},
+			// Dispatch reached runSubmitReview: which error fires depends on whether
+			// GOLEMIC_RUN_ID/GOLEMIC_EVENT_LOG are set in the test environment.
+			name:     "submit-review without flags fails with validation error",
+			args:     []string{"golemic", "submit-review"},
+			wantExit: 1,
 		},
 	}
 

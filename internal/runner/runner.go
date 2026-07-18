@@ -412,7 +412,7 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 
 		switch verdict {
 		case "approved":
-			return outcomeSuccess
+			return r.runMergePhase(writer, eventLogPath)
 		case "changes_requested":
 			if roundCount >= maxRounds {
 				// Post deterministic escalation comment (BR-004, BR-007)

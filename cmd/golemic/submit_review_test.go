@@ -53,12 +53,20 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 				}
 				return "Review submitted\n", nil
 			}
+			// label create (idempotent, ignore error)
+			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "create" {
+				return "", nil
+			}
+			// label add to PR
+			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
+				return "", nil
+			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "high"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got != 0 {
@@ -105,6 +113,9 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 	if payload["prNumber"] != float64(123) {
 		t.Errorf("prNumber: got %v, want %v", payload["prNumber"], 123)
 	}
+	if payload["mergeConfidence"] != "high" {
+		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "high")
+	}
 }
 
 func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop,gocognit // moved verbatim; cyclomatic 22 and cognitive 35 exceed thresholds on the pre-existing body
@@ -146,12 +157,18 @@ func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop
 				}
 				return "Review submitted\n", nil
 			}
+			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "create" {
+				return "", nil
+			}
+			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
+				return "", nil
+			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "changes_requested", "--body", "Fix NPE", "--pr", "456"}
+	args := []string{"golemic", "submit-review", "--verdict", "changes_requested", "--body", "Fix NPE", "--pr", "456", "--merge-confidence", "low"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got != 0 {
@@ -182,6 +199,9 @@ func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop
 	if payload["verdict"] != "changes_requested" {
 		t.Errorf("verdict: got %q, want %q", payload["verdict"], "changes_requested")
 	}
+	if payload["mergeConfidence"] != "low" {
+		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "low")
+	}
 }
 
 func TestRunSubmitReview_InvalidVerdictNoGhCall(t *testing.T) {
@@ -203,7 +223,7 @@ func TestRunSubmitReview_InvalidVerdictNoGhCall(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "invalid", "--body", "text", "--pr", "123"}
+	args := []string{"golemic", "submit-review", "--verdict", "invalid", "--body", "text", "--pr", "123", "--merge-confidence", "high"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got != 1 {
@@ -244,7 +264,7 @@ func TestRunSubmitReview_GhFailureNoEvent(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "999"}
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "999", "--merge-confidence", "high"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got == 0 {
@@ -359,7 +379,7 @@ func TestRunSubmitReview_EmptyBody(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "", "--pr", "123"}
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "", "--pr", "123", "--merge-confidence", "high"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got != 1 {
@@ -386,7 +406,7 @@ func TestRunSubmitReview_InvalidPRNumber(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "0"}
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "0", "--merge-confidence", "high"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got != 1 {
@@ -411,7 +431,7 @@ func TestRunSubmitReview_CaseSensitiveVerdict(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "Approved", "--body", "LGTM", "--pr", "123"}
+	args := []string{"golemic", "submit-review", "--verdict", "Approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "high"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got != 1 {
@@ -435,9 +455,10 @@ func TestRunSubmitReview_Dispatch(t *testing.T) {
 	if strings.Contains(msg, "not implemented") {
 		t.Errorf("submit-review should no longer say 'not implemented', got: %q", msg)
 	}
-	// The dispatch should reach runSubmitReview which will hit env var validation
-	if !strings.Contains(msg, "Missing required environment variable") {
-		t.Errorf("stderr should mention missing env vars, got: %q", msg)
+	// Dispatch reached runSubmitReview: expect env var error or merge-confidence error
+	// (which error fires first depends on whether env vars are set in the test environment).
+	if !strings.Contains(msg, "Missing required environment variable") && !strings.Contains(msg, "Invalid merge confidence") {
+		t.Errorf("stderr should mention missing env vars or invalid merge confidence, got: %q", msg)
 	}
 }
 
@@ -458,7 +479,7 @@ func TestRunSubmitReview_EventLogPathInvalidAborts(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "high"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 
 	if got == 0 {
@@ -469,5 +490,139 @@ func TestRunSubmitReview_EventLogPathInvalidAborts(t *testing.T) {
 	}
 	if called {
 		t.Error("gh command should NOT have been called when event log path is invalid")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-009: --merge-confidence validation (BR-009)
+// ---------------------------------------------------------------------------
+
+func TestRunSubmitReview_MissingMergeConfidence_AC009(t *testing.T) {
+	dir := t.TempDir()
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-mc-missing",
+		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
+	}
+	var called bool
+	exec := fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			called = true
+			return "", fmt.Errorf("should not be called")
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
+	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	if got != 1 {
+		t.Fatalf("exit code: got %d, want 1", got)
+	}
+	if !strings.Contains(stderr.String(), "Invalid merge confidence") {
+		t.Errorf("stderr missing 'Invalid merge confidence', got: %q", stderr.String())
+	}
+	if called {
+		t.Error("gh should not be called when --merge-confidence is missing")
+	}
+}
+
+func TestRunSubmitReview_InvalidMergeConfidence_AC009(t *testing.T) {
+	dir := t.TempDir()
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-mc-invalid",
+		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
+	}
+	var called bool
+	exec := fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			called = true
+			return "", fmt.Errorf("should not be called")
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "medium"}
+	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	if got != 1 {
+		t.Fatalf("exit code: got %d, want 1", got)
+	}
+	if !strings.Contains(stderr.String(), "Invalid merge confidence") {
+		t.Errorf("stderr missing 'Invalid merge confidence', got: %q", stderr.String())
+	}
+	if called {
+		t.Error("gh should not be called for invalid --merge-confidence")
+	}
+}
+
+func TestRunSubmitReview_LabelSetFailed(t *testing.T) { //nolint:cyclop
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-label-fail",
+		"GOLEMIC_EVENT_LOG": logPath,
+	}
+	exec := fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "review" {
+				return "Review submitted\n", nil
+			}
+			if name == "gh" && args[0] == "label" && args[1] == "create" {
+				return "", nil // label create succeeds
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "edit" {
+				return "", fmt.Errorf("label add failed")
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "high"}
+	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	if got != 1 {
+		t.Fatalf("exit code: got %d, want 1; stderr: %s", got, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "PR label could not be set") {
+		t.Errorf("stderr missing label failure message, got: %q", stderr.String())
+	}
+}
+
+func TestRunSubmitReview_MergeConfidenceLow_WrittenToPayload(t *testing.T) { //nolint:cyclop
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-mc-low",
+		"GOLEMIC_EVENT_LOG": logPath,
+	}
+	exec := fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "review" {
+				return "Review submitted\n", nil
+			}
+			if name == "gh" && args[0] == "label" {
+				return "", nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "edit" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "7", "--merge-confidence", "low"}
+	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	if got != 0 {
+		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
+	}
+	var r eventlog.Reader
+	events, err := r.Read(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["mergeConfidence"] != "low" {
+		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "low")
 	}
 }
