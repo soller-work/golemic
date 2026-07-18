@@ -23,11 +23,22 @@ Returns exit code 0 if validation passes, 1 if it fails.
 """
 
 import json
+import re
 import sys
 import argparse
 import subprocess
 from pathlib import Path
 
+
+PLACEHOLDER_RE = re.compile(
+    r"\b(?:tbd|todo|unknown|later|to be decided|not specified|fixme)\b",
+    re.IGNORECASE,
+)
+
+_TRACE_COLLECTIONS = (
+    'business_rules', 'decision_tables', 'interfaces', 'read_models',
+    'process_steps', 'integration_contracts', 'state_changes', 'side_effects',
+)
 
 STAGES = {
     'stakeholder_intent': {
@@ -104,6 +115,74 @@ def check_field_filled(slice_data, field_name):
     return True, None
 
 
+def _walk_strings(value, path=()):
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            yield from _walk_strings(item, path + (i,))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _walk_strings(item, path + (key,))
+
+
+def _fmt_path(path):
+    result = "$"
+    for p in path:
+        if isinstance(p, int):
+            result += f"[{p}]"
+        else:
+            result += f".{p}"
+    return result
+
+
+def warn_placeholders(slice_data):
+    """Return WARNING lines for any string values matching the placeholder regex."""
+    warnings = []
+    for path, text in _walk_strings(slice_data):
+        if PLACEHOLDER_RE.search(text):
+            warnings.append(
+                f"WARNING: placeholder word at {_fmt_path(path)}: {text!r}"
+            )
+    return warnings
+
+
+def warn_cross_references(slice_data):
+    """Return WARNING lines for unreferenced evidence and untraced traceable items."""
+    warnings = []
+
+    evidence_ids = {
+        item['id']
+        for item in slice_data.get('codebase_evidence', [])
+        if isinstance(item, dict) and isinstance(item.get('id'), str)
+    }
+    referenced_evidence = set()
+    for decision in slice_data.get('decision_log', []):
+        for ev_id in decision.get('evidence_ids', []):
+            referenced_evidence.add(ev_id)
+    for ev_id in sorted(evidence_ids - referenced_evidence):
+        warnings.append(
+            f"WARNING: codebase evidence {ev_id!r} is not referenced by any decision"
+        )
+
+    traceable_ids = {
+        item['id']
+        for collection in _TRACE_COLLECTIONS
+        for item in slice_data.get(collection, [])
+        if isinstance(item, dict) and isinstance(item.get('id'), str)
+    }
+    traced_ids = set()
+    for scenario in slice_data.get('acceptance_scenarios', []):
+        for trace_id in scenario.get('traces_to', []):
+            traced_ids.add(trace_id)
+    for item_id in sorted(traceable_ids - traced_ids):
+        warnings.append(
+            f"WARNING: traceable item {item_id!r} is not covered by any acceptance scenario"
+        )
+
+    return warnings
+
+
 def validate_partial(slice_path, stage='50_percent'):
     """Validate slice.json at a given completion stage."""
     
@@ -157,6 +236,15 @@ def validate_partial(slice_path, stage='50_percent'):
             errors.append(error)
 
     print()
+
+    # Emit placeholder warnings for all partial stages
+    for w in warn_placeholders(slice_data):
+        print(w)
+
+    # Emit cross-reference warnings starting at full_draft
+    if stage == 'full_draft':
+        for w in warn_cross_references(slice_data):
+            print(w)
 
     if errors:
         print(f"❌ Validation failed for stage '{stage}':\n")
