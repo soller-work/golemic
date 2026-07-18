@@ -24,7 +24,7 @@ func golemicBinary(t *testing.T) string {
 	}
 	for {
 		candidate := filepath.Join(dir, "golemic")
-		if _, err := os.Stat(candidate); err == nil {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
 			return candidate
 		}
 		parent := filepath.Dir(dir)
