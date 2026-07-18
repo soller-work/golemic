@@ -3,6 +3,7 @@ package selector
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -46,9 +47,11 @@ type graphqlResponse struct {
 					TrackedIssues struct {
 						TotalCount int `json:"totalCount"`
 					} `json:"trackedIssues"`
-					ClosingIssuesReferences struct {
-						TotalCount int `json:"totalCount"`
-					} `json:"closingIssuesReferences"`
+					ClosedByPullRequestsReferences struct {
+						Nodes []struct {
+							State string `json:"state"`
+						} `json:"nodes"`
+					} `json:"closedByPullRequestsReferences"`
 				} `json:"nodes"`
 			} `json:"issues"`
 		} `json:"repository"`
@@ -66,7 +69,7 @@ const graphqlQuery = `query($owner: String!, $repo: String!) {
           nodes { name }
         }
         trackedIssues { totalCount }
-        closingIssuesReferences(first: 1, states: OPEN) { totalCount }
+        closedByPullRequestsReferences(first: 5) { nodes { state } }
       }
     }
   }
@@ -120,23 +123,15 @@ func Fetch(executor preflight.Executor, repoSlug, token string) ([]candidate, er
 			Labels:         labels,
 			InProgress:     inProgress,
 			BlockedByCount: n.TrackedIssues.TotalCount,
-			ClosingPRCount: n.ClosingIssuesReferences.TotalCount,
+			ClosingPRCount: countOpenPRs(n.ClosedByPullRequestsReferences.Nodes),
 		})
 	}
 	return candidates, nil
 }
 
-// isErrExit checks whether err is a *preflight.ErrExit and fills ee.
+// isErrExit checks whether err wraps a *preflight.ErrExit and fills ee.
 func isErrExit(err error, ee **preflight.ErrExit) bool {
-	if err == nil {
-		return false
-	}
-	// type assertion — preflight.ErrExit is not in errors chain, just direct
-	if e, ok := err.(*preflight.ErrExit); ok { //nolint:errorlint
-		*ee = e
-		return true
-	}
-	return false
+	return errors.As(err, ee)
 }
 
 // filter returns only takeable candidates per BR-001.
@@ -181,6 +176,16 @@ func selectTop(candidates []candidate) *Issue {
 		URL:    top.URL,
 		Labels: top.Labels,
 	}
+}
+
+func countOpenPRs(nodes []struct{ State string `json:"state"` }) int {
+	count := 0
+	for _, pr := range nodes {
+		if pr.State == "OPEN" {
+			count++
+		}
+	}
+	return count
 }
 
 func hasBug(labels []string) bool {

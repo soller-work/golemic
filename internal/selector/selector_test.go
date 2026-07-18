@@ -156,7 +156,7 @@ const fixtureGraphQLResponse = `{
             "url": "https://github.com/owner/repo/issues/42",
             "labels": {"nodes": [{"name": "ready-for-agent"}]},
             "trackedIssues": {"totalCount": 0},
-            "closingIssuesReferences": {"totalCount": 0}
+            "closedByPullRequestsReferences": {"nodes": []}
           }
         ]
       }

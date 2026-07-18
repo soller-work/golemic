@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -62,12 +61,7 @@ func runNextIssue(_ []string, stdout, stderr io.Writer, executor preflight.Execu
 
 	issue, err := selector.NextIssue(executor, repoSlug, creds.DevToken())
 	if err != nil {
-		var ee *preflight.ErrExit
-		if errors.As(err, &ee) {
-			fmt.Fprintf(stderr, "%v\n", err) //nolint:errcheck
-		} else {
-			fmt.Fprintf(stderr, "%v\n", err) //nolint:errcheck
-		}
+		fmt.Fprintf(stderr, "%v\n", err) //nolint:errcheck
 		return 1
 	}
 

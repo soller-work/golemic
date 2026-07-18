@@ -113,13 +113,17 @@ func issueNode(number int, title string, labels []string, blockedBy, closingPRs 
 	for i, l := range labels {
 		labelNodes[i] = map[string]string{"name": l}
 	}
+	prNodes := make([]map[string]string, closingPRs)
+	for i := range prNodes {
+		prNodes[i] = map[string]string{"state": "OPEN"}
+	}
 	return map[string]interface{}{
-		"number":                  number,
-		"title":                   title,
-		"url":                     fmt.Sprintf("https://github.com/testowner/testrepo/issues/%d", number),
-		"labels":                  map[string]interface{}{"nodes": labelNodes},
-		"trackedIssues":           map[string]int{"totalCount": blockedBy},
-		"closingIssuesReferences": map[string]int{"totalCount": closingPRs},
+		"number":                         number,
+		"title":                          title,
+		"url":                            fmt.Sprintf("https://github.com/testowner/testrepo/issues/%d", number),
+		"labels":                         map[string]interface{}{"nodes": labelNodes},
+		"trackedIssues":                  map[string]int{"totalCount": blockedBy},
+		"closedByPullRequestsReferences": map[string]interface{}{"nodes": prNodes},
 	}
 }
 
