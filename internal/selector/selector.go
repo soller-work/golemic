@@ -30,6 +30,11 @@ type candidate struct {
 	ClosingPRCount int
 }
 
+// prRef is a minimal PR node used in closedByPullRequestsReferences.
+type prRef struct {
+	State string `json:"state"`
+}
+
 // graphqlResponse is the top-level structure of the gh api graphql output.
 type graphqlResponse struct {
 	Data struct {
@@ -48,9 +53,7 @@ type graphqlResponse struct {
 						TotalCount int `json:"totalCount"`
 					} `json:"trackedIssues"`
 					ClosedByPullRequestsReferences struct {
-						Nodes []struct {
-							State string `json:"state"`
-						} `json:"nodes"`
+						Nodes []prRef `json:"nodes"`
 					} `json:"closedByPullRequestsReferences"`
 				} `json:"nodes"`
 			} `json:"issues"`
@@ -178,7 +181,7 @@ func selectTop(candidates []candidate) *Issue {
 	}
 }
 
-func countOpenPRs(nodes []struct{ State string `json:"state"` }) int {
+func countOpenPRs(nodes []prRef) int {
 	count := 0
 	for _, pr := range nodes {
 		if pr.State == "OPEN" {
