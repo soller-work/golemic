@@ -239,6 +239,9 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
 			if name == "git" && len(args) >= 2 && args[0] == "merge-base" {
 				return "", nil // is-ancestor check passes → up to date
 			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil // branch already gone; skip delete push
+			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
@@ -263,6 +266,7 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
 		cfg:        &config.Config{Project: "proj"},
 		creds:      mustLoadCreds(t),
 		branchName: "golemic/issue-5",
+		stderr:     &strings.Builder{},
 	}
 
 	outcome := r.runMergePhase(nopWriter{}, logPath)
@@ -370,7 +374,7 @@ func TestRunMergePhase_NoRiskLabel_WritesAutomergeSkipped(t *testing.T) {
 
 // TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped also asserts that
 // gh pr edit --add-label confidence:low is called (P3-1 / AC-005).
-func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) {
+func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) { //nolint:cyclop
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 12)
 	writeReviewEventForMerge(t, logPath, "approved", "low")
@@ -944,5 +948,305 @@ func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //
 	}
 	if !found {
 		t.Error("automerge_failed event not written")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Issue #39: deleteRemoteBranch — AC-001 through AC-005
+// ---------------------------------------------------------------------------
+
+// AC-001: squashMerge must not pass --delete-branch to gh pr merge.
+func TestSquashMerge_OmitsDeleteBranchFlag(t *testing.T) {
+	creds := mustLoadCreds(t)
+
+	var capturedArgs []string
+	var capturedEnv map[string]string
+	exec := &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			capturedArgs = args
+			capturedEnv = env
+			return "sha-001", nil
+		},
+	}
+
+	r := &Runner{
+		executor: exec,
+		repoRoot: "/repo",
+		creds:    creds,
+	}
+
+	_, err := r.squashMerge(42)
+	if err != nil {
+		t.Fatalf("squashMerge returned unexpected error: %v", err)
+	}
+
+	for _, a := range capturedArgs {
+		if a == "--delete-branch" {
+			t.Error("squashMerge must not pass --delete-branch to gh pr merge")
+		}
+	}
+
+	want := []string{"pr", "merge", "42", "--squash"}
+	got := strings.Join(capturedArgs, " ")
+	wantJoined := strings.Join(want, " ")
+	if got != wantJoined {
+		t.Errorf("gh args: got %q, want %q", got, wantJoined)
+	}
+
+	if capturedEnv["GH_TOKEN"] != creds.ReviewerToken() {
+		t.Errorf("GH_TOKEN: got %q, want ReviewerToken %q", capturedEnv["GH_TOKEN"], creds.ReviewerToken())
+	}
+}
+
+// AC-002: remote branch exists → deleteRemoteBranch calls ls-remote then push --delete.
+func TestRunMergePhase_DeletesRemoteBranchAfterMerge(t *testing.T) { //nolint:cyclop,gocognit
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 42)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	creds := mustLoadCreds(t)
+	var deletePushEnv map[string]string
+	var lsRemoteCalled, deletePushCalled bool
+
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil // up-to-date → skip rebase
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				lsRemoteCalled = true
+				return "abc123\trefs/heads/golemic/issue-42\n", nil // branch exists
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-002", nil
+			}
+			if name == "git" && args[0] == "push" && args[1] == "origin" && args[2] == "--delete" {
+				deletePushCalled = true
+				deletePushEnv = env
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := &Runner{
+		executor:   exec,
+		issueNum:   42,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      creds,
+		branchName: "golemic/issue-42",
+		stderr:     &strings.Builder{},
+	}
+
+	var written []eventlog.Event
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if !lsRemoteCalled {
+		t.Error("git ls-remote --heads must be called to check remote branch existence")
+	}
+	if !deletePushCalled {
+		t.Error("git push origin --delete must be called when remote branch exists")
+	}
+	if deletePushEnv["GH_TOKEN"] != creds.DevToken() {
+		t.Errorf("delete push GH_TOKEN: got %q, want DevToken %q", deletePushEnv["GH_TOKEN"], creds.DevToken())
+	}
+
+	// Verify pr_merged is present and no automerge_failed
+	var prMergedFound bool
+	for _, ev := range written {
+		if ev.Type == eventlog.EventPRMerged {
+			prMergedFound = true
+		}
+		if ev.Type == eventlog.EventAutomergeFailed {
+			t.Error("automerge_failed must not be written on success path")
+		}
+	}
+	if !prMergedFound {
+		t.Error("pr_merged event not written")
+	}
+}
+
+// AC-003: remote branch already gone → no push --delete, no warning.
+func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cyclop
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 43)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	stderr := &strings.Builder{}
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil // empty → branch absent
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-003", nil
+			}
+			if name == "git" && args[0] == "push" && args[1] == "origin" && args[2] == "--delete" {
+				t.Error("git push --delete must not be called when remote branch is absent")
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := &Runner{
+		executor:   exec,
+		issueNum:   43,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
+		branchName: "golemic/issue-43",
+		stderr:     stderr,
+	}
+
+	outcome := r.runMergePhase(nopWriter{}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if strings.Contains(stderr.String(), "remote branch delete failed") {
+		t.Errorf("no warning expected when remote branch is absent, got: %q", stderr.String())
+	}
+}
+
+// AC-004: push --delete fails after successful merge → warning on stderr, outcome still success.
+func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclop
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 44)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	stderr := &strings.Builder{}
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "abc123\trefs/heads/golemic/issue-44\n", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-004", nil
+			}
+			if name == "git" && args[0] == "push" && args[1] == "origin" && args[2] == "--delete" {
+				return "", fmt.Errorf("unable to delete remote branch: permission denied")
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := &Runner{
+		executor:   exec,
+		issueNum:   44,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
+		branchName: "golemic/issue-44",
+		stderr:     stderr,
+	}
+
+	var written []eventlog.Event
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q — remote delete failure must not degrade outcome", outcome, outcomeSuccess)
+	}
+	if !strings.Contains(stderr.String(), "Warning: remote branch delete failed") {
+		t.Errorf("expected 'Warning: remote branch delete failed' on stderr, got: %q", stderr.String())
+	}
+
+	var prMergedFound bool
+	for _, ev := range written {
+		if ev.Type == eventlog.EventPRMerged {
+			prMergedFound = true
+		}
+		if ev.Type == eventlog.EventAutomergeFailed {
+			t.Error("automerge_failed must not be written when only remote delete fails")
+		}
+	}
+	if !prMergedFound {
+		t.Error("pr_merged event not written")
+	}
+}
+
+// AC-005: gate skip (confidence low) → neither squashMerge nor deleteRemoteBranch triggered.
+func TestRunMergePhase_GateSkipDoesNotDeleteRemote(t *testing.T) { //nolint:cyclop
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 45)
+	writeReviewEventForMerge(t, logPath, "approved", "low") // confidence=low → gate skip
+
+	exec := &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "edit" {
+				return "", nil // setConfidenceLowLabel
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				t.Error("squashMerge must not be called when gate skips")
+			}
+			if name == "git" && args[0] == "push" && args[1] == "origin" && args[2] == "--delete" {
+				t.Error("deleteRemoteBranch must not be called when gate skips")
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "ls-remote" {
+				t.Error("deleteRemoteBranch must not be called when gate skips")
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+	}
+
+	r := &Runner{
+		executor:   exec,
+		issueNum:   45,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
+		branchName: "golemic/issue-45",
+		stderr:     &strings.Builder{},
+	}
+
+	var written []eventlog.Event
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+
+	var skippedFound bool
+	for _, ev := range written {
+		if ev.Type == eventlog.EventAutomergeSkipped {
+			skippedFound = true
+		}
+	}
+	if !skippedFound {
+		t.Error("automerge_skipped event not written")
 	}
 }

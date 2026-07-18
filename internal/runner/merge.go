@@ -176,17 +176,39 @@ func (r *Runner) forcePushBranch(devWT string) error {
 	return nil
 }
 
-// squashMerge executes gh pr merge --squash --delete-branch with the reviewer token (BR-007).
+// squashMerge executes gh pr merge --squash with the reviewer token (BR-001).
 func (r *Runner) squashMerge(prNumber int) (string, error) {
 	out, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
 		r.repoRoot,
-		"gh", "pr", "merge", fmt.Sprintf("%d", prNumber), "--squash", "--delete-branch",
+		"gh", "pr", "merge", fmt.Sprintf("%d", prNumber), "--squash",
 	)
 	if err != nil {
 		return "", fmt.Errorf("gh pr merge failed: %w", err)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// deleteRemoteBranch removes the remote branch after a successful squash-merge (BR-002).
+// It is idempotent: if the branch is already gone, no push is issued (BR-003).
+// Any error is logged as a warning; the run outcome is not changed (BR-004).
+func (r *Runner) deleteRemoteBranch(branchName string) {
+	out, err := r.executor.RunInDir(r.repoRoot, "git", "ls-remote", "--heads", "origin", branchName)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: remote branch delete failed: %v\n", err) //nolint:errcheck
+		return
+	}
+	if strings.TrimSpace(out) == "" {
+		return // already gone, nothing to do (BR-003)
+	}
+	_, err = r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		r.repoRoot,
+		"git", "push", "origin", "--delete", branchName,
+	)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: remote branch delete failed: %v\n", err) //nolint:errcheck
+	}
 }
 
 // runMergePhase implements PS-001 through PS-005 (gate → rebase → verify → merge → finalize).
@@ -302,6 +324,8 @@ func (r *Runner) doSquashMerge(writer worktree.EventWriter, prNumber int) string
 		RunID:   r.runID,
 		Payload: payload,
 	})
+
+	r.deleteRemoteBranch(r.branchName) // BR-002, BR-005: after pr_merged, before worktree cleanup
 
 	return outcomeSuccess
 }
