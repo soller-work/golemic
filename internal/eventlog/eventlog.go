@@ -99,6 +99,7 @@ type Event struct {
 	Type    string          `json:"type"`
 	Ts      string          `json:"ts"` // RFC3339 string
 	RunID   string          `json:"runId"`
+	TurnID  int             `json:"turnId"`
 	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
@@ -290,6 +291,16 @@ func (Reader) Read(path string) ([]Event, error) {
 // ---------------------------------------------------------------------------
 // LastEventOfType
 // ---------------------------------------------------------------------------
+
+// HasTurnTypeEvent returns true if events contains an event matching turnID and eventType.
+func HasTurnTypeEvent(events []Event, turnID int, eventType string) bool {
+	for _, ev := range events {
+		if ev.TurnID == turnID && ev.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
 
 // LastEventOfType returns a pointer to the last (most recent / highest index)
 // event in events whose Type matches eventType. Returns an error if none found.

@@ -77,6 +77,7 @@ func TestRunOpenPR_AppendsClosesToGhBody(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-close",
 		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
+		"GOLEMIC_TURN_ID":    "1",
 	}
 
 	var sentBody string

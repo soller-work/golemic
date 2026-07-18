@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -52,6 +53,7 @@ type RoleConfig struct {
 	Timeout           time.Duration // maximum wall-clock time for the subprocess
 	ToolAllowlist     []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
 	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
+	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.
@@ -153,6 +155,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 		os.Environ(),
 		"GOLEMIC_RUN_ID="+cfg.RunID,
 		"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
+		"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
 		"GH_TOKEN="+cfg.GHToken,
 		"PATH="+golemicDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
 	)

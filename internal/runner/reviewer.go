@@ -60,6 +60,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		WorktreeDir:       reviewerWorktreePath,
 		RunID:             r.runID,
 		EventLogPath:      eventLogPath,
+		TurnID:            r.turnCounter,
 		GHToken:           r.creds.ReviewerToken(),
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Reviewer,

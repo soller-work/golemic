@@ -19,6 +19,34 @@ import (
 	"golemic/internal/runner"
 )
 
+// requireTurnID reads GOLEMIC_TURN_ID from the environment via getenv and
+// returns the parsed positive integer. Returns -1 and writes an error to
+// stderr if the var is missing or not a positive integer.
+func requireTurnID(getenv func(string) string, stderr io.Writer) (int, bool) {
+	v := getenv("GOLEMIC_TURN_ID")
+	n, err := strconv.Atoi(v)
+	if v == "" || err != nil || n <= 0 {
+		fmt.Fprintf(stderr, "Missing required environment variable: GOLEMIC_TURN_ID\n") //nolint:errcheck
+		return -1, false
+	}
+	return n, true
+}
+
+// readEventsForDedup reads the event log for dedup purposes.
+// Returns nil (no events) when the log does not yet exist; returns an error
+// only on genuine read failures.
+func readEventsForDedup(logPath string) ([]eventlog.Event, error) {
+	reader := eventlog.Reader{}
+	events, err := reader.Read(logPath)
+	if err != nil {
+		if strings.Contains(err.Error(), "LOG_FILE_NOT_FOUND") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return events, nil
+}
+
 var knownCommands = []struct {
 	name string
 	desc string
@@ -148,7 +176,7 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 		return 1
 	}
 
-	// BR-004: Check env vars before any I/O.
+	// Check env vars before any I/O.
 	runID := getenv("GOLEMIC_RUN_ID")
 	eventLogPath := getenv("GOLEMIC_EVENT_LOG")
 
@@ -161,6 +189,12 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 			missing = append(missing, "GOLEMIC_EVENT_LOG")
 		}
 		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		return 1
+	}
+
+	// BR-001: GOLEMIC_TURN_ID is required.
+	turnID, ok := requireTurnID(getenv, stderr)
+	if !ok {
 		return 1
 	}
 
@@ -191,6 +225,17 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 		return 1
 	}
 
+	// BR-003/BR-004: dedup on (turnId, type) — check before any I/O.
+	existingEvents, err := readEventsForDedup(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if eventlog.HasTurnTypeEvent(existingEvents, turnID, typeFlag) {
+		fmt.Fprintf(stdout, "already emitted for this turn\n") //nolint:errcheck
+		return 0
+	}
+
 	// Create writer and append the event.
 	writer, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
@@ -203,6 +248,7 @@ func runEmit(args []string, stdout, stderr io.Writer, getenv func(string) string
 		Type:    typeFlag,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   runID,
+		TurnID:  turnID,
 		Payload: normalizedPayload,
 	}
 
@@ -250,7 +296,7 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		return 1
 	}
 
-	// BR-004: Check env vars before any gh/git call.
+	// Check env vars before any gh/git call.
 	runID := getenv("GOLEMIC_RUN_ID")
 	eventLogPath := getenv("GOLEMIC_EVENT_LOG")
 
@@ -263,6 +309,12 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 			missing = append(missing, "GOLEMIC_EVENT_LOG")
 		}
 		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", "))
+		return 1
+	}
+
+	// BR-001: GOLEMIC_TURN_ID is required.
+	turnID, ok := requireTurnID(getenv, stderr)
+	if !ok {
 		return 1
 	}
 
@@ -292,6 +344,17 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	// auto-closes the originating issue. The issue number is encoded in the
 	// golemic branch name (golemic/issue-<N>); non-golemic branches are left as-is.
 	body := ensureBodyClosesIssue(bodyFlag, branch)
+
+	// BR-003/BR-004: dedup on (turnId, pr_opened) — check BEFORE gh call.
+	existingEvents, err := readEventsForDedup(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to create PR: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if eventlog.HasTurnTypeEvent(existingEvents, turnID, eventlog.EventPROpened) {
+		fmt.Fprintf(stdout, "PR already opened for this turn\n") //nolint:errcheck
+		return 0
+	}
 
 	// BR-002, IC-001: Create PR via gh pr create.
 	// GH_TOKEN is inherited from the process environment (BR-005).
@@ -358,6 +421,7 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		Type:    eventlog.EventPROpened,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   runID,
+		TurnID:  turnID,
 		Payload: payloadJSON,
 	}
 
@@ -408,6 +472,12 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 1
 	}
 
+	// BR-001: GOLEMIC_TURN_ID is required.
+	turnID, ok := requireTurnID(getenv, stderr)
+	if !ok {
+		return 1
+	}
+
 	// BR-009: Validate --merge-confidence fail-fast before any gh call.
 	if mergeConfidenceFlag != "high" && mergeConfidenceFlag != "low" {
 		fmt.Fprintf(stderr, "Invalid merge confidence: must be 'high' or 'low', got %q\n", mergeConfidenceFlag) //nolint:errcheck
@@ -448,6 +518,17 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 	}
 	defer writer.Close()
 
+	// BR-003/BR-004: dedup on (turnId, review_submitted) — check BEFORE gh call.
+	existingEvents, err := readEventsForDedup(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to submit review: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if eventlog.HasTurnTypeEvent(existingEvents, turnID, eventlog.EventReviewSubmitted) {
+		fmt.Fprintf(stdout, "review already submitted for this turn\n") //nolint:errcheck
+		return 0
+	}
+
 	_, err = executor.RunWithEnv(
 		nil, // no additional env vars; GH_TOKEN comes from process
 		"gh", ghArgs...,
@@ -480,6 +561,7 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		Type:    eventlog.EventReviewSubmitted,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   runID,
+		TurnID:  turnID,
 		Payload: payloadJSON,
 	}
 
