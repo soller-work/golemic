@@ -16,6 +16,7 @@ Do not implement production code. The validated JSON file is the handoff artifac
 - Use `schema.json` as the canonical output contract.
 - Read `references/slice-types.md` when classifying the primary slice type or resolving type-specific requirements.
 - Use `references/example-slice.json` only as a command-slice structural example. Never copy its domain content.
+- Use `references/example-query-slice.json`, `references/example-process-slice.json`, and `references/example-integration-slice.json` as structural examples for those respective slice types. Never copy their domain content.
 - Run `scripts/validate_slice.py` before presenting the final artifact.
 
 ## Workflow
