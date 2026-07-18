@@ -86,6 +86,9 @@ func TestRunOpenPR_AppendsClosesToGhBody(t *testing.T) {
 			return "golemic/issue-6\n", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[1] == "list" {
+				return "[]", nil
+			}
 			for i, a := range args[:len(args)-1] {
 				if a == "--body" {
 					sentBody = args[i+1]

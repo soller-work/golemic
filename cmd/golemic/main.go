@@ -356,6 +356,67 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 		return 0
 	}
 
+	// BR-001: Probe for existing open PRs on this branch before calling gh pr create.
+	prListOut, err := executor.RunWithEnv(nil, "gh", "pr", "list", "--head", branch, "--state", "open", "--json", "number,url")
+	if err != nil {
+		var ee *preflight.ErrExit
+		if errors.As(err, &ee) {
+			fmt.Fprintf(stderr, "Failed to list open PRs for branch %s: %s\n", branch, strings.TrimSpace(ee.Stderr)) //nolint:errcheck
+		} else {
+			fmt.Fprintf(stderr, "Failed to list open PRs for branch %s: %v\n", branch, err) //nolint:errcheck
+		}
+		return 1
+	}
+	type prListEntry struct {
+		Number int    `json:"number"`
+		URL    string `json:"url"`
+	}
+	var openPRs []prListEntry
+	if err := json.Unmarshal([]byte(prListOut), &openPRs); err != nil {
+		fmt.Fprintf(stderr, "Failed to parse gh pr list output: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	// BR-003: Idempotent path — exactly one open PR exists, skip create.
+	if len(openPRs) == 1 {
+		existingPR := openPRs[0]
+		writer, err := eventlog.NewWriter(eventLogPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		defer writer.Close() //nolint:errcheck
+		payload := map[string]string{
+			"prNumber": strconv.Itoa(existingPR.Number),
+			"url":      existingPR.URL,
+			"branch":   branch,
+		}
+		payloadJSON, err := json.Marshal(payload)
+		if err != nil {
+			fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		event := eventlog.Event{
+			Type:    eventlog.EventPROpened,
+			Ts:      time.Now().Format(time.RFC3339),
+			RunID:   runID,
+			TurnID:  turnID,
+			Payload: payloadJSON,
+		}
+		if err := writer.Write(event); err != nil {
+			fmt.Fprintf(stderr, "Failed to write event: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		fmt.Fprintln(stdout, existingPR.URL) //nolint:errcheck
+		return 0
+	}
+
+	// BR-004: More than one open PR — fail fast.
+	if len(openPRs) > 1 {
+		fmt.Fprintf(stderr, "Branch %s has %d open PRs; expected 0 or 1. Resolve manually before retrying.\n", branch, len(openPRs)) //nolint:errcheck
+		return 1
+	}
+
 	// BR-002, IC-001: Create PR via gh pr create.
 	// GH_TOKEN is inherited from the process environment (BR-005).
 	prOut, err := executor.RunWithEnv(
