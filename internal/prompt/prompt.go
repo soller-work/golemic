@@ -40,6 +40,51 @@ type reviewerTemplateData struct {
 	Guidelines    string
 }
 
+// devRetryTemplateData holds the template variables for the dev retry user prompt.
+type devRetryTemplateData struct {
+	Issue         Issue
+	Branch        string
+	VerifyCommand string
+	Guidelines    string
+	FailedChecks  []string
+}
+
+const devRetryUserTemplate = `# Task: Fix Failing CI Checks for Issue #{{.Issue.Number}}
+
+**Title:** {{.Issue.Title}}
+
+**Branch:** {{.Branch}}
+
+**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
+
+## Failed Checks
+
+{{range .FailedChecks}}- {{.}}
+{{end}}
+
+---
+
+## Original Issue Description
+{{.Issue.Body}}
+
+---
+
+## Guidelines
+
+{{.Guidelines}}
+
+---
+
+## Instructions
+
+1. Review the failed check names and log excerpts above.
+2. Fix the root cause of the failing checks on branch ` + "`" + `{{.Branch}}` + "`" + ` in the current worktree.
+3. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + ` — it must exit 0 before you push.
+4. Commit your fix: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
+5. Push to the same branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
+6. **Do NOT open a new PR.** The existing PR will update automatically.
+`
+
 const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 **Title:** {{.Issue.Title}}
@@ -160,6 +205,38 @@ func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesP
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {
 		return "", fmt.Errorf("failed to render reviewer prompt template: %w", err)
+	}
+
+	return sb.String(), nil
+}
+
+// RenderDevRetry renders a dev retry user prompt with failed check names and log excerpts.
+//
+// It is used when CI checks fail after the dev opened a PR. The dev is instructed
+// to fix the failing checks, run verify_command locally, and push to the same branch
+// without opening a new PR.
+func RenderDevRetry(issue Issue, branch string, verifyCommand string, guidelinesPath string, failedChecks []string) (string, error) {
+	guidelines, err := readGuidelines(guidelinesPath)
+	if err != nil {
+		return "", err
+	}
+
+	data := devRetryTemplateData{
+		Issue:         issue,
+		Branch:        branch,
+		VerifyCommand: verifyCommand,
+		Guidelines:    guidelines,
+		FailedChecks:  failedChecks,
+	}
+
+	tmpl, err := template.New("dev-retry").Parse(devRetryUserTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse dev retry prompt template: %w", err)
+	}
+
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return "", fmt.Errorf("failed to render dev retry prompt template: %w", err)
 	}
 
 	return sb.String(), nil

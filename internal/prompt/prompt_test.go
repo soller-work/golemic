@@ -341,6 +341,59 @@ func TestRenderDev_AdversarialInput(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// IF-002: RenderDevRetry tests
+// ---------------------------------------------------------------------------
+
+// TestRenderDevRetry_ContainsAllFacts verifies that the retry prompt includes
+// issue context, failed checks, and correct instructions.
+func TestRenderDevRetry_ContainsAllFacts(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Dev Guidelines")
+	failedChecks := []string{"lint: exit 1", "test: assertion failed"}
+
+	promptStr, err := RenderDevRetry(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, failedChecks)
+	if err != nil {
+		t.Fatalf("RenderDevRetry() unexpected error: %v", err)
+	}
+
+	mustContain(t, promptStr, []string{
+		"42", "Fix bug", "Details here",
+		"golemic/issue-42", "go test ./...",
+		"lint: exit 1", "test: assertion failed",
+		"# Dev Guidelines",
+	})
+}
+
+// TestRenderDevRetry_InstructionsNoPR verifies the retry prompt instructs to push
+// but NOT open a new PR.
+func TestRenderDevRetry_InstructionsNoPR(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	promptStr, err := RenderDevRetry(testIssue, "golemic/issue-42", "go test", guidelinesPath, nil)
+	if err != nil {
+		t.Fatalf("RenderDevRetry() unexpected error: %v", err)
+	}
+
+	if !strings.Contains(promptStr, "git push") {
+		t.Error("retry prompt must instruct to push")
+	}
+	if !strings.Contains(promptStr, "Do NOT open a new PR") && !strings.Contains(promptStr, "do not open a new PR") && !strings.Contains(promptStr, "Do not open a new PR") {
+		t.Error("retry prompt must instruct NOT to open a new PR")
+	}
+	// Must NOT instruct to run golemic open-pr
+	if strings.Contains(promptStr, "golemic open-pr") {
+		t.Error("retry prompt must not contain 'golemic open-pr'")
+	}
+}
+
+// TestRenderDevRetry_MissingGuidelines verifies fail-closed on missing guidelines.
+func TestRenderDevRetry_MissingGuidelines(t *testing.T) {
+	_, err := RenderDevRetry(testIssue, "branch", "verify", "/nonexistent/dev.md", nil)
+	if err == nil {
+		t.Fatal("expected error for missing guidelines file, got nil")
+	}
+}
+
 func TestRenderReviewer_NonZeroPR(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
 

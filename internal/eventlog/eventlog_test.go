@@ -393,8 +393,98 @@ func TestResolveContext_EmptyProject(t *testing.T) {
 
 func TestAllEventTypes(t *testing.T) {
 	types := AllEventTypes()
-	if len(types) != 7 {
-		t.Errorf("expected 7 event types, got %d", len(types))
+	if len(types) != 8 {
+		t.Errorf("expected 8 event types, got %d", len(types))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-006: ci_wait_finished payload validation
+// ---------------------------------------------------------------------------
+
+func TestValidateCIWaitFinishedPayload(t *testing.T) {
+	validCases := []string{"green", "red", "timeout", "no_checks"}
+	for _, result := range validCases {
+		t.Run(result, func(t *testing.T) {
+			payload, err := MarshalCIWaitFinishedPayload(result, 0)
+			if err != nil {
+				t.Fatalf("MarshalCIWaitFinishedPayload(%q): %v", result, err)
+			}
+			if err := ValidateCIWaitFinishedPayload(payload); err != nil {
+				t.Errorf("ValidateCIWaitFinishedPayload(%q): unexpected error: %v", result, err)
+			}
+		})
+	}
+
+	t.Run("invalid result", func(t *testing.T) {
+		payload, _ := json.Marshal(map[string]interface{}{"result": "unknown", "round": 0})
+		if err := ValidateCIWaitFinishedPayload(json.RawMessage(payload)); err == nil {
+			t.Error("expected error for invalid result, got nil")
+		}
+	})
+
+	t.Run("empty payload", func(t *testing.T) {
+		if err := ValidateCIWaitFinishedPayload(json.RawMessage{}); err == nil {
+			t.Error("expected error for empty payload, got nil")
+		}
+	})
+}
+
+func TestCIWaitFinishedEventWriteAndRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close() //nolint:errcheck
+
+	payload, err := MarshalCIWaitFinishedPayload("green", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(Event{
+		Type:    EventCIWaitFinished,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   "test-run",
+		Payload: payload,
+	}); err != nil {
+		t.Fatalf("Write ci_wait_finished: %v", err)
+	}
+	w.Close() //nolint:errcheck
+
+	var r Reader
+	events, err := r.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != EventCIWaitFinished {
+		t.Errorf("event type: got %q, want %q", events[0].Type, EventCIWaitFinished)
+	}
+}
+
+func TestWriterRejectsBadCIWaitFinishedPayload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close() //nolint:errcheck
+
+	badPayload, _ := json.Marshal(map[string]string{"result": "bad_value"})
+	err = w.Write(Event{
+		Type:    EventCIWaitFinished,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   "r1",
+		Payload: json.RawMessage(badPayload),
+	})
+	if err == nil {
+		t.Error("expected error for invalid ci_wait_finished payload, got nil")
 	}
 }
 

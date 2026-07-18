@@ -21,13 +21,14 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	EventRunStarted       = "run_started"
-	EventWorktreeCreated  = "worktree_created"
-	EventDevStarted       = "dev_started"
-	EventPROpened         = "pr_opened"
-	EventReviewSubmitted  = "review_submitted"
-	EventRunFinished      = "run_finished"
-	EventAgentCompleted   = "agent_completed"
+	EventRunStarted      = "run_started"
+	EventWorktreeCreated = "worktree_created"
+	EventDevStarted      = "dev_started"
+	EventPROpened        = "pr_opened"
+	EventCIWaitFinished  = "ci_wait_finished"
+	EventReviewSubmitted = "review_submitted"
+	EventRunFinished     = "run_finished"
+	EventAgentCompleted  = "agent_completed"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -37,9 +38,38 @@ func AllEventTypes() []string {
 		EventWorktreeCreated,
 		EventDevStarted,
 		EventPROpened,
+		EventCIWaitFinished,
 		EventReviewSubmitted,
 		EventRunFinished,
 		EventAgentCompleted,
+	}
+}
+
+// ciWaitFinishedData is the payload shape for ci_wait_finished events.
+type ciWaitFinishedData struct {
+	Result string `json:"result"` // green, red, timeout, no_checks
+	Round  int    `json:"round"`
+}
+
+// MarshalCIWaitFinishedPayload encodes a ci_wait_finished payload.
+func MarshalCIWaitFinishedPayload(result string, round int) (json.RawMessage, error) {
+	return json.Marshal(ciWaitFinishedData{Result: result, Round: round})
+}
+
+// ValidateCIWaitFinishedPayload checks that payload has a valid result field.
+func ValidateCIWaitFinishedPayload(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("ci_wait_finished payload is empty")
+	}
+	var d ciWaitFinishedData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return fmt.Errorf("ci_wait_finished payload: invalid JSON: %w", err)
+	}
+	switch d.Result {
+	case "green", "red", "timeout", "no_checks":
+		return nil
+	default:
+		return fmt.Errorf("ci_wait_finished payload: result must be green/red/timeout/no_checks, got %q", d.Result)
 	}
 }
 
@@ -153,6 +183,12 @@ func (w *Writer) Write(event Event) error {
 	// Validate payload for review_submitted.
 	if event.Type == EventReviewSubmitted {
 		if err := ValidateReviewSubmittedPayload(event.Payload); err != nil {
+			return err
+		}
+	}
+	// Validate payload for ci_wait_finished.
+	if event.Type == EventCIWaitFinished {
+		if err := ValidateCIWaitFinishedPayload(event.Payload); err != nil {
 			return err
 		}
 	}

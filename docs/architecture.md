@@ -275,7 +275,25 @@ mit klarer Meldung** inkl. der konkreten Aufräum-Kommandos. Kein Auto-Cleanup, 
 Resume in Iteration 1 — lieber ehrlich abbrechen als halbschlau Arbeit wegwerfen.
 Recovery aus dem Event-Log ist eine spätere Iteration.
 
-### 2.12 Teststrategie
+### 2.12 CI-Gate und Dev-Retry-Loop
+
+Zwischen `pr_opened` und der Erstellung des Reviewer-Worktrees wartet der Runner, bis alle PR-Checks abgeschlossen sind.
+
+**Ablauf:**
+1. **Check-Wait-Phase** (`internal/runner/ciwait.go`): `gh pr checks <prNumber> --json name,state` wird alle 10 Sekunden gepollt. Ergebnis: `green`, `red`, `timeout` (nach `ci_timeout_minutes`), oder `no_checks` (PR ohne CI).
+2. **Kein CI konfiguriert:** sofortiger Pass-through mit `ci_wait_finished {result: no_checks}`.
+3. **Grün:** Reviewer-Phase startet.
+4. **Rot oder Timeout → Dev-Retry:** Der Dev-Agent wird erneut im existierenden Worktree gestartet, mit einem Retry-Prompt der die fehlgeschlagenen Check-Namen und Log-Ausschnitte (`gh run view --log-failed`) enthält. Der Dev fixiert, pushed — der CI-Wait-Zyklus startet neu.
+5. **Maximal 2 Fix-Runden** (3 Dev-Runs gesamt). Danach: PR-Kommentar + `dev_failed` + Exit 1; Worktrees bleiben für Debugging.
+6. **Fehler bei gh-Abfrage:** fail-closed — kein Reviewer, PR-Kommentar, `dev_failed`.
+
+**Config:** `ci_timeout_minutes` in `.golemic/config.json` (Default 15, muss > 0 sein wenn gesetzt).
+
+**Events:** Jede Wait-Phase schreibt `ci_wait_finished {result, round}` ins Event-Log (BR-006).
+
+**Grenzen:** Loop-Steuerung ist deterministischer Runner-Code; Check-Interpretation findet nie innerhalb einer LLM-Rolle statt (§2.2).
+
+### 2.13 Teststrategie
 Zweistufig:
 1. **Unit-Ebene (Hauptabsicherung):** `gh`, `git`, `pi` werden im Go-Code hinter
    schmalen Interfaces aufgerufen (injizierbare Command-Executors). Loop-Logik,

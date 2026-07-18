@@ -316,6 +316,63 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// AC-008: ci_timeout_minutes config tests
+
+func writeCIConfig(t *testing.T, content string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	golemicDir := filepath.Join(tmpDir, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return tmpDir
+}
+
+func TestLoad_CITimeoutMinutes_Default(t *testing.T) {
+	// AC-008: absent ci_timeout_minutes → default 15
+	cfg, err := Load(writeCIConfig(t, `{"project":"p","verify_command":"go test"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CITimeoutMinutes != 15 {
+		t.Errorf("CITimeoutMinutes = %d, want 15", cfg.CITimeoutMinutes)
+	}
+}
+
+func TestLoad_CITimeoutMinutes_Explicit(t *testing.T) {
+	cfg, err := Load(writeCIConfig(t, `{"project":"p","verify_command":"go test","ci_timeout_minutes":20}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.CITimeoutMinutes != 20 {
+		t.Errorf("CITimeoutMinutes = %d, want 20", cfg.CITimeoutMinutes)
+	}
+}
+
+func TestLoad_CITimeoutMinutes_Zero(t *testing.T) {
+	// AC-008: ci_timeout_minutes 0 → rejected
+	_, err := Load(writeCIConfig(t, `{"project":"p","verify_command":"go test","ci_timeout_minutes":0}`))
+	if err == nil {
+		t.Fatal("expected error for ci_timeout_minutes=0, got nil")
+	}
+	if !strings.Contains(err.Error(), "ci_timeout_minutes") {
+		t.Errorf("error %q should mention ci_timeout_minutes", err.Error())
+	}
+}
+
+func TestLoad_CITimeoutMinutes_Negative(t *testing.T) {
+	_, err := Load(writeCIConfig(t, `{"project":"p","verify_command":"go test","ci_timeout_minutes":-5}`))
+	if err == nil {
+		t.Fatal("expected error for ci_timeout_minutes=-5, got nil")
+	}
+	if !strings.Contains(err.Error(), "ci_timeout_minutes") {
+		t.Errorf("error %q should mention ci_timeout_minutes", err.Error())
+	}
+}
+
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig("my-project")
 	if cfg.Project != "my-project" {

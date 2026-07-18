@@ -11,22 +11,24 @@ import (
 
 // Config represents the structure of .golemic/config.json
 type Config struct {
-	Project        string `json:"project"`
-	VerifyCommand  string `json:"verify_command"`
-	Label          string `json:"label"`
-	Models         Models `json:"models"`
-	TimeoutMinutes int    `json:"timeout_minutes"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	Project           string `json:"project"`
+	VerifyCommand     string `json:"verify_command"`
+	Label             string `json:"label"`
+	Models            Models `json:"models"`
+	TimeoutMinutes    int    `json:"timeout_minutes"`
+	TimeoutSeconds    int    `json:"timeout_seconds,omitempty"`
+	CITimeoutMinutes  int    `json:"ci_timeout_minutes,omitempty"`
 }
 
 // configRaw is used for parsing to detect missing vs zero values
 type configRaw struct {
-	Project        *string    `json:"project"`
-	VerifyCommand  *string    `json:"verify_command"`
-	Label          *string    `json:"label"`
-	Models         *modelsRaw `json:"models"`
-	TimeoutMinutes *int       `json:"timeout_minutes"`
-	TimeoutSeconds *int       `json:"timeout_seconds"`
+	Project          *string    `json:"project"`
+	VerifyCommand    *string    `json:"verify_command"`
+	Label            *string    `json:"label"`
+	Models           *modelsRaw `json:"models"`
+	TimeoutMinutes   *int       `json:"timeout_minutes"`
+	TimeoutSeconds   *int       `json:"timeout_seconds"`
+	CITimeoutMinutes *int       `json:"ci_timeout_minutes"`
 }
 
 // modelsRaw is used for parsing models to detect missing vs zero values
@@ -128,6 +130,11 @@ func Load(repoRoot string) (*Config, error) {
 		config.TimeoutSeconds = *raw.TimeoutSeconds
 	}
 
+	// Extract ci_timeout_minutes (optional)
+	if raw.CITimeoutMinutes != nil {
+		config.CITimeoutMinutes = *raw.CITimeoutMinutes
+	}
+
 	// Validate required fields
 	if config.Project == "" {
 		return nil, fmt.Errorf("required field 'project' is missing or empty in config file %s", configPath)
@@ -165,6 +172,16 @@ func Load(repoRoot string) (*Config, error) {
 	if raw.TimeoutSeconds != nil && config.TimeoutSeconds <= 0 {
 		return nil, fmt.Errorf("field 'timeout_seconds' must be > 0, got %d in config file %s",
 			config.TimeoutSeconds, configPath)
+	}
+
+	// Apply default or validate ci_timeout_minutes
+	if raw.CITimeoutMinutes != nil {
+		if config.CITimeoutMinutes <= 0 {
+			return nil, fmt.Errorf("field 'ci_timeout_minutes' must be > 0, got %d in config file %s",
+				config.CITimeoutMinutes, configPath)
+		}
+	} else {
+		config.CITimeoutMinutes = 15
 	}
 
 	return config, nil

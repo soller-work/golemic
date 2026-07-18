@@ -330,6 +330,16 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string) s
 		return outcomeDevFailed
 	}
 
+	// CI gate: wait for green checks before releasing to the reviewer (IF-001).
+	prNumber, err := r.getPRNumber(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: cannot read PR number for CI gate: %v\n", err) //nolint:errcheck
+		return outcomeDevFailed
+	}
+	if ciOutcome := r.runCIGate(writer, eventLogPath, prNumber, golemicDir, timeoutDuration); ciOutcome != "" {
+		return ciOutcome
+	}
+
 	// PS-004: Create reviewer worktree
 	if err := worktree.CreateForReviewer(r.repoRoot, golemicDir, r.runID, r.issueNum, r.branchName, "golemic-reviewer", r.executor, writer); err != nil {
 		fmt.Fprintf(r.stderr, "Failed to create reviewer worktree: %v\n", err)
