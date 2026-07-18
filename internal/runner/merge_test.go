@@ -254,14 +254,14 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
 	}
 
 	r := &Runner{
-		executor:  exec,
-		issueNum:  5,
-		runID:     "test-run",
-		repoRoot:  "/repo",
-		homeDir:   t.TempDir(),
-		issue:     &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:       &config.Config{Project: "proj"},
-		creds:     mustLoadCreds(t),
+		executor:   exec,
+		issueNum:   5,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
 		branchName: "golemic/issue-5",
 	}
 
@@ -291,14 +291,14 @@ func TestRunMergePhase_RiskHigh_WritesAutomergeSkipped(t *testing.T) {
 	writeReviewEventForMerge(t, logPath, "approved", "high")
 
 	r := &Runner{
-		executor:  &fakeExecutor{},
-		issueNum:  10,
-		runID:     "test-run",
-		repoRoot:  "/repo",
-		homeDir:   t.TempDir(),
-		issue:     &issueData{Labels: []issueLabel{{Name: "risk:high"}}},
-		cfg:       &config.Config{Project: "proj"},
-		creds:     mustLoadCreds(t),
+		executor:   &fakeExecutor{},
+		issueNum:   10,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:high"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
 		branchName: "golemic/issue-10",
 	}
 
@@ -334,14 +334,14 @@ func TestRunMergePhase_NoRiskLabel_WritesAutomergeSkipped(t *testing.T) {
 	writeReviewEventForMerge(t, logPath, "approved", "high")
 
 	r := &Runner{
-		executor:  &fakeExecutor{},
-		issueNum:  11,
-		runID:     "test-run",
-		repoRoot:  "/repo",
-		homeDir:   t.TempDir(),
-		issue:     &issueData{Labels: []issueLabel{{Name: "bug"}}},
-		cfg:       &config.Config{Project: "proj"},
-		creds:     mustLoadCreds(t),
+		executor:   &fakeExecutor{},
+		issueNum:   11,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "bug"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
 		branchName: "golemic/issue-11",
 	}
 
@@ -368,21 +368,35 @@ func TestRunMergePhase_NoRiskLabel_WritesAutomergeSkipped(t *testing.T) {
 	}
 }
 
+// TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped also asserts that
+// gh pr edit --add-label confidence:low is called (P3-1 / AC-005).
 func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) {
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 12)
 	writeReviewEventForMerge(t, logPath, "approved", "low")
 
+	var labelCallArgs []string
+	exec := &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
+				labelCallArgs = args
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
 	r := &Runner{
-		executor:  &fakeExecutor{},
-		issueNum:  12,
-		runID:     "test-run",
-		repoRoot:  "/repo",
-		homeDir:   t.TempDir(),
-		issue:     &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:       &config.Config{Project: "proj"},
-		creds:     mustLoadCreds(t),
+		executor:   exec,
+		issueNum:   12,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
 		branchName: "golemic/issue-12",
+		stderr:     &strings.Builder{},
 	}
 
 	var written []eventlog.Event
@@ -392,6 +406,19 @@ func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) {
 	if outcome != outcomeSuccess {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
+
+	// Assert the label was set (P3-1 / AC-005)
+	if len(labelCallArgs) == 0 {
+		t.Error("gh pr edit --add-label confidence:low was not called")
+	} else {
+		wantArgs := []string{"pr", "edit", "12", "--add-label", "confidence:low"}
+		gotJoined := strings.Join(labelCallArgs, " ")
+		wantJoined := strings.Join(wantArgs, " ")
+		if gotJoined != wantJoined {
+			t.Errorf("gh pr edit args: got %q, want %q", gotJoined, wantJoined)
+		}
+	}
+
 	found := false
 	for _, ev := range written {
 		if ev.Type == eventlog.EventAutomergeSkipped {
@@ -421,7 +448,7 @@ func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //no
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" && len(args) >= 2 && args[0] == "merge-base" {
-				return "", fmt.Errorf("exit 1") // not up to date
+				return "", &preflight.ErrExit{ExitCode: 1} // not an ancestor
 			}
 			if name == "git" && args[0] == "fetch" {
 				return "", nil
@@ -445,16 +472,16 @@ func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //no
 	}
 
 	r := &Runner{
-		executor:  exec,
-		issueNum:  20,
-		runID:     "test-run",
-		repoRoot:  "/repo",
-		homeDir:   t.TempDir(),
-		issue:     &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:       &config.Config{Project: "proj"},
-		creds:     mustLoadCreds(t),
+		executor:   exec,
+		issueNum:   20,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
 		branchName: "golemic/issue-20",
-		stderr:    &strings.Builder{},
+		stderr:     &strings.Builder{},
 	}
 	buf := &strings.Builder{}
 	r.stderr = buf
@@ -508,14 +535,14 @@ func TestRunMergePhase_MergeFailure_AutomergeFailed_AC011(t *testing.T) { //noli
 	}
 
 	r := &Runner{
-		executor:  exec,
-		issueNum:  30,
-		runID:     "test-run",
-		repoRoot:  "/repo",
-		homeDir:   t.TempDir(),
-		issue:     &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
-		cfg:       &config.Config{Project: "proj"},
-		creds:     mustLoadCreds(t),
+		executor:   exec,
+		issueNum:   30,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
 		branchName: "golemic/issue-30",
 	}
 	buf := &strings.Builder{}
@@ -595,16 +622,16 @@ func makeVerifyRunner(t *testing.T, exec *fakeExecutor, verifyCmds ...string) *R
 	creds := mustLoadCredsFromDir(t, homeDir, project)
 
 	r := &Runner{
-		executor:              exec,
-		issueNum:              50,
-		runID:                 "test-run",
-		repoRoot:              "/repo",
-		homeDir:               homeDir,
-		issue:                 &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:                   &config.Config{Project: project, VerifyCommand: verifyCmd},
-		creds:                 creds,
-		branchName:            "golemic/issue-50",
-		ciTimeoutOverride:     100 * time.Millisecond,
+		executor:               exec,
+		issueNum:               50,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                homeDir,
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: project, VerifyCommand: verifyCmd},
+		creds:                  creds,
+		branchName:             "golemic/issue-50",
+		ciTimeoutOverride:      100 * time.Millisecond,
 		ciPollIntervalOverride: 1 * time.Millisecond,
 	}
 	buf := &strings.Builder{}
@@ -728,8 +755,8 @@ func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolin
 func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
-			// verify_command: echo ok → success
-			if name == "echo" {
+			// verify_command runs via sh -c (P1-1)
+			if name == "sh" && len(args) == 2 && args[0] == "-c" {
 				return "ok", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -770,7 +797,8 @@ func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) 
 func TestVerifyAndPush_NoCI_VerifyFails_MergeFailed_AC008(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
-			if name == "false" {
+			// verify_command runs via sh -c (P1-1)
+			if name == "sh" && len(args) == 2 && args[0] == "-c" {
 				return "", fmt.Errorf("exit status 1")
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -815,4 +843,106 @@ func TestVerifyAndPush_NoCI_VerifyFails_MergeFailed_AC008(t *testing.T) { //noli
 // the real struct, not a custom interface.
 func noChecksErr() error {
 	return &preflight.ErrExit{ExitCode: 1, Stderr: "no checks reported on the 'golemic/issue-50' branch"}
+}
+
+// ---------------------------------------------------------------------------
+// runVerifyCommand unit tests (P1-1)
+// ---------------------------------------------------------------------------
+
+// TestRunVerifyCommand_CompoundCommand_ExecutedViaShell verifies that compound
+// shell commands (using &&) are passed intact to sh -c, not split by strings.Fields.
+func TestRunVerifyCommand_CompoundCommand_ExecutedViaShell(t *testing.T) {
+	var gotName string
+	var gotArgs []string
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			gotName = name
+			gotArgs = args
+			return "", nil
+		},
+	}
+	r := &Runner{
+		executor: exec,
+		cfg:      &config.Config{VerifyCommand: "echo a && echo b"},
+	}
+	if err := r.runVerifyCommand("/tmp"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotName != "sh" {
+		t.Errorf("executor called with %q, want %q", gotName, "sh")
+	}
+	if len(gotArgs) != 2 || gotArgs[0] != "-c" || gotArgs[1] != "echo a && echo b" {
+		t.Errorf("executor args: got %v, want [-c 'echo a && echo b']", gotArgs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// isBranchUpToDate: non-exit-1 errors propagate (P2-2)
+// ---------------------------------------------------------------------------
+
+// TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed verifies that a
+// git merge-base error with exit code != 1 (e.g. bad revision) is propagated
+// as automerge_failed without attempting rebase, push, or merge.
+func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //nolint:cyclop
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 40)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	var rebaseCalled, pushCalled bool
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 1 && args[0] == "merge-base" {
+				// exit code 2 = bad revision — must not be treated as "not ancestor"
+				return "", &preflight.ErrExit{ExitCode: 2, Stderr: "bad revision 'origin/main'"}
+			}
+			if name == "git" && len(args) >= 1 && args[0] == "rebase" {
+				rebaseCalled = true
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 1 && args[0] == "push" {
+				pushCalled = true
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "comment" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
+	r := &Runner{
+		executor:   exec,
+		issueNum:   40,
+		runID:      "test-run",
+		repoRoot:   "/repo",
+		homeDir:    t.TempDir(),
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:        &config.Config{Project: "proj"},
+		creds:      mustLoadCreds(t),
+		branchName: "golemic/issue-40",
+		stderr:     &strings.Builder{},
+	}
+
+	var written []eventlog.Event
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+	if rebaseCalled {
+		t.Error("rebase must not be called when freshness check fails with non-exit-1 error")
+	}
+	if pushCalled {
+		t.Error("push must not be called when freshness check fails with non-exit-1 error")
+	}
+	found := false
+	for _, ev := range written {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("automerge_failed event not written")
+	}
 }

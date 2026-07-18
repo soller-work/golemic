@@ -2,12 +2,14 @@ package runner
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"golemic/internal/eventlog"
+	"golemic/internal/preflight"
 	"golemic/internal/worktree"
 )
 
@@ -82,6 +84,19 @@ func (r *Runner) writeAutomergeFailed(writer worktree.EventWriter, reason string
 	})
 }
 
+// setConfidenceLowLabel adds the confidence:low label to the PR via the reviewer token.
+// Errors are logged to stderr but do not change the outcome.
+func (r *Runner) setConfidenceLowLabel(prNumber int) {
+	_, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
+		r.repoRoot,
+		"gh", "pr", "edit", fmt.Sprintf("%d", prNumber), "--add-label", "confidence:low",
+	)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to set confidence:low label: %v\n", err) //nolint:errcheck
+	}
+}
+
 // postMergeFailureComment posts a PR comment explaining the auto-merge failure.
 // Errors are logged to stderr but do not change the outcome (SE-001).
 func (r *Runner) postMergeFailureComment(prNumber int, reason string) {
@@ -113,8 +128,11 @@ func (r *Runner) isBranchUpToDate(devWT string) (bool, error) {
 		"git", "merge-base", "--is-ancestor", "origin/main", "HEAD",
 	)
 	if err != nil {
-		// exit code 1 = not an ancestor; other errors = real failure
-		return false, nil
+		var ee *preflight.ErrExit
+		if errors.As(err, &ee) && ee.ExitCode == 1 {
+			return false, nil // exit 1 = not an ancestor, expected
+		}
+		return false, err // exit 2+, bad revision, corrupt repo, etc.
 	}
 	return true, nil
 }
@@ -133,13 +151,13 @@ func (r *Runner) rebaseBranch(devWT string) error {
 	return nil
 }
 
-// runVerifyCommand runs the configured verify_command in the dev worktree.
+// runVerifyCommand runs the configured verify_command in the dev worktree via sh -c so
+// compound commands (&&, ;, pipes) work as expected.
 func (r *Runner) runVerifyCommand(devWT string) error {
-	parts := strings.Fields(r.cfg.VerifyCommand)
-	if len(parts) == 0 {
+	if r.cfg.VerifyCommand == "" {
 		return fmt.Errorf("verify_command is empty")
 	}
-	if _, err := r.executor.RunInDir(devWT, parts[0], parts[1:]...); err != nil {
+	if _, err := r.executor.RunInDir(devWT, "sh", "-c", r.cfg.VerifyCommand); err != nil {
 		return fmt.Errorf("verify_command failed: %w", err)
 	}
 	return nil
@@ -185,6 +203,9 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 	// PS-001: Gate evaluation (BR-001, BR-002)
 	proceed, skipReason := r.evaluateAutoMergeGate(eventLogPath)
 	if !proceed {
+		if skipReason == "confidence low" {
+			r.setConfidenceLowLabel(prNumber)
+		}
 		r.writeAutomergeSkipped(writer, skipReason)
 		return outcomeSuccess // BR-008: skip is a successful run
 	}

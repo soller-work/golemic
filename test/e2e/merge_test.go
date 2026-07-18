@@ -6,6 +6,7 @@
 //
 // AC→test mapping (issue-15 spec):
 //
+//	AC-001 (gate proceeds → rebase → CI green → pr_merged) → TestMergePhase/happy_path
 //	AC-003 (risk:high → automerge_skipped) → TestMergePhase/skip_risk_high
 //	AC-006 (rebase conflict → automerge_failed) → TestMergePhase/rebase_conflict
 package e2e
@@ -37,10 +38,21 @@ func TestMergePhase(t *testing.T) {
 		name      string
 		mergeMode string // MERGE_MODE env var controlling shim behaviour
 		// expected assertions
-		wantExitCode int
-		wantEvent    string // event type that must appear in the log
-		wantNoEvent  string // event type that must NOT appear
+		wantExitCode      int
+		wantEvent         string // event type that must appear in the log
+		wantNoEvent       string // event type that must NOT appear
+		wantDevWTRemoved  bool   // assert dev worktree cleaned up after success
 	}{
+		{
+			// AC-001: gate proceeds (risk:low + confidence high), branch stale,
+			// rebase succeeds, CI green, pr_merged event, exit 0, dev worktree removed.
+			name:             "happy_path",
+			mergeMode:        "happy_path",
+			wantExitCode:     0,
+			wantEvent:        "pr_merged",
+			wantNoEvent:      "automerge_failed",
+			wantDevWTRemoved: true,
+		},
 		{
 			// AC-003 / BR-001 / BR-008: risk:high label → gate skips auto-merge.
 			// Run succeeds (exit 0); automerge_skipped event present; no pr_merged.
@@ -94,10 +106,16 @@ func TestMergePhase(t *testing.T) {
 			eventsPath := filepath.Join(tempHome, ".golemic", "golemic_e2e", "runs", runID, "events.jsonl")
 
 			if tc.wantEvent != "" && !hasEvent(eventsPath, tc.wantEvent) {
-				t.Errorf("want %q event in %s, not found\nstderr: %s", tc.wantEvent, eventsPath, result.stderr)
+				t.Errorf("want %q event in %s, not found\nstdout: %s\nstderr: %s", tc.wantEvent, eventsPath, result.stdout, result.stderr)
 			}
 			if tc.wantNoEvent != "" && hasEvent(eventsPath, tc.wantNoEvent) {
 				t.Errorf("must NOT have %q event in %s, but found one", tc.wantNoEvent, eventsPath)
+			}
+			if tc.wantDevWTRemoved {
+				devWTPath := filepath.Join(tempHome, ".golemic", "golemic_e2e", "worktrees", "issue-1")
+				if _, err := os.Stat(devWTPath); !os.IsNotExist(err) {
+					t.Errorf("dev worktree should be removed after successful merge, still exists: %s", devWTPath)
+				}
 			}
 		})
 	}
@@ -235,6 +253,17 @@ if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "remote.origin.url" ]; 
   exit 0
 fi
 
+if [ "${MERGE_MODE}" = "happy_path" ]; then
+  # Report branch as stale so the runner enters the rebase path (BR-003).
+  if [ "$1" = "merge-base" ] && [ "$2" = "--is-ancestor" ]; then
+    exit 1  # non-ancestor = branch is behind origin/main
+  fi
+  # Intercept push --force-with-lease: avoid needing remote tracking configured.
+  if [ "$1" = "push" ] && [ "$2" = "--force-with-lease" ]; then
+    exit 0
+  fi
+fi
+
 if [ "${MERGE_MODE}" = "rebase_conflict" ]; then
   # Report branch as stale so the runner enters the rebase path (BR-003).
   if [ "$1" = "merge-base" ] && [ "$2" = "--is-ancestor" ]; then
@@ -284,7 +313,15 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
-  printf '[]'
+  case "${MERGE_MODE}" in
+    happy_path)
+      # Return a passing check so the runner takes the CI-present path and merges.
+      printf '[{"name":"build","bucket":"pass","link":""}]'
+      ;;
+    *)
+      printf '[]'
+      ;;
+  esac
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "review" ]; then
