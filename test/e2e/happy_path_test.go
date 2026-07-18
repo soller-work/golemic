@@ -49,26 +49,11 @@ func findE2EPath() string {
 // findBinary returns the path to the golemic binary.
 // Returns "" if not found; callers must skip when empty.
 func findBinary() string {
-	if b := os.Getenv("GOLEMIC_BINARY"); b != "" {
-		if _, err := os.Stat(b); err == nil {
-			return b
-		}
-	}
 	dir, err := os.Getwd()
 	if err != nil {
 		return ""
 	}
-	for {
-		candidate := filepath.Join(dir, "golemic")
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return ""
-		}
-		dir = parent
-	}
+	return harness.FindBinary(dir, os.Getenv("GOLEMIC_BINARY"))
 }
 
 // e2eRepo derives the GitHub owner/repo slug for the golemic_e2e sandbox.

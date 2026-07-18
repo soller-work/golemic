@@ -13,26 +13,15 @@ import (
 // It searches in order: GOLEMIC_BINARY env var, then the repo root.
 func golemicBinary(t *testing.T) string {
 	t.Helper()
-	if b := os.Getenv("GOLEMIC_BINARY"); b != "" {
-		return b
-	}
-	// Default: binary built at repo root.
-	// Walk up from test directory to find repo root.
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for {
-		candidate := filepath.Join(dir, "golemic")
-		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
-			return candidate
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatal("cannot find golemic binary: set GOLEMIC_BINARY env var")
-		}
-		dir = parent
+	bin := FindBinary(dir, os.Getenv("GOLEMIC_BINARY"))
+	if bin == "" {
+		t.Fatal("cannot find golemic binary: set GOLEMIC_BINARY env var (or ensure a regular file named 'golemic' exists at the repo root)")
 	}
+	return bin
 }
 
 // TestHarnessInitialization verifies AC-001:
