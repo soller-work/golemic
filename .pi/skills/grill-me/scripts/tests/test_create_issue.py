@@ -718,16 +718,13 @@ class TestSchemaCutOver(unittest.TestCase):
         self.assertNotEqual(items.get("$ref"), "#/$defs/kebabId")
 
     def test_scaffold_has_no_slice_id(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "schema_scaffold", SCRIPTS_DIR / "schema-scaffold.py"
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out.json"
-            mod.scaffold_from_schema(str(SCHEMA_PATH), "command", str(out))
-            data = json.loads(out.read_text())
+            subprocess.run(
+                [sys.executable, str(SCRIPTS_DIR / "slice.py"), "init", "command", "--out", str(out)],
+                check=True,
+            )
+            data = json.loads(Path(out).read_text())
         self.assertNotIn("slice_id", data)
 
     def test_validate_accepts_slice_without_slice_id(self):
@@ -1005,18 +1002,16 @@ class TestSchemaValidationRiskField(unittest.TestCase):
 
 class TestScaffoldIncludesRisk(unittest.TestCase):
     def test_scaffold_contains_risk_field(self):
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "schema_scaffold", SCRIPTS_DIR / "schema-scaffold.py"
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "out.json"
-            mod.scaffold_from_schema(str(SCHEMA_PATH), "command", str(out))
-            data = json.loads(out.read_text())
+            subprocess.run(
+                [sys.executable, str(SCRIPTS_DIR / "slice.py"), "init", "command", "--out", str(out)],
+                check=True,
+            )
+            data = json.loads(Path(out).read_text())
         self.assertIn("risk", data)
-        self.assertEqual(data["risk"], "FILL_IN")
+        # slice.py init uses a default value, not a FILL_IN sentinel
+        self.assertIn(data["risk"], ("low", "medium", "high", ""))
 
 
 # ---------------------------------------------------------------------------
