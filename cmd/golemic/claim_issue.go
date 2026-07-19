@@ -159,9 +159,9 @@ func runClaimIssue(args []string, stdout, stderr io.Writer, getenv func(string) 
 		fmt.Fprintf(stdout, "claimed issue #%d as %s\n", numberFlag, ghUser.Login) //nolint:errcheck
 		return 0
 
-	default:
-		// claimErr is non-nil for gh/parse failures.
+	case claim.ResultError:
 		fmt.Fprintf(stderr, "gh claim failed: %v\n", claimErr) //nolint:errcheck
 		return 1
 	}
+	return 1
 }

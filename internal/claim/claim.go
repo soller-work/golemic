@@ -20,6 +20,7 @@ const (
 	ResultIdempotent                // issue already owned by devLogin; no edit, no event needed
 	ResultRaceLost                  // post-verify showed foreign ownership; rollback attempted
 	ResultNotTakeable               // ready-for-agent label absent at pre-read time
+	ResultError                     // gh/parse failure; error carries details
 )
 
 type issueView struct {
@@ -79,7 +80,7 @@ func Claim(executor preflight.Executor, number int, devLogin, devToken string) (
 
 	pre, err := viewIssue(executor, devToken, number)
 	if err != nil {
-		return 0, err
+		return ResultError, err
 	}
 
 	// BR-002: idempotent — issue already in claimed state for this bot.
@@ -97,13 +98,13 @@ func Claim(executor preflight.Executor, number int, devLogin, devToken string) (
 		"--remove-label", "ready-for-agent",
 		"--add-label", "in-progress",
 		"--add-assignee", "@me"); err != nil {
-		return 0, fmt.Errorf("gh issue edit %d: %w", number, err)
+		return ResultError, fmt.Errorf("gh issue edit %d: %w", number, err)
 	}
 
 	// Post-verify (BR-001).
 	post, err := viewIssue(executor, devToken, number)
 	if err != nil {
-		return 0, fmt.Errorf("post-verify: %w", err)
+		return ResultError, fmt.Errorf("post-verify: %w", err)
 	}
 
 	if post.hasLabel("in-progress") && !post.hasLabel("ready-for-agent") && post.isSoleAssignee(devLogin) {

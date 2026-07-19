@@ -376,3 +376,109 @@ func TestClaimIssue_AC005_MissingEnvVar(t *testing.T) {
 		t.Errorf("stdout should be empty, got: %q", stdout.String())
 	}
 }
+
+// DT-001 / BR-005: gh pre-read failure must exit 1, no event written.
+func TestClaimIssue_GHError_PreRead(t *testing.T) {
+	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
+
+	code, stdout, stderr, eventLogPath := claimIssueRun(t, homeDir, repoRoot, nil,
+		func(_ map[string]string, name string, args []string) (string, error) {
+			switch {
+			case name == "git" && args[0] == "rev-parse":
+				return repoRoot + "\n", nil
+			case name == "gh" && args[0] == "api" && args[1] == "user":
+				return userAPIResponse(testDevLogin), nil
+			case name == "gh" && args[0] == "issue" && args[1] == "view":
+				return "", fmt.Errorf("gh: HTTP 404 Not Found")
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		})
+
+	if code != 1 {
+		t.Fatalf("exit code: got %d, want 1 on gh pre-read failure; stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "gh claim failed") {
+		t.Errorf("stderr should mention 'gh claim failed', got: %q", stderr)
+	}
+	if _, err := os.Stat(eventLogPath); !os.IsNotExist(err) {
+		t.Error("event log must not be written on gh failure")
+	}
+	if stdout != "" {
+		t.Errorf("stdout should be empty, got: %q", stdout)
+	}
+}
+
+// DT-001 / BR-005: gh edit failure must exit 1, no event written.
+func TestClaimIssue_GHError_Edit(t *testing.T) {
+	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
+
+	preView := claimIssueViewJSON([]string{"ready-for-agent"}, nil)
+
+	code, stdout, stderr, eventLogPath := claimIssueRun(t, homeDir, repoRoot, nil,
+		func(_ map[string]string, name string, args []string) (string, error) {
+			switch {
+			case name == "git" && args[0] == "rev-parse":
+				return repoRoot + "\n", nil
+			case name == "gh" && args[0] == "api" && args[1] == "user":
+				return userAPIResponse(testDevLogin), nil
+			case name == "gh" && args[0] == "issue" && args[1] == "view":
+				return preView, nil
+			case name == "gh" && args[0] == "issue" && args[1] == "edit":
+				return "", fmt.Errorf("gh: HTTP 422 Unprocessable Entity")
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		})
+
+	if code != 1 {
+		t.Fatalf("exit code: got %d, want 1 on gh edit failure; stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "gh claim failed") {
+		t.Errorf("stderr should mention 'gh claim failed', got: %q", stderr)
+	}
+	if _, err := os.Stat(eventLogPath); !os.IsNotExist(err) {
+		t.Error("event log must not be written on gh edit failure")
+	}
+	if stdout != "" {
+		t.Errorf("stdout should be empty, got: %q", stdout)
+	}
+}
+
+// DT-001 / BR-005: gh post-verify failure must exit 1, no event written.
+func TestClaimIssue_GHError_PostVerify(t *testing.T) {
+	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
+
+	preView := claimIssueViewJSON([]string{"ready-for-agent"}, nil)
+	calls := 0
+
+	code, stdout, stderr, eventLogPath := claimIssueRun(t, homeDir, repoRoot, nil,
+		func(_ map[string]string, name string, args []string) (string, error) {
+			switch {
+			case name == "git" && args[0] == "rev-parse":
+				return repoRoot + "\n", nil
+			case name == "gh" && args[0] == "api" && args[1] == "user":
+				return userAPIResponse(testDevLogin), nil
+			case name == "gh" && args[0] == "issue" && args[1] == "view":
+				calls++
+				if calls == 1 {
+					return preView, nil
+				}
+				return "", fmt.Errorf("gh: HTTP 500 Internal Server Error")
+			case name == "gh" && args[0] == "issue" && args[1] == "edit":
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		})
+
+	if code != 1 {
+		t.Fatalf("exit code: got %d, want 1 on gh post-verify failure; stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "gh claim failed") {
+		t.Errorf("stderr should mention 'gh claim failed', got: %q", stderr)
+	}
+	if _, err := os.Stat(eventLogPath); !os.IsNotExist(err) {
+		t.Error("event log must not be written on gh post-verify failure")
+	}
+	if stdout != "" {
+		t.Errorf("stdout should be empty, got: %q", stdout)
+	}
+}

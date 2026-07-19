@@ -394,7 +394,7 @@ func TestResolveContext_EmptyProject(t *testing.T) {
 func TestAllEventTypes(t *testing.T) {
 	types := AllEventTypes()
 	if len(types) != 12 {
-		t.Errorf("expected 11 event types, got %d", len(types))
+		t.Errorf("expected 12 event types, got %d", len(types))
 	}
 }
 
