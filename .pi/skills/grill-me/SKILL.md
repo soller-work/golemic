@@ -1,55 +1,58 @@
 ---
 name: grill-me
-description: Stress-test a software plan through a one-question-at-a-time 7-step interview to produce a validated, autonomously implementable vertical slice. Support command, query, process, and integration slices. Use when the user asks to be grilled, wants a plan challenged, or needs an implementation-ready use case converted into a GitHub issue. Inspect the codebase instead of asking for facts.
+description: Interview the user about a software plan just enough to understand intent, then autonomously fill and file an implementable vertical slice as a GitHub issue. Ask only what the code can't answer; every question offers max 4 options plus a clear recommendation. Use when the user wants a plan grilled, stress-tested, or turned into a ready issue.
 ---
 
 # Grill Me
 
 ## Goal
 
-Interview one software plan until product and implementation decisions are complete. Classify it as `command`, `query`, `process`, or `integration`. Validate the result against `schema.json` and create a GitHub issue with a fixed Markdown body layout. The issue body is the single source of truth for all downstream consumers.
+Understand what the user actually wants and why. Everything the codebase can answer, you answer yourself. Everything you can derive from the intent, you derive yourself. You only ask the user about genuine product decisions the code can't settle — and when you ask, you make it a fast multiple-choice pick, not an essay.
+
+The end product is a validated GitHub issue (an autonomously implementable vertical slice). You fill the whole slice; the user never dictates individual schema fields.
+
+## Core Principles
+
+1. **Ask only what you can't find out yourself.** Classification (`command`/`query`/`process`/`integration`), scope boundaries, behavior, business rules, acceptance scenarios, I/O contract, verify commands, and codebase evidence are *your* job to derive — never a question to the user. Inspect the code first; the user's time is for product intent, not form-filling.
+2. **Adaptive question count.** Ask as many questions as you genuinely need and no more. Some plans need one question; some need ten. Don't announce a count or estimate.
+3. **Every question is multiple choice.** Offer **max 4 options**, then a clear recommendation with reasoning. See format below.
+4. **Confirm before filing.** When you have everything, just ask whether you're done and may create the issue. Don't dump the full filled-out slice for review — a simple go/no-go is enough.
+
+## Question Format
+
+Only ask when the answer is a product judgment the code can't make. Then:
+
+> **Frage N — <Topic>**
+> <Die eine Entscheidung, die du brauchst — kurz.>
+>
+> - **A)** <Option> — <Konsequenz>
+> - **B)** <Option> — <Konsequenz>
+> - **C)** <Option> — <Konsequenz>
+> - **D)** <Option> — <Konsequenz>
+>
+> **Empfehlung: <A/B/C/D>** — <warum, in einem Satz.>
+
+Rules: max 4 options. Fewer is fine if fewer are real. Always name the recommended option and say why. One question per turn; wait for the answer before the next.
 
 ## Resources
 
-- `schema.json` — the canonical output contract (slim, no cross-refs, no session state).
-- `references/slice-types.md` — use when classifying or resolving type-specific requirements.
-- Scripts: `slice.py` (new, write, check, finalize), `create_issue.py` (renders body, archives JSON), `validate_slice.py` (semantic checks), `gh_issue_index.py` (fetches open issues for similarity scan).
+- `schema.json` — the canonical slice contract you must fill.
+- `references/slice-types.md` — use to classify the slice yourself.
+- Scripts:
+  - `slice.py` — `new`, `write` (bulk fill), `set` (one section), `check` (validate), `plan` (fill order), `finalize` (set readiness).
+  - `gh_issue_index.py --with-body` — fetch open issues for the similarity scan.
+  - `create_issue.py` — render body, validate, create issue, archive JSON.
+  - `validate_slice.py` — semantic checks.
 
-## 7-Step Workflow
+## Workflow
 
-### 1. Subject & Classification
-Identify the single stakeholder-visible outcome. Classify using `references/slice-types.md`: state mutation (command), retrieval (query), progression (process), or external contract (integration). If multi-slice: propose smallest vertical slice, put others in scope.out. Inspect the codebase for modules, routes, conventions, and test commands. Do not ask the user for facts the code can verify.
-
-### 2. Similarity Check
-Fetch open issues via `gh_issue_index.py --with-body`. If a close match appears, ask the user: "Related to issue #N?" Let them decide. Continue or pivot based on their answer.
-
-### 3. Scope Cut
-Agree on what goes in, what stays out, and what depends on what. Multi-slice: propose a per-slice split with shared discovery and auto-blocked-by from conversation context.
-
-### 4. Intent
-Resolve stakeholder, trigger, success_outcome, and tldr (max 140 chars). One turn per question. Format:
-
-> **Question N — <Topic>**
-> <Decision required>
-> **Recommendation:** <one proposed answer + consequence>
-> **Your answer?**
-
-### 5. Behavior & Rules
-Define type-specific behavior (state mutations, read model, ordered steps, or external contract as Markdown). Add business_rules, failure paths, I/O contract, codebase evidence (path:line), and verify commands in the same turn or next.
-
-### 6. Acceptance & Done
-Resolve acceptance_scenarios (free-form Given/When/Then strings), definition_of_done (checklist items), and security (only if security_relevant=true). Ask once; get everything in one turn if possible.
-
-### 7. Create Issue
-Run: `python3 .pi/skills/grill-me/scripts/create_issue.py <slice.json> [--blocked-by N[,N...]]`
-
-The script renders Markdown (TL;DR header, fixed section order, conditional Security), validates atomically, creates the issue, and archives the JSON to `.pi/skills/grill-me/.tmp/archive/<timestamp>_<issue-nr>.json`. Print the issue URL. The GitHub issue is now the artifact; delete or ignore the local slice.json.
+1. **Inspect first.** Read the relevant code: modules, routes, conventions, test/verify commands. Classify the slice yourself using `references/slice-types.md`. Derive scope, behavior, rules, I/O, acceptance, and verify commands as far as the code allows. Note what you settled and what remains a genuine product decision.
+2. **Similarity scan.** Run `gh_issue_index.py --with-body`. If something looks related, that's a legitimate question (offer the candidate issues as options + a recommendation).
+3. **Interview.** Ask only the open product decisions, one at a time, in the multiple-choice format above.
+4. **Fill the slice.** Use `slice.py write` (or `new` + `set`) to populate every field from intent + code + answers. Record each non-trivial assumption in `blockers` as `kind: assumption`.
+5. **Confirm.** Ask the user whether you're done and may create the issue. No field-by-field review.
+6. **Finalize and file.** `slice.py finalize <path>` (or `--blocked` if genuine blockers remain), then `create_issue.py <slice.json> [--blocked-by N[,N...]]`. Print the issue URL. The GitHub issue is now the artifact.
 
 ## Readiness Gate
 
-Finalize sets `readiness: ready` automatically if:
-- `blockers` array is empty (or contains only resolved items).
-- Validation passes.
-- Use `slice.py finalize <path> --blocked` to force blocked status.
-
-Never use `ready` just because the user wants to stop. If evidence is unavailable, set `blocked` and describe what is missing.
+Finalize sets `readiness: ready` automatically when `blockers` is empty (or only resolved) and validation passes. Assumptions the user has approved count as resolved. If evidence is genuinely unavailable, use `slice.py finalize <path> --blocked` and describe what's missing. Never mark `ready` just to stop.
