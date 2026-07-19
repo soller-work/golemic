@@ -17,11 +17,12 @@ import (
 	"text/template"
 )
 
-// Issue represents a GitHub issue with its number, title, and body.
+// Issue represents a GitHub issue reference passed into a prompt. The full
+// task specification is not embedded — agents fetch it at run time via
+// `golemic slice --issue N` to keep the initial prompt small.
 type Issue struct {
 	Number int
 	Title  string
-	Body   string
 }
 
 // devTemplateData holds the template variables for the dev user prompt.
@@ -44,9 +45,6 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 **Title:** {{.Issue.Title}}
 
-**Description:**
-{{.Issue.Body}}
-
 **Branch:** {{.Branch}}
 
 **Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
@@ -61,12 +59,13 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 ## Instructions
 
-1. Understand the issue and the guidelines above.
-2. Implement the necessary changes on branch ` + "`" + `{{.Branch}}` + "`" + `.
-3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
-5. Push the branch: ` + "`" + `git push -u origin {{.Branch}}` + "`" + `
-6. **Only after ` + "`" + `{{.VerifyCommand}}` + "`" + ` exits 0**, open the PR:
+1. **First, fetch the authoritative task specification:** run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The output is either a structured JSON slice or the raw issue body — treat that output as the source of truth. Do not rely on any summary rendered in the issue's web UI.
+2. Understand the spec and the guidelines above.
+3. Implement the necessary changes on branch ` + "`" + `{{.Branch}}` + "`" + `.
+4. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
+5. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
+6. Push the branch: ` + "`" + `git push -u origin {{.Branch}}` + "`" + `
+7. **Only after ` + "`" + `{{.VerifyCommand}}` + "`" + ` exits 0**, open the PR:
    ` + "`" + `golemic open-pr --title "..." --body "..."` + "`" + `
    The body **must** include a closing keyword so merging auto-closes the issue, e.g. ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `.
 `
@@ -74,9 +73,6 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
 
 **Issue Title:** {{.Issue.Title}}
-
-**Issue Description:**
-{{.Issue.Body}}
 
 **Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
 
@@ -90,10 +86,11 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 
 ## Instructions
 
-1. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `gh pr view {{.PRNumber}}` + "`" + `
-2. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-3. Review the changes against the issue requirements and the guidelines above.
-4. Call exactly one: ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}}` + "`" + `
+1. **First, fetch the authoritative task specification:** run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The output is the source of truth for what the PR is supposed to do — do not rely on any summary rendered in the issue's web UI.
+2. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `gh pr view {{.PRNumber}}` + "`" + `
+3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
+4. Review the changes against the spec and the guidelines above.
+5. Call exactly one: ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}}` + "`" + `
 `
 
 // RenderDev renders a dev user prompt with all run-specific facts injected.
@@ -179,9 +176,6 @@ const devRetryUserTemplate = `# Dev Retry: Address Review Findings for Issue #{{
 
 **Title:** {{.Issue.Title}}
 
-**Description:**
-{{.Issue.Body}}
-
 **Branch:** {{.Branch}}
 
 **Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
@@ -204,10 +198,11 @@ The reviewer has requested the following changes:
 
 ## Instructions
 
-1. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
-2. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-3. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
-4. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
+1. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The reviewer findings above are the primary input for this retry.
+2. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
+3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
+4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
+5. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
 `
 
 // RenderDevRetry renders a dev retry user prompt injecting the verbatim reviewer findings.
@@ -257,9 +252,6 @@ const devCIRetryUserTemplate = `# CI Retry: Fix Failing Checks for Issue #{{.Iss
 
 **Title:** {{.Issue.Title}}
 
-**Description:**
-{{.Issue.Body}}
-
 **Branch:** {{.Branch}}
 
 **Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
@@ -282,11 +274,12 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 
 ## Instructions
 
-1. Diagnose and fix the failing CI checks described above on branch ` + "`" + `{{.Branch}}` + "`" + `.
-2. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-3. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
-4. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
-5. **Do not open a new PR** — the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will update automatically.
+1. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The failing checks above are the primary input for this retry.
+2. Diagnose and fix the failing CI checks described above on branch ` + "`" + `{{.Branch}}` + "`" + `.
+3. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + `
+4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
+5. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
+6. **Do not open a new PR** — the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will update automatically.
 `
 
 // RenderDevCIRetry renders a dev CI retry user prompt injecting failed check info.

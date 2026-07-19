@@ -11,7 +11,6 @@ import (
 var testIssue = Issue{
 	Number: 42,
 	Title:  "Fix bug",
-	Body:   "Details here",
 }
 
 // mustContain fails if s does not contain every string in wants.
@@ -60,7 +59,9 @@ func TestRenderDev_OpenPRFlags(t *testing.T) {
 	if !strings.Contains(userPrompt, "--body") {
 		t.Error("dev prompt missing '--body' flag for open-pr")
 	}
-	for _, banned := range []string{"title-b64", "body-b64", "--issue", "TitleB64", "BodyB64", "TITLE_B64", "BODY_B64"} {
+	// --issue is now a legitimate flag on `golemic slice --issue N` (spec fetch),
+	// so it is not part of the banned set.
+	for _, banned := range []string{"title-b64", "body-b64", "TitleB64", "BodyB64", "TITLE_B64", "BODY_B64"} {
 		if strings.Contains(userPrompt, banned) {
 			t.Errorf("dev prompt must not contain %q", banned)
 		}
@@ -78,10 +79,11 @@ func TestRenderDev_ContainsAllFacts(t *testing.T) {
 	}
 
 	mustContain(t, userPrompt, []string{
-		"42", "Fix bug", "Details here",
+		"42", "Fix bug",
 		"golemic/issue-42", "go test ./...",
 		"# Dev Guidelines (Test)", "Go 1.21, standard library",
 		"golemic open-pr",
+		"golemic slice --issue 42",
 	})
 	if !strings.Contains(userPrompt, "Only after") && !strings.Contains(userPrompt, "only after") {
 		t.Error("userPrompt missing condition that open-pr is only allowed after verify exits 0")
@@ -122,8 +124,8 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 	if !strings.Contains(userPrompt, "Fix bug") {
 		t.Error("userPrompt missing issue title 'Fix bug'")
 	}
-	if !strings.Contains(userPrompt, "Details here") {
-		t.Error("userPrompt missing issue body 'Details here'")
+	if !strings.Contains(userPrompt, "golemic slice --issue 42") {
+		t.Error("reviewer prompt missing 'golemic slice --issue 42' spec fetch instruction")
 	}
 	if !strings.Contains(userPrompt, "go test ./...") {
 		t.Error("userPrompt missing verify command 'go test ./...'")
@@ -302,7 +304,7 @@ func TestRenderReviewer_StepListEndsWithSubmitReview(t *testing.T) {
 // Issue with empty title or body still renders (no panic)
 func TestRenderDev_EmptyTitleBody(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
-	emptyIssue := Issue{Number: 99, Title: "", Body: ""}
+	emptyIssue := Issue{Number: 99, Title: ""}
 
 	userPrompt, err := RenderDev(emptyIssue, "branch", "verify", guidelinesPath)
 	if err != nil {
@@ -319,7 +321,6 @@ func TestRenderDev_AdversarialInput(t *testing.T) {
 	adversarialIssue := Issue{
 		Number: 42,
 		Title:  `it's a fix`,
-		Body:   "`echo it's broken`",
 	}
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 
@@ -387,10 +388,10 @@ func TestRenderDevCIRetry_EmptyInfoError(t *testing.T) {
 
 func TestRenderDevCIRetry_InjectedIssueContext(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
-	issue := Issue{Number: 99, Title: "Test CI retry", Body: "Body content"}
+	issue := Issue{Number: 99, Title: "Test CI retry"}
 	p, err := RenderDevCIRetry("check info", issue, "golemic/issue-99", "make test", guidelinesPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"99", "Test CI retry", "Body content", "make test"})
+	mustContain(t, p, []string{"99", "Test CI retry", "make test", "golemic slice --issue 99"})
 }
