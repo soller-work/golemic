@@ -900,7 +900,7 @@ func TestRunVerifyCommand_CompoundCommand_ExecutedViaShell(t *testing.T) {
 // TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed verifies that a
 // git merge-base error with exit code != 1 (e.g. bad revision) is propagated
 // as automerge_failed without attempting rebase, push, or merge.
-func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //nolint:cyclop,gocognit
+func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //nolint:cyclop,funlen,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 40)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
@@ -1161,7 +1161,7 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 }
 
 // AC-004: push --delete fails after successful merge → warning on stderr, outcome still success.
-func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclop,gocognit
+func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclop,funlen,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 44)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
