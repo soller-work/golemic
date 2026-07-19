@@ -1,0 +1,27 @@
+{
+  "slice_type": "command",
+  "title": "Cancel Order",
+  "stakeholder": "Customer support agent",
+  "trigger": "Agent calls cancel-order with an order ID",
+  "success_outcome": "Order is cancelled and confirmation is returned",
+  "tldr": "Cancel a pending order; reject if already shipped or not owned.",
+  "scope": {
+    "in": ["Validate ownership", "Set order status to cancelled"],
+    "out": ["Refund processing", "Notification emails"]
+  },
+  "behavior": "Look up the order by ID. Verify the requesting user owns it. If the order is already shipped, reject with an error. Otherwise set status to cancelled and return the updated order.",
+  "business_rules": "BR-1: A user may only cancel their own orders.\nBR-2: Orders with status SHIPPED cannot be cancelled.",
+  "acceptance_scenarios": [
+    "Given a pending order owned by the user, when cancel-order is called, then the order status becomes cancelled.",
+    "Given an order owned by another user, when cancel-order is called, then the request is rejected.",
+    "Given a shipped order, when cancel-order is called, then the request is rejected."
+  ],
+  "inputs_outputs_errors": "Input: order_id (string, required).\nOutput: cancelled order object.\nErrors: ORDER_NOT_OWNED when the order belongs to a different user; ORDER_ALREADY_SHIPPED when the order status is SHIPPED.",
+  "verify_commands": ["go test ./..."],
+  "definition_of_done": ["All acceptance scenarios pass", "Unit tests green"],
+  "readiness": "blocked",
+  "blockers": [
+    {"kind": "question", "text": "Should cancellation be allowed for orders in PROCESSING status?"}
+  ],
+  "security_relevant": false
+}
