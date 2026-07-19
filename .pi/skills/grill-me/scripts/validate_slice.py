@@ -105,6 +105,37 @@ def semantic_errors(document: dict[str, Any]) -> list[str]:
         if not security:
             errors.append("If $.security_relevant=true, $.security must be present and non-empty")
 
+    # Rule 5: every interfaces[].errors[].code must appear verbatim in at least one
+    # business_rules entry (rule or outcome) or decision_tables row then value.
+    interfaces = document.get("interfaces", [])
+    if isinstance(interfaces, list) and interfaces:
+        reference_texts: list[str] = []
+        for rule in document.get("business_rules", []):
+            if isinstance(rule, dict):
+                for field in ("rule", "outcome"):
+                    val = rule.get(field)
+                    if isinstance(val, str):
+                        reference_texts.append(val)
+        for table in document.get("decision_tables", []):
+            if isinstance(table, dict):
+                for row in table.get("rows", []):
+                    if isinstance(row, dict):
+                        for _, text in walk_strings(row.get("then", {})):
+                            reference_texts.append(text)
+        for i, iface in enumerate(interfaces):
+            if not isinstance(iface, dict):
+                continue
+            for j, err_entry in enumerate(iface.get("errors", [])):
+                if not isinstance(err_entry, dict):
+                    continue
+                code = err_entry.get("code")
+                if not isinstance(code, str):
+                    continue
+                if not any(code in ref for ref in reference_texts):
+                    errors.append(
+                        f"Unreferenced error code {code} at $.interfaces[{i}].errors[{j}].code"
+                    )
+
     return errors
 
 
