@@ -372,6 +372,13 @@ def cmd_set(args: argparse.Namespace) -> int:
     data = load_slice(path)
     schema = load_schema()
     section = args.section
+    slice_type = data.get("slice_type", "")
+    if not _is_applicable(slice_type, section):
+        print(
+            f"❌ set {section}: not applicable for slice_type={slice_type} (schema conditional forbids it)",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         fragment = json.loads(args.json_fragment)
@@ -383,6 +390,13 @@ def cmd_set(args: argparse.Namespace) -> int:
         if not isinstance(fragment, list):
             print(f"❌ Section '{section}' expects a JSON array fragment.", file=sys.stderr)
             return 1
+        for i, item in enumerate(fragment):
+            if not isinstance(item, dict):
+                print(
+                    f"❌ {section}[{i}]: expected object, got {type(item).__name__}",
+                    file=sys.stderr,
+                )
+                return 1
         existing = data.get(section, [])
         new_items = assign_ids(section, fragment, existing)
 
@@ -408,6 +422,13 @@ def cmd_set(args: argparse.Namespace) -> int:
                         loc = f"[{idx}]/{ptr}" if ptr else f"[{idx}]"
                         print(f"❌ {section}{loc}: {e.message}", file=sys.stderr)
                     return 1
+
+            array_validator = Draft202012Validator(sub)
+            array_errs = list(array_validator.iter_errors(merged))
+            if array_errs:
+                for e in array_errs:
+                    print(f"❌ {section}: {e.message}", file=sys.stderr)
+                return 1
 
         data[section] = merged
         start_id = id_format(ARRAY_SECTIONS[section], len(existing) + 1)
