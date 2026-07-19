@@ -233,7 +233,7 @@ func TestOpenPR_MissingTurnID_FailsClosed_AC003(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "open-pr", "--title", "T", "--body", "B"}
-	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec, testNoLoadConfig(t))
 
 	if got == 0 {
 		t.Fatalf("exit code: got 0, want non-zero")
@@ -324,7 +324,7 @@ func TestOpenPR_DuplicateTurnIsNoOp_AC005(t *testing.T) { //nolint:cyclop
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "open-pr", "--title", "T", "--body", "B"}
-	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec, testOKLoadConfig())
 
 	if got != 0 {
 		t.Fatalf("exit code: got %d, want 0 (no-op); stderr: %s", got, stderr.String())
