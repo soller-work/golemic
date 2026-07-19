@@ -34,6 +34,8 @@ func (h fakeProcessHandle) Wait() error            { return nil }
 func (h fakeProcessHandle) Signal(os.Signal) error { return nil }
 
 // runLoopFixture creates a temp homeDir and repoRoot with minimal config and credentials.
+// It also unsets GOLEMIC_DEV_TOKEN and GOLEMIC_REVIEWER_TOKEN for the duration of the test
+// so the credentials file is the authoritative source (CI may have these set to real tokens).
 func runLoopFixture(t *testing.T) (homeDir, repoRoot string) {
 	t.Helper()
 	homeDir = t.TempDir()
@@ -55,6 +57,12 @@ func runLoopFixture(t *testing.T) (homeDir, repoRoot string) {
 	if err := os.WriteFile(filepath.Join(credsDir, "credentials.json"),
 		[]byte(`{"dev_token":"ghp_test","reviewer_token":"ghp_rev"}`), 0600); err != nil {
 		t.Fatal(err)
+	}
+
+	for _, k := range []string{"GOLEMIC_DEV_TOKEN", "GOLEMIC_REVIEWER_TOKEN"} {
+		k, orig := k, os.Getenv(k)
+		_ = os.Unsetenv(k)
+		t.Cleanup(func() { _ = os.Setenv(k, orig) })
 	}
 
 	return homeDir, repoRoot
