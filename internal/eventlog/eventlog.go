@@ -32,6 +32,7 @@ const (
 	EventPRMerged         = "pr_merged"
 	EventAutomergeSkipped = "automerge_skipped"
 	EventAutomergeFailed  = "automerge_failed"
+	EventIssueClaimed     = "issue_claimed"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -48,7 +49,28 @@ func AllEventTypes() []string {
 		EventPRMerged,
 		EventAutomergeSkipped,
 		EventAutomergeFailed,
+		EventIssueClaimed,
 	}
+}
+
+// issueClaimedData is the payload shape for issue_claimed events.
+type issueClaimedData struct {
+	IssueNumber int `json:"issue_number"`
+}
+
+// ValidateIssueClaimedPayload checks that the payload has a required issue_number field.
+func ValidateIssueClaimedPayload(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("issue_claimed payload is empty")
+	}
+	var d issueClaimedData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return fmt.Errorf("issue_claimed payload: invalid JSON: %w", err)
+	}
+	if d.IssueNumber == 0 {
+		return fmt.Errorf("issue_claimed payload: issue_number field is required")
+	}
+	return nil
 }
 
 // ciWaitFinishedData is the payload shape for ci_wait_finished events.
@@ -203,6 +225,12 @@ func (w *Writer) Write(event Event) error {
 	// Validate payload for ci_wait_finished.
 	if event.Type == EventCIWaitFinished {
 		if err := ValidateCIWaitFinishedPayload(event.Payload); err != nil {
+			return err
+		}
+	}
+	// Validate payload for issue_claimed.
+	if event.Type == EventIssueClaimed {
+		if err := ValidateIssueClaimedPayload(event.Payload); err != nil {
 			return err
 		}
 	}
