@@ -16,10 +16,11 @@ type issueLabel struct {
 	Name string `json:"name"`
 }
 
-// issueData holds the parsed result of gh issue view --json title,body,labels.
+// issueData holds issue metadata used by the runner (title + labels).
+// The body is not stored here because the agents fetch it on demand via
+// `golemic slice --issue N`.
 type issueData struct {
 	Number int          `json:"number"`
 	Title  string       `json:"title"`
-	Body   string       `json:"body"`
 	Labels []issueLabel `json:"labels"`
 }

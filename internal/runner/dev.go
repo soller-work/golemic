@@ -26,7 +26,6 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		prompt.Issue{
 			Number: r.issue.Number,
 			Title:  r.issue.Title,
-			Body:   r.issue.Body,
 		},
 		r.branchName,
 		r.cfg.VerifyCommand,
@@ -95,7 +94,6 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		prompt.Issue{
 			Number: r.issue.Number,
 			Title:  r.issue.Title,
-			Body:   r.issue.Body,
 		},
 		r.branchName,
 		r.cfg.VerifyCommand,

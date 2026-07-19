@@ -79,7 +79,7 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 	runner.homeDir = homeDir
 	runner.runID = runID
 	runner.creds = creds
-	runner.issue = &issueData{Number: 42, Title: "t", Body: "b"}
+	runner.issue = &issueData{Number: 42, Title: "t"}
 	runner.cfg = &config.Config{
 		VerifyCommand: "go test",
 		Models:        config.Models{Dev: "test-model", Reviewer: "test-model"},

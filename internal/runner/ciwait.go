@@ -267,7 +267,6 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		prompt.Issue{
 			Number: r.issue.Number,
 			Title:  r.issue.Title,
-			Body:   r.issue.Body,
 		},
 		r.branchName,
 		r.cfg.VerifyCommand,

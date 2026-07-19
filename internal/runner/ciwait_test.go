@@ -94,7 +94,7 @@ func buildCIGateRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 		TimeoutMinutes:   30,
 		Models:           config.Models{Dev: "test/dev"},
 	}
-	r.issue = &issueData{Number: 42, Title: "T", Body: "B"}
+	r.issue = &issueData{Number: 42, Title: "T"}
 	r.SetCIPollInterval(1 * time.Millisecond)
 	r.SetCITimeout(5 * time.Millisecond) // fast timeout for tests
 
@@ -672,7 +672,7 @@ func TestRunDevCIRetryAgent_PromptContainsCheckInfo(t *testing.T) {
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
 	r.cfg = &config.Config{VerifyCommand: "go test", Models: config.Models{Dev: "test/dev"}}
-	r.issue = &issueData{Number: 42, Title: "T", Body: "B"}
+	r.issue = &issueData{Number: 42, Title: "T"}
 	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		capturedPrompt = cfg.UserPrompt
 		return 0, agent.TranscriptPaths{}, nil

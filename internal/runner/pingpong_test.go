@@ -160,7 +160,7 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 		TimeoutMinutes: 30,
 		Models:         config.Models{Dev: "claude-3-5-sonnet-20241022", Reviewer: "claude-3-5-sonnet-20241022"},
 	}
-	r.issue = &issueData{Number: 42, Title: "Test Issue", Body: "Test body"}
+	r.issue = &issueData{Number: 42, Title: "Test Issue"}
 
 	var stderr bytes.Buffer
 	r.SetStderr(&stderr)
@@ -476,7 +476,7 @@ func TestRenderDevRetry_VerbatimFindings(t *testing.T) {
 	}
 
 	findings := "Fix the null pointer dereference in handler.go line 42"
-	p, err := prompt.RenderDevRetry(findings, prompt.Issue{Number: 42, Title: "T", Body: "B"}, "golemic/issue-42", "go test", guidelinesPath)
+	p, err := prompt.RenderDevRetry(findings, prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := prompt.RenderDevRetry("", prompt.Issue{Number: 42, Title: "T", Body: "B"}, "golemic/issue-42", "go test", guidelinesPath)
+	_, err := prompt.RenderDevRetry("", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
 	if err == nil {
 		t.Fatal("expected EMPTY_FINDINGS error, got nil")
 	}
@@ -523,7 +523,7 @@ func TestPostEscalationComment_Deterministic(t *testing.T) {
 			runID:      "issue-42-det",
 			branchName: "golemic/issue-42",
 			creds:      creds,
-			issue:      &issueData{Number: 42, Title: "T", Body: "B"},
+			issue:      &issueData{Number: 42, Title: "T"},
 			cfg:        &config.Config{},
 		}
 		var buf bytes.Buffer

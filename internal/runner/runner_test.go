@@ -1155,7 +1155,7 @@ func TestDevGuidelinesPath_AC001(t *testing.T) {
 
 	devPath := filepath.Join(repoRoot, ".golemic", "guidelines", "dev.md")
 	userPrompt, err := prompt.RenderDev(
-		prompt.Issue{Number: 1, Title: "t", Body: "b"},
+		prompt.Issue{Number: 1, Title: "t"},
 		"golemic-dev-1",
 		"go test",
 		devPath,
@@ -1185,7 +1185,7 @@ func TestReviewerGuidelinesPath_AC002(t *testing.T) {
 	reviewerPath := filepath.Join(repoRoot, ".golemic", "guidelines", "reviewer.md")
 	userPrompt, err := prompt.RenderReviewer(
 		99,
-		prompt.Issue{Number: 1, Title: "t", Body: "b"},
+		prompt.Issue{Number: 1, Title: "t"},
 		"go test",
 		reviewerPath,
 	)
@@ -1208,7 +1208,7 @@ func TestRunDevAgent_MissingGuidelines_AC003(t *testing.T) {
 	r := New(nil, homeDir, repoRoot, 42)
 	r.repoRoot = repoRoot
 	r.project = project
-	r.issue = &issueData{Number: 42, Title: "t", Body: "b"}
+	r.issue = &issueData{Number: 42, Title: "t"}
 	r.cfg = &config.Config{VerifyCommand: "go test"}
 	r.branchName = "golemic-dev-42"
 
@@ -1256,7 +1256,7 @@ func setupDevRunner(t *testing.T) (r *Runner, golemicDir string, stderr *bytes.B
 	runner.project = project
 	runner.creds = creds
 	runner.runID = "issue-42-20240101T000000Z"
-	runner.issue = &issueData{Number: 42, Title: "t", Body: "b"}
+	runner.issue = &issueData{Number: 42, Title: "t"}
 	runner.cfg = &config.Config{VerifyCommand: "go test", Models: config.Models{Dev: "claude-3-5-sonnet-20241022"}}
 	runner.branchName = "golemic-dev-42"
 

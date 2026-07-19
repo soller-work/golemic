@@ -35,7 +35,6 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		prompt.Issue{
 			Number: r.issue.Number,
 			Title:  r.issue.Title,
-			Body:   r.issue.Body,
 		},
 		r.cfg.VerifyCommand,
 		filepath.Join(r.repoRoot, ".golemic", "guidelines", "reviewer.md"),
