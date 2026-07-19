@@ -211,7 +211,7 @@ func (r *Runner) deleteRemoteBranch(branchName string) {
 	}
 }
 
-// runMergePhase implements PS-001 through PS-005 (gate → rebase → verify → merge → finalize).
+// runMergePhase implements PS-001 through PS-006 (gate → fetch → freshness → CI gate / rebase → merge).
 // It is called by orchestrate() after the verdict is confirmed as "approved".
 // Returns outcomeSuccess (merged or skipped) or outcomeMergeFailed.
 func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string) string { //nolint:cyclop
@@ -234,20 +234,47 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 
 	devWT := r.devWorktreePath()
 
-	// PS-002: Freshness check and rebase (BR-003)
+	// PS-002: Fetch origin so isBranchUpToDate compares against a current ref (BR-001, BR-004)
+	if _, err := r.executor.RunInDir(devWT, "git", "fetch", "origin"); err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("git fetch origin failed: %v", err))
+	}
+
+	// PS-003: Freshness check
 	upToDate, err := r.isBranchUpToDate(devWT)
 	if err != nil {
 		return r.failMerge(writer, prNumber, fmt.Sprintf("freshness check failed: %v", err))
 	}
 	if upToDate {
-		return r.doSquashMerge(writer, prNumber)
+		// PS-004: CI gate on up-to-date branch (BR-002, BR-003)
+		return r.mergeIfCIGreen(writer, prNumber)
 	}
 	if err := r.rebaseBranch(devWT); err != nil {
 		return r.failMerge(writer, prNumber, err.Error()) // BR-005
 	}
 
-	// PS-003: Post-rebase verification and push (BR-004)
+	// PS-006: Post-rebase verification and push (BR-005)
 	return r.verifyAndPush(writer, prNumber, devWT)
+}
+
+// mergeIfCIGreen runs the CI gate on an up-to-date branch (PS-004).
+// doSquashMerge is only called when pollCIChecks returns green (BR-002).
+// no_checks is treated as merge_failed rather than falling back to a local verify_command (BR-003).
+func (r *Runner) mergeIfCIGreen(writer worktree.EventWriter, prNumber int) string {
+	result, failedChecks, err := r.pollCIChecks(prNumber, r.ciTimeout())
+	if err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("CI check query failed: %v", err))
+	}
+	switch result {
+	case "green":
+		return r.doSquashMerge(writer, prNumber)
+	case "no_checks":
+		return r.failMerge(writer, prNumber, "required check not reported for PR head")
+	default:
+		if len(failedChecks) > 0 {
+			return r.failMerge(writer, prNumber, r.ciFailReason(result, failedChecks))
+		}
+		return r.failMerge(writer, prNumber, fmt.Sprintf("CI checks %s on up-to-date branch", result))
+	}
 }
 
 // verifyAndPush handles PS-003: verify the rebased branch and push.
