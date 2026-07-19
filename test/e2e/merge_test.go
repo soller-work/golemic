@@ -1,3 +1,5 @@
+//go:build e2e
+
 // Package e2e — merge phase harness tests.
 //
 // These tests exercise the auto-merge gate, skip path, and rebase-conflict

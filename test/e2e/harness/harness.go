@@ -1,3 +1,5 @@
+//go:build e2e
+
 // Package harness provides the test harness for spawning and managing
 // golemic subprocesses in E2E tests.
 //

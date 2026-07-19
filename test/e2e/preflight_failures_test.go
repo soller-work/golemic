@@ -1,3 +1,5 @@
+//go:build e2e
+
 package e2e
 
 // AC→test mapping (spec 003_e2e-test-preflight-failures):

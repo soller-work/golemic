@@ -1,3 +1,5 @@
+//go:build e2e
+
 // Package e2e contains end-to-end tests that exercise the full golemic
 // orchestration loop against real GitHub infrastructure.
 package e2e
