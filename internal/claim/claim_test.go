@@ -263,3 +263,172 @@ func (e *captureEnvExecutor) RunInDir(_ string, _ string, _ ...string) (string, 
 func (e *captureEnvExecutor) RunWithEnvInDir(_ map[string]string, _ string, _ string, _ ...string) (string, error) {
 	return "", nil
 }
+
+// ---------------------------------------------------------------------------
+// Release tests
+// ---------------------------------------------------------------------------
+
+// Unit: Release happy path reason=done — pre-read + edit, no extra label.
+func TestRelease_HappyPath_Done(t *testing.T) {
+	view := issueViewJSON([]string{"in-progress"}, []string{testDevLogin})
+
+	var capturedEditArgs []string
+	exec := &scriptedExecutor{t: t, calls: []scriptedCall{
+		{result: view}, // pre-read
+		{result: ""},   // edit
+	}}
+	captureExec := &captureArgsExecutor{
+		inner:     exec,
+		captured:  &capturedEditArgs,
+		captureAt: 1,
+	}
+
+	result, err := Release(captureExec, testNumber, testDevLogin, testDevToken, "done")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != ReleaseResultOK {
+		t.Errorf("result: got %v, want ReleaseResultOK", result)
+	}
+	if exec.idx != 2 {
+		t.Errorf("expected 2 calls (pre-read+edit), got %d", exec.idx)
+	}
+	for _, a := range capturedEditArgs {
+		if a == "needs-human" || a == "ready-for-agent" {
+			t.Errorf("reason=done must not add label %q", a)
+		}
+	}
+}
+
+// Unit: Release happy path reason=failed — edit adds needs-human.
+func TestRelease_HappyPath_Failed(t *testing.T) {
+	view := issueViewJSON([]string{"in-progress"}, []string{testDevLogin})
+
+	var capturedEditArgs []string
+	exec := &scriptedExecutor{t: t, calls: []scriptedCall{
+		{result: view},
+		{result: ""},
+	}}
+	captureExec := &captureArgsExecutor{inner: exec, captured: &capturedEditArgs, captureAt: 1}
+
+	result, err := Release(captureExec, testNumber, testDevLogin, testDevToken, "failed")
+	if err != nil || result != ReleaseResultOK {
+		t.Fatalf("unexpected: result=%v err=%v", result, err)
+	}
+	if !containsSeq(capturedEditArgs, "--add-label", "needs-human") {
+		t.Errorf("reason=failed must add --add-label needs-human; got: %v", capturedEditArgs)
+	}
+}
+
+// Unit: Release happy path reason=abandoned — edit adds ready-for-agent.
+func TestRelease_HappyPath_Abandoned(t *testing.T) {
+	view := issueViewJSON([]string{"in-progress"}, []string{testDevLogin})
+
+	var capturedEditArgs []string
+	exec := &scriptedExecutor{t: t, calls: []scriptedCall{
+		{result: view},
+		{result: ""},
+	}}
+	captureExec := &captureArgsExecutor{inner: exec, captured: &capturedEditArgs, captureAt: 1}
+
+	result, err := Release(captureExec, testNumber, testDevLogin, testDevToken, "abandoned")
+	if err != nil || result != ReleaseResultOK {
+		t.Fatalf("unexpected: result=%v err=%v", result, err)
+	}
+	if !containsSeq(capturedEditArgs, "--add-label", "ready-for-agent") {
+		t.Errorf("reason=abandoned must add --add-label ready-for-agent; got: %v", capturedEditArgs)
+	}
+}
+
+// Unit: Release idempotent — in-progress absent, no edit call.
+func TestRelease_Idempotent(t *testing.T) {
+	view := issueViewJSON(nil, nil)
+
+	exec := &scriptedExecutor{t: t, calls: []scriptedCall{
+		{result: view},
+	}}
+
+	result, err := Release(exec, testNumber, testDevLogin, testDevToken, "done")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != ReleaseResultIdempotent {
+		t.Errorf("result: got %v, want ReleaseResultIdempotent", result)
+	}
+	if exec.idx != 1 {
+		t.Errorf("expected 1 call (pre-read only), got %d", exec.idx)
+	}
+}
+
+// Unit: Release on foreign-owned issue — ReleaseResultForeignClaim, no edit.
+func TestRelease_ForeignClaim(t *testing.T) {
+	view := issueViewJSON([]string{"in-progress"}, []string{"other-bot"})
+
+	exec := &scriptedExecutor{t: t, calls: []scriptedCall{
+		{result: view},
+	}}
+
+	result, err := Release(exec, testNumber, testDevLogin, testDevToken, "done")
+	if result != ReleaseResultForeignClaim {
+		t.Errorf("result: got %v, want ReleaseResultForeignClaim", result)
+	}
+	if err == nil || !strings.Contains(err.Error(), "issue #42 is claimed by") {
+		t.Errorf("expected error containing 'issue #42 is claimed by', got %v", err)
+	}
+	if exec.idx != 1 {
+		t.Errorf("expected 1 call (pre-read only), got %d", exec.idx)
+	}
+}
+
+// Unit: Release edit failure returns ReleaseResultError.
+func TestRelease_EditFails(t *testing.T) {
+	view := issueViewJSON([]string{"in-progress"}, []string{testDevLogin})
+
+	exec := &scriptedExecutor{t: t, calls: []scriptedCall{
+		{result: view},
+		{err: fmt.Errorf("gh: HTTP 422")},
+	}}
+
+	result, err := Release(exec, testNumber, testDevLogin, testDevToken, "done")
+	if result != ReleaseResultError {
+		t.Errorf("result: got %v, want ReleaseResultError", result)
+	}
+	if err == nil || !strings.Contains(err.Error(), "gh issue edit") {
+		t.Errorf("expected error containing 'gh issue edit', got %v", err)
+	}
+}
+
+// captureArgsExecutor wraps a scriptedExecutor and records full args for one specific call index.
+type captureArgsExecutor struct {
+	inner     *scriptedExecutor
+	captured  *[]string
+	captureAt int
+	callIdx   int
+}
+
+func (e *captureArgsExecutor) RunWithEnv(env map[string]string, name string, args ...string) (string, error) {
+	if e.callIdx == e.captureAt {
+		*e.captured = append([]string{name}, args...)
+	}
+	e.callIdx++
+	return e.inner.RunWithEnv(env, name, args...)
+}
+func (e *captureArgsExecutor) Run(name string, args ...string) (string, error) {
+	return e.inner.Run(name, args...)
+}
+func (e *captureArgsExecutor) RunInDir(dir string, name string, args ...string) (string, error) {
+	return e.inner.RunInDir(dir, name, args...)
+}
+func (e *captureArgsExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
+	return e.inner.RunWithEnvInDir(env, dir, name, args...)
+}
+
+// containsSeq returns true if slice contains two consecutive elements a, b.
+func containsSeq(ss []string, a, b string) bool {
+	for i := 0; i+1 < len(ss); i++ {
+		if ss[i] == a && ss[i+1] == b {
+			return true
+		}
+	}
+	return false
+}

@@ -33,6 +33,7 @@ const (
 	EventAutomergeSkipped = "automerge_skipped"
 	EventAutomergeFailed  = "automerge_failed"
 	EventIssueClaimed     = "issue_claimed"
+	EventIssueReleased    = "issue_released"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -50,6 +51,7 @@ func AllEventTypes() []string {
 		EventAutomergeSkipped,
 		EventAutomergeFailed,
 		EventIssueClaimed,
+		EventIssueReleased,
 	}
 }
 
@@ -105,6 +107,38 @@ func ValidateIssueClaimedPayload(raw json.RawMessage) error {
 // MarshalIssueClaimedPayload encodes an issue_claimed payload.
 func MarshalIssueClaimedPayload(issueNumber int, verifyResult string) (json.RawMessage, error) {
 	return json.Marshal(issueClaimedData{IssueNumber: issueNumber, VerifyResult: verifyResult})
+}
+
+// issueReleasedData is the payload shape for issue_released events.
+type issueReleasedData struct {
+	IssueNumber int    `json:"issue_number"`
+	Reason      string `json:"reason"`
+}
+
+// ValidateIssueReleasedPayload checks that the payload has a non-zero issue_number
+// and a reason in {done, failed, abandoned}.
+func ValidateIssueReleasedPayload(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("issue_released payload is empty")
+	}
+	var d issueReleasedData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return fmt.Errorf("issue_released payload: invalid JSON: %w", err)
+	}
+	if d.IssueNumber <= 0 {
+		return fmt.Errorf("issue_released payload: issue_number is required")
+	}
+	switch d.Reason {
+	case "done", "failed", "abandoned":
+		return nil
+	default:
+		return fmt.Errorf("issue_released payload: reason must be one of done, failed, abandoned, got %q", d.Reason)
+	}
+}
+
+// MarshalIssueReleasedPayload encodes an issue_released payload.
+func MarshalIssueReleasedPayload(issueNumber int, reason string) (json.RawMessage, error) {
+	return json.Marshal(issueReleasedData{IssueNumber: issueNumber, Reason: reason})
 }
 
 // agentCompletedData is the payload shape for agent_completed events.
@@ -215,7 +249,7 @@ func NewWriter(path string) (*Writer, error) {
 
 // Write appends one event to the log. It validates event payload constraints
 // (e.g. review_submitted verdict) before writing.
-func (w *Writer) Write(event Event) error {
+func (w *Writer) Write(event Event) error { //nolint:cyclop
 	// Validate payload for pr_opened.
 	if event.Type == EventPROpened {
 		if err := ValidatePROpenedPayload(event.Payload); err != nil {
@@ -237,6 +271,12 @@ func (w *Writer) Write(event Event) error {
 	// Validate payload for issue_claimed.
 	if event.Type == EventIssueClaimed {
 		if err := ValidateIssueClaimedPayload(event.Payload); err != nil {
+			return err
+		}
+	}
+	// Validate payload for issue_released.
+	if event.Type == EventIssueReleased {
+		if err := ValidateIssueReleasedPayload(event.Payload); err != nil {
 			return err
 		}
 	}
