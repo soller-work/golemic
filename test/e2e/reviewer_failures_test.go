@@ -305,6 +305,10 @@ if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then
   printf '[]'
   exit 0
 fi
+if [ "$1" = "label" ] && [ "$2" = "list" ]; then
+  printf '[{"name":"in-progress"},{"name":"needs-human"}]'
+  exit 0
+fi
 if [ "$1" = "pr" ] && [ "$2" = "review" ]; then
   case "${RFAIL_MODE}" in
     token_invalid)

@@ -46,7 +46,7 @@ func TestRunPreflight(t *testing.T) { //nolint:cyclop,funlen,gocognit // moved v
 					return "", fmt.Errorf("unknown: %s", name)
 				},
 				runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-					if name == "gh" && len(args) >= 1 && args[0] == "api" && args[1] == "user" {
+					if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "user" {
 						token := env["GH_TOKEN"]
 						if strings.Contains(token, "dev") {
 							return `{"login":"dev-bot"}`, nil
@@ -55,6 +55,9 @@ func TestRunPreflight(t *testing.T) { //nolint:cyclop,funlen,gocognit // moved v
 							return `{"login":"reviewer-bot"}`, nil
 						}
 						return `{"login":"unknown"}`, nil
+					}
+					if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "list" {
+						return `[{"name":"in-progress"},{"name":"needs-human"}]`, nil
 					}
 					return "", fmt.Errorf("not mocked")
 				},
@@ -66,6 +69,7 @@ func TestRunPreflight(t *testing.T) { //nolint:cyclop,funlen,gocognit // moved v
 				"OK: .golemic/ Scaffolding\n" +
 				"OK: config.json valide\n" +
 				"OK: Credentials\n" +
+				"OK: labels\n" +
 				"ok\n",
 		},
 		{
