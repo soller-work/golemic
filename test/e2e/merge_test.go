@@ -361,7 +361,7 @@ case "$PWD" in
   *-review)
     # ---- Reviewer role: approve with high confidence ----
     # Append review_submitted event directly so the runner merge phase fires.
-    printf '{"type":"review_submitted","ts":"2024-01-01T00:00:00Z","runId":"%s","payload":{"verdict":"approved","mergeConfidence":"high","body":"LGTM"}}\n' \
+    printf '{"type":"review_submitted","ts":"2024-01-01T00:00:00Z","runId":"%s","payload":{"verdict":"approved","mergeConfidence":"high","body":"LGTM","reviewId":"R_e2e_test","inlineCommentCount":0}}\n' \
       "${GOLEMIC_RUN_ID}" >> "${GOLEMIC_EVENT_LOG}"
     exit 0
     ;;

@@ -51,7 +51,8 @@ func writeReviewEvent(t *testing.T, logPath, verdict, body string) {
 	}
 	defer w.Close() //nolint:errcheck
 
-	payload, _ := json.Marshal(map[string]string{"verdict": verdict, "body": body, "mergeConfidence": "high"})
+	count := 0
+	payload, _ := json.Marshal(map[string]interface{}{"verdict": verdict, "body": body, "mergeConfidence": "high", "reviewId": "R_test_01", "inlineCommentCount": &count})
 	if err := w.Write(eventlog.Event{
 		Type:    eventlog.EventReviewSubmitted,
 		Ts:      time.Now().Format(time.RFC3339),

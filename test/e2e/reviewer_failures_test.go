@@ -49,14 +49,14 @@ func TestReviewerFailure(t *testing.T) {
 			rfailMode: "verify_fails",
 		},
 		{
-			// AC-002 / BR-001: reviewer token invalid → gh pr review returns auth
-			// error; pi exits 1; no review_submitted event, exit 1, review_failed.
+			// AC-002 / BR-001: reviewer token invalid → GraphQL auth error;
+			// pi exits 1; no review_submitted event, exit 1, review_failed.
 			name:      "token_invalid",
 			rfailMode: "token_invalid",
 		},
 		{
-			// AC-003 / BR-001: GitHub API error during review submission → gh pr
-			// review returns server error; pi exits 1; no review_submitted event,
+			// AC-003 / BR-001: GitHub API error during review submission →
+			// GraphQL returns server error; pi exits 1; no review_submitted event,
 			// exit 1, review_failed.
 			name:      "review_submission_fails",
 			rfailMode: "submission_fails",
@@ -284,7 +284,7 @@ exec "$REAL_GIT" "$@"
 //   - gh --version           → version string (preflight)
 //   - gh issue view N …      → minimal JSON issue (runner issue load)
 //   - gh pr list --head …    → empty JSON array (collision check)
-//   - gh pr review …         → always fails (simulates API/auth error for
+//   - gh api graphql …       → always fails (simulates API/auth error for
 //     token_invalid and submission_fails modes; never called for verify_fails)
 func rfWriteGhShim(t *testing.T, binDir string) {
 	t.Helper()
@@ -309,7 +309,7 @@ if [ "$1" = "label" ] && [ "$2" = "list" ]; then
   printf '[{"name":"in-progress"},{"name":"needs-human"}]'
   exit 0
 fi
-if [ "$1" = "pr" ] && [ "$2" = "review" ]; then
+if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then
   case "${RFAIL_MODE}" in
     token_invalid)
       printf "error: HTTP 401: Credentials missing or invalid.\n" >&2
@@ -340,8 +340,8 @@ exit 1
 //
 // Reviewer role (fails based on RFAIL_MODE):
 //   - "verify_fails":    exits 1 immediately (verify_command check failed).
-//   - "token_invalid":   calls `gh pr review` → gh shim returns 401 → exits 1.
-//   - "submission_fails": calls `gh pr review` → gh shim returns 500 → exits 1.
+//   - "token_invalid":   calls `gh api graphql` → gh shim returns 401 → exits 1.
+//   - "submission_fails": calls `gh api graphql` → gh shim returns 500 → exits 1.
 //
 // Uses only POSIX shell built-ins (no sed/awk/grep/jq); RFAIL_MODE is inherited
 // from the golemic process environment via agent.RunRole's os.Environ() pass-through.
@@ -366,13 +366,13 @@ case "$PWD" in
         exit 1
         ;;
       token_invalid)
-        # AC-002 / BR-001: token invalid → gh pr review returns HTTP 401.
-        gh pr review 42 --approve --body "lgtm" 2>&1 || true
+        # AC-002 / BR-001: token invalid → GraphQL auth error (gh shim returns 401).
+        gh api graphql -f query='mutation{__typename}' 2>&1 || true
         exit 1
         ;;
       submission_fails)
-        # AC-003 / BR-001: GitHub API error → gh pr review returns HTTP 500.
-        gh pr review 42 --approve --body "lgtm" 2>&1 || true
+        # AC-003 / BR-001: GitHub API error → GraphQL fails (gh shim returns 500).
+        gh api graphql -f query='mutation{__typename}' 2>&1 || true
         exit 1
         ;;
       *)

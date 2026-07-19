@@ -61,7 +61,8 @@ var knownCommands = []struct {
 	{"run", "Run the main process (golemic run --issue N)"},
 	{"emit", "Emit an event to the run log"},
 	{"open-pr", "Open a pull request"},
-	{"submit-review", "Submit a review"},
+	{"submit-review", "Submit a review via GraphQL pending-review flow"},
+	{"review-comment", "Add an inline review comment to the pending review via GraphQL"},
 	{"status", "Show run health status"},
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
 	{"slice", "Print the authoritative task spec for an issue (golemic slice --issue N)"},
@@ -135,6 +136,10 @@ func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit
 
 	if command == "submit-review" {
 		return runSubmitReview(args, stdout, stderr, os.Getenv, osExecutor{})
+	}
+
+	if command == "review-comment" {
+		return runReviewComment(args, stdout, stderr, os.Getenv, osExecutor{})
 	}
 
 	if command == "status" {
@@ -549,10 +554,228 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	return 0
 }
 
+// ---------------------------------------------------------------------------
+// GraphQL helpers shared by submit-review and review-comment
+// ---------------------------------------------------------------------------
+
+// GitHub GraphQL mutations and queries used by the review flow.
+const (
+	discoverReviewQuery = `query($owner:String!,$repo:String!,$prNumber:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$prNumber){id,reviews(first:1,states:[PENDING]){nodes{id,comments{totalCount}}}}}}` //nolint:lll
+	createReviewMutation  = `mutation($pullRequestId:ID!){addPullRequestReview(input:{pullRequestId:$pullRequestId}){pullRequestReview{id}}}`
+	submitReviewMutation  = `mutation($reviewId:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$reviewId,event:$event,body:$body}){pullRequestReview{id,state}}}` //nolint:lll
+	addThreadMutation     = `mutation($reviewId:ID!,$path:String!,$line:Int!,$side:DiffSide!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$reviewId,path:$path,line:$line,side:$side,body:$body}){thread{id}}}` //nolint:lll
+)
+
+// pendingReviewInfo holds the result of discovering or creating a pending review.
+type pendingReviewInfo struct {
+	reviewID     string
+	commentCount int
+}
+
+// repoOwnerName returns the GitHub owner login and repository name for the current repo.
+func repoOwnerName(executor preflight.Executor) (owner, name string, err error) {
+	out, err := executor.RunWithEnv(nil, "gh", "repo", "view", "--json", "owner,name")
+	if err != nil {
+		return "", "", fmt.Errorf("get repo info: %w", err)
+	}
+	var v struct {
+		Owner struct{ Login string `json:"login"` } `json:"owner"`
+		Name  string `json:"name"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &v); jsonErr != nil {
+		return "", "", fmt.Errorf("parse repo info: %w", jsonErr)
+	}
+	if v.Owner.Login == "" || v.Name == "" {
+		return "", "", fmt.Errorf("repo info: missing owner or name")
+	}
+	return v.Owner.Login, v.Name, nil
+}
+
+// discoverOrCreatePendingReview returns the viewer's pending review on the PR,
+// creating one via addPullRequestReview if none exists (BR-007, IC-001, IC-003).
+func discoverOrCreatePendingReview(executor preflight.Executor, owner, repoName string, prNumber int) (pendingReviewInfo, error) { //nolint:funlen
+	out, err := executor.RunWithEnv(nil, "gh", "api", "graphql",
+		"-f", "query="+discoverReviewQuery,
+		"-f", "owner="+owner,
+		"-f", "repo="+repoName,
+		"-F", "prNumber="+strconv.Itoa(prNumber),
+	)
+	if err != nil {
+		return pendingReviewInfo{}, fmt.Errorf("discover pending review: %w", err)
+	}
+
+	var discoverResp struct {
+		Data struct {
+			Repository struct {
+				PullRequest struct {
+					ID      string `json:"id"`
+					Reviews struct {
+						Nodes []struct {
+							ID       string `json:"id"`
+							Comments struct {
+								TotalCount int `json:"totalCount"`
+							} `json:"comments"`
+						} `json:"nodes"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if jsonErr := json.Unmarshal([]byte(out), &discoverResp); jsonErr != nil {
+		return pendingReviewInfo{}, fmt.Errorf("parse discover response: %w", jsonErr)
+	}
+
+	pr := discoverResp.Data.Repository.PullRequest
+	if len(pr.Reviews.Nodes) > 0 {
+		node := pr.Reviews.Nodes[0]
+		return pendingReviewInfo{reviewID: node.ID, commentCount: node.Comments.TotalCount}, nil
+	}
+
+	// No pending review found; create one (IC-001).
+	createOut, createErr := executor.RunWithEnv(nil, "gh", "api", "graphql",
+		"-f", "query="+createReviewMutation,
+		"-f", "pullRequestId="+pr.ID,
+	)
+	if createErr != nil {
+		return pendingReviewInfo{}, fmt.Errorf("create pending review: %w", createErr)
+	}
+
+	var createResp struct {
+		Data struct {
+			AddPullRequestReview struct {
+				PullRequestReview struct {
+					ID string `json:"id"`
+				} `json:"pullRequestReview"`
+			} `json:"addPullRequestReview"`
+		} `json:"data"`
+	}
+	if jsonErr := json.Unmarshal([]byte(createOut), &createResp); jsonErr != nil {
+		return pendingReviewInfo{}, fmt.Errorf("parse create response: %w", jsonErr)
+	}
+
+	reviewID := createResp.Data.AddPullRequestReview.PullRequestReview.ID
+	if reviewID == "" {
+		return pendingReviewInfo{}, fmt.Errorf("create pending review: empty review ID in response")
+	}
+	return pendingReviewInfo{reviewID: reviewID, commentCount: 0}, nil
+}
+
+// addReviewThread adds one inline review thread to the given pending review (IC-002).
+func addReviewThread(executor preflight.Executor, reviewID, path string, line int, side, body string) error {
+	_, err := executor.RunWithEnv(nil, "gh", "api", "graphql",
+		"-f", "query="+addThreadMutation,
+		"-f", "reviewId="+reviewID,
+		"-f", "path="+path,
+		"-F", "line="+strconv.Itoa(line),
+		"-f", "side="+side,
+		"-f", "body="+body,
+	)
+	return err
+}
+
+// isAnchorError returns true when the error text indicates the line/path/side is not in the diff.
+func isAnchorError(errText string) bool {
+	lower := strings.ToLower(errText)
+	return strings.Contains(lower, "not part of the diff") ||
+		strings.Contains(lower, "line must be part") ||
+		strings.Contains(lower, "invalid side")
+}
+
+// runReviewComment executes the review-comment subcommand:
+// golemic review-comment --pr <n> --path <p> --line <l> --body <b> [--side RIGHT|LEFT] [--start-line <s>]
+// Adds one inline review thread to the viewer's pending review via GraphQL addPullRequestReviewThread.
+// Exit 2 on anchor failure (ANCHOR_FAILED on stderr); exit 1 on other errors.
+func runReviewComment(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int { //nolint:cyclop,funlen
+	fs := flag.NewFlagSet("review-comment", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var prFlag, lineFlag, startLineFlag int
+	var pathFlag, bodyFlag, sideFlag string
+	fs.IntVar(&prFlag, "pr", 0, "PR number (required)")
+	fs.StringVar(&pathFlag, "path", "", "Repo-relative file path (required)")
+	fs.IntVar(&lineFlag, "line", 0, "Line number on the given side (required)")
+	fs.IntVar(&startLineFlag, "start-line", 0, "Start line for multi-line comment (contract completeness; out of scope for reviewer prompt in this slice)")
+	fs.StringVar(&sideFlag, "side", "RIGHT", "Diff side: RIGHT or LEFT (default RIGHT)")
+	fs.StringVar(&bodyFlag, "body", "", "Comment body (required)")
+
+	if err := fs.Parse(args[2:]); err != nil {
+		return 1
+	}
+
+	_ = startLineFlag // multi-line comments are out of scope per the slice spec
+	_ = stdout        // review-comment writes no stdout on success
+
+	// BR-004: fail-fast on missing env vars (no gh call).
+	runID := getenv("GOLEMIC_RUN_ID")
+	eventLogPath := getenv("GOLEMIC_EVENT_LOG")
+	if runID == "" || eventLogPath == "" {
+		var missing []string
+		if runID == "" {
+			missing = append(missing, "GOLEMIC_RUN_ID")
+		}
+		if eventLogPath == "" {
+			missing = append(missing, "GOLEMIC_EVENT_LOG")
+		}
+		fmt.Fprintf(stderr, "Missing required environment variable: %s\n", strings.Join(missing, ", ")) //nolint:errcheck
+		return 1
+	}
+
+	// Validate flags.
+	if prFlag <= 0 {
+		fmt.Fprintln(stderr, "--pr must be a positive integer") //nolint:errcheck
+		return 1
+	}
+	if pathFlag == "" {
+		fmt.Fprintln(stderr, "--path must not be empty") //nolint:errcheck
+		return 1
+	}
+	if lineFlag <= 0 {
+		fmt.Fprintln(stderr, "--line must be a positive integer") //nolint:errcheck
+		return 1
+	}
+	if bodyFlag == "" {
+		fmt.Fprintln(stderr, "--body must not be empty") //nolint:errcheck
+		return 1
+	}
+	if sideFlag != "RIGHT" && sideFlag != "LEFT" {
+		fmt.Fprintf(stderr, "Invalid --side: must be RIGHT or LEFT, got %q\n", sideFlag) //nolint:errcheck
+		return 1
+	}
+
+	// Get repo context (owner/name) for the GraphQL query.
+	owner, repoName, err := repoOwnerName(executor)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to add review comment: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	// Discover or create pending review (BR-007).
+	info, err := discoverOrCreatePendingReview(executor, owner, repoName, prFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to add review comment: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	// Add inline review thread (IC-002).
+	if threadErr := addReviewThread(executor, info.reviewID, pathFlag, lineFlag, sideFlag, bodyFlag); threadErr != nil {
+		var ee *preflight.ErrExit
+		if errors.As(threadErr, &ee) && isAnchorError(ee.Stderr) {
+			// BR-002: anchor failure → exit 2 + ANCHOR_FAILED on stderr.
+			fmt.Fprintf(stderr, "ANCHOR_FAILED: path=%s line=%d side=%s reason=%s\n", //nolint:errcheck
+				pathFlag, lineFlag, sideFlag, strings.TrimSpace(ee.Stderr))
+			return 2
+		}
+		fmt.Fprintf(stderr, "Failed to add review comment: %v\n", threadErr) //nolint:errcheck
+		return 1
+	}
+
+	return 0
+}
+
 // runSubmitReview executes the submit-review subcommand:
-// golemic submit-review --verdict approved|changes_requested --body <text> --pr <n>
-// It validates env var context and verdict (fail-fast), submits a review via gh pr review,
-// and writes a review_submitted event atomically (only on gh success).
+// golemic submit-review --verdict approved|changes_requested --body <text> --pr <n> --merge-confidence high|low
+// Uses the GraphQL pending-review flow: discover-or-create pending review, submitPullRequestReview.
+// Writes a review_submitted event atomically (only on GraphQL success).
 func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int { //nolint:gocognit,cyclop,funlen
 	fs := flag.NewFlagSet("submit-review", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -614,16 +837,6 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 1
 	}
 
-	// BR-002, BR-003, IC-001: Call gh pr review with appropriate flags.
-	var ghArgs []string
-	ghArgs = append(ghArgs, "pr", "review", strconv.Itoa(prFlag))
-
-	if verdictFlag == "approved" {
-		ghArgs = append(ghArgs, "--approve", "--body", bodyFlag)
-	} else { // verdictFlag == "changes_requested"
-		ghArgs = append(ghArgs, "--request-changes", "--body", bodyFlag)
-	}
-
 	// Validate event log path is writable BEFORE calling gh (atomic coupling: fail-closed).
 	writer, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
@@ -643,27 +856,70 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 0
 	}
 
-	_, err = executor.RunWithEnv(
-		nil, // no additional env vars; GH_TOKEN comes from process
-		"gh", ghArgs...,
-	)
+	// BR-001: Get repo context for GraphQL queries.
+	owner, repoName, err := repoOwnerName(executor)
 	if err != nil {
+		fmt.Fprintf(stderr, "Failed to submit review: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	// BR-007: Discover or create pending review (IC-001 + IC-003).
+	info, err := discoverOrCreatePendingReview(executor, owner, repoName, prFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to submit review: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	// BR-001: Submit the pending review via GraphQL (IC-004).
+	ghEvent := "APPROVE"
+	if verdictFlag == "changes_requested" {
+		ghEvent = "REQUEST_CHANGES"
+	}
+
+	submitOut, submitErr := executor.RunWithEnv(nil, "gh", "api", "graphql",
+		"-f", "query="+submitReviewMutation,
+		"-f", "reviewId="+info.reviewID,
+		"-f", "event="+ghEvent,
+		"-f", "body="+bodyFlag,
+	)
+	if submitErr != nil {
 		var ee *preflight.ErrExit
-		if errors.As(err, &ee) {
+		if errors.As(submitErr, &ee) {
 			fmt.Fprintf(stderr, "Failed to submit review: %s\n", strings.TrimSpace(ee.Stderr)) //nolint:errcheck
 		} else {
-			fmt.Fprintf(stderr, "Failed to submit review: %v\n", err) //nolint:errcheck
+			fmt.Fprintf(stderr, "Failed to submit review: %v\n", submitErr) //nolint:errcheck
 		}
 		return 1
 	}
 
-	// Write review_submitted event (only reached if gh succeeds).
+	// Parse reviewId from submit response (BR-006).
+	var submitResp struct {
+		Data struct {
+			SubmitPullRequestReview struct {
+				PullRequestReview struct {
+					ID string `json:"id"`
+				} `json:"pullRequestReview"`
+			} `json:"submitPullRequestReview"`
+		} `json:"data"`
+	}
+	if jsonErr := json.Unmarshal([]byte(submitOut), &submitResp); jsonErr != nil {
+		fmt.Fprintf(stderr, "Failed to submit review: parse response: %v\n", jsonErr) //nolint:errcheck
+		return 1
+	}
+	reviewID := submitResp.Data.SubmitPullRequestReview.PullRequestReview.ID
+	if reviewID == "" {
+		fmt.Fprintln(stderr, "Failed to submit review: empty reviewId in response") //nolint:errcheck
+		return 1
+	}
 
+	// Write review_submitted event (only reached if GraphQL succeeds). SC-003.
 	payload := map[string]interface{}{
-		"verdict":         verdictFlag,
-		"body":            bodyFlag,
-		"prNumber":        prFlag,
-		"mergeConfidence": mergeConfidenceFlag,
+		"verdict":            verdictFlag,
+		"body":               bodyFlag,
+		"prNumber":           prFlag,
+		"mergeConfidence":    mergeConfidenceFlag,
+		"reviewId":           reviewID,
+		"inlineCommentCount": info.commentCount,
 	}
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -684,9 +940,8 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 1
 	}
 
-	// Mirror confidence as PR label (SC-001). Label is created on demand; the event
-	// payload is the authoritative source so a label failure is reported but not fatal
-	// to the merge decision.
+	// Mirror confidence as PR label. Label is created on demand; the event
+	// payload is the authoritative source so a label failure is reported but not fatal.
 	confidenceLabel := "confidence:" + mergeConfidenceFlag
 	// Ignore error: label may already exist.
 	_, _ = executor.RunWithEnv(nil, "gh", "label", "create", confidenceLabel, "--color", "0075ca", "--description", "merge confidence")

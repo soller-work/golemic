@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +31,8 @@ func testEvent(t *testing.T, typ, runID, ts string, payload interface{}) Event {
 }
 
 func testPayload(verdict string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"verdict": verdict, "mergeConfidence": "high"})
+	count := 0
+	b, _ := json.Marshal(map[string]interface{}{"verdict": verdict, "mergeConfidence": "high", "reviewId": "R_test_01", "inlineCommentCount": &count})
 	return b
 }
 
@@ -304,6 +306,45 @@ func TestValidateReviewSubmitted_EmptyPayload(t *testing.T) {
 	}
 }
 
+// AC-008: ValidateReviewSubmittedPayload enforces reviewId and inlineCommentCount.
+
+func TestValidateReviewSubmitted_MissingReviewID(t *testing.T) {
+	count := 0
+	raw, _ := json.Marshal(map[string]interface{}{"verdict": "approved", "mergeConfidence": "high", "inlineCommentCount": &count})
+	if err := ValidateReviewSubmittedPayload(raw); err == nil {
+		t.Error("expected error for missing reviewId, got nil")
+	} else if !strings.Contains(err.Error(), "reviewId") {
+		t.Errorf("error should mention reviewId, got: %v", err)
+	}
+}
+
+func TestValidateReviewSubmitted_EmptyReviewID(t *testing.T) {
+	count := 0
+	raw, _ := json.Marshal(map[string]interface{}{"verdict": "approved", "mergeConfidence": "high", "reviewId": "", "inlineCommentCount": &count})
+	if err := ValidateReviewSubmittedPayload(raw); err == nil {
+		t.Error("expected error for empty reviewId, got nil")
+	} else if !strings.Contains(err.Error(), "reviewId") {
+		t.Errorf("error should mention reviewId, got: %v", err)
+	}
+}
+
+func TestValidateReviewSubmitted_MissingInlineCommentCount(t *testing.T) {
+	raw, _ := json.Marshal(map[string]string{"verdict": "approved", "mergeConfidence": "high", "reviewId": "R_abc123"})
+	if err := ValidateReviewSubmittedPayload(raw); err == nil {
+		t.Error("expected error for missing inlineCommentCount, got nil")
+	} else if !strings.Contains(err.Error(), "inlineCommentCount") {
+		t.Errorf("error should mention inlineCommentCount, got: %v", err)
+	}
+}
+
+func TestValidateReviewSubmitted_ZeroInlineCommentCountIsValid(t *testing.T) {
+	count := 0
+	raw, _ := json.Marshal(map[string]interface{}{"verdict": "approved", "mergeConfidence": "high", "reviewId": "R_abc123", "inlineCommentCount": &count})
+	if err := ValidateReviewSubmittedPayload(raw); err != nil {
+		t.Errorf("zero inlineCommentCount should be valid: %v", err)
+	}
+}
+
 func TestWriteReviewSubmitted_Valid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "events.jsonl")
@@ -313,7 +354,8 @@ func TestWriteReviewSubmitted_Valid(t *testing.T) {
 	}
 	defer w.Close()
 
-	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]string{"verdict": "approved", "mergeConfidence": "high"})
+	count := 0
+	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]interface{}{"verdict": "approved", "mergeConfidence": "high", "reviewId": "R_test_01", "inlineCommentCount": &count})
 	if err := w.Write(ev); err != nil {
 		t.Fatal(err)
 	}

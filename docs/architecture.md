@@ -68,11 +68,12 @@ des Kerns; die Fach- und Kontrolllogik bleibt davon getrennt.
 
 ### 2.4 GitHub-Interaktion über `gh` CLI
 Kern und Rollen sprechen GitHub über die **`gh` CLI** (`gh issue view`,
-`gh pr create`, `gh pr review`), Auth über `GH_TOKEN`. Grund: maximal schlank —
-`gh` deckt Issues, PRs und Reviews out-of-the-box ab, regelt Auth und Pagination,
-und die Rollen nutzen dieselben Befehle in ihrer Shell. Direkte REST/GraphQL-Aufrufe
-werden nur gezielt nachgerüstet, wenn `gh` etwas nicht kann. Der Verbindungstest im
-Setup ist dann simpel (`gh auth status`).
+`gh pr create`), Auth über `GH_TOKEN`. Grund: maximal schlank — `gh` deckt
+Issues und PRs out-of-the-box ab, regelt Auth und Pagination. Review-Submission
+erfolgt über `gh api graphql` (GraphQL v4: `addPullRequestReview`,
+`addPullRequestReviewThread`, `submitPullRequestReview`), weil `gh pr review`
+keine Inline-Thread-Unterstützung hat. Der Verbindungstest im Setup ist dann
+simpel (`gh auth status`).
 
 **`git push` und Commit-Identität:** git ignoriert `GH_TOKEN`. Damit der Dev nicht
 versehentlich mit den lokalen Credentials des Menschen pusht, konfiguriert der
@@ -105,9 +106,11 @@ Event-Log ist zugleich **Historie, Audit und Recovery**: der Runner kann den
 Zustand daraus rekonstruieren und einen abgebrochenen Lauf fortsetzen (Recovery
 ist eine spätere Iteration, siehe §2.11).
 
-**Ein Kanal, keine Divergenz.** Der Reviewer ruft *ein* Tool `submit-review`, das
-**beides** tut: Event ins Log schreiben **und** via `gh pr review` nach GitHub
-spiegeln. Das Event-Log ist die *interne Wahrheit*, GitHub die *Projektion*.
+**Ein Kanal, keine Divergenz.** Der Reviewer ruft `review-comment` (je Finding)
+und einmal `submit-review`. Beide Tools koppeln gh-Aufruf + Logging **atomar**.
+Der Reviewer-Flow nutzt ausschließlich GraphQL: `addPullRequestReviewThread`
+(je ankerbarem Finding), danach `submitPullRequestReview` (Verdikt + Summary-Body).
+Das Event-Log ist die *interne Wahrheit*, GitHub die *Projektion*.
 Analog `open-pr` für den Dev.
 
 **Lauf-Kontext-Vertrag (Env-Vars).** Die Subcommands laufen als eigene Prozesse in
@@ -152,7 +155,8 @@ Lifecycle-Events schreibt der Runner selbst.
 | Runner | `worktree_created` | `path`, `branch`, `baseSha`, `role` |
 | Dev (`emit`) | `dev_started` | – |
 | Dev (`open-pr`) | `pr_opened` | `prNumber`, `url`, `branch` |
-| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`high`/`low`) |
+| Reviewer (`review-comment`) | *(kein Event)* | Inline-Thread an Pending-Review gehängt |  
+| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`high`/`low`), `reviewId` (GraphQL node id), `inlineCommentCount` (int ≥ 0) |
 | Runner | `ci_wait_finished` | `result`, `round` |
 | Runner | `automerge_skipped` | `reason` |
 | Runner | `automerge_failed` | `reason` |

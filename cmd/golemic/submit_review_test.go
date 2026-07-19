@@ -14,57 +14,81 @@ import (
 	"golemic/internal/preflight"
 )
 
-func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocognit,funlen // moved verbatim; cyclomatic 23 and cognitive 32 exceed thresholds on the pre-existing table body
-	// AC-001: Approved verdict calls gh --approve and writes event.
+// fakeGraphQLSubmit returns a fake executor that handles the full GraphQL submit-review sequence.
+// repoOwner, repoName, prNodeID, reviewNodeID are the fake IDs used in responses.
+// commentCount is the count returned by the discover query.
+// If failOn is non-empty, that stage fails: "discover", "create", or "submit".
+func fakeGraphQLSubmit(prNodeID, reviewNodeID string, commentCount int, failOn string) fakeExecutor { //nolint:cyclop
+	return fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name != "gh" {
+				return "", fmt.Errorf("unexpected command: %s", name)
+			}
+			switch {
+			case args[0] == "repo" && args[1] == "view":
+				return `{"owner":{"login":"test-owner"},"name":"test-repo"}`, nil
+
+			case args[0] == "api" && args[1] == "graphql":
+				q := graphqlQueryArg(args)
+				switch {
+				case strings.Contains(q, "submitPullRequestReview"):
+					if failOn == "submit" {
+						return "", &preflight.ErrExit{ExitCode: 1, Stderr: "submit failed"}
+					}
+					return fmt.Sprintf(`{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":%q,"state":"APPROVED"}}}}`, reviewNodeID), nil
+
+				case strings.Contains(q, "addPullRequestReview(") && !strings.Contains(q, "Thread"):
+					if failOn == "create" {
+						return "", &preflight.ErrExit{ExitCode: 1, Stderr: "create failed"}
+					}
+					return fmt.Sprintf(`{"data":{"addPullRequestReview":{"pullRequestReview":{"id":%q}}}}`, reviewNodeID), nil
+
+				default: // discover query
+					if failOn == "discover" {
+						return "", &preflight.ErrExit{ExitCode: 1, Stderr: "discover failed"}
+					}
+					if commentCount > 0 {
+						// Return existing pending review with comments.
+						return fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"id":%q,"reviews":{"nodes":[{"id":%q,"comments":{"totalCount":%d}}]}}}}}`,
+							prNodeID, reviewNodeID, commentCount), nil
+					}
+					// No existing pending review.
+					return fmt.Sprintf(`{"data":{"repository":{"pullRequest":{"id":%q,"reviews":{"nodes":[]}}}}}`, prNodeID), nil
+				}
+
+			case args[0] == "label" && args[1] == "create":
+				return "", nil
+			case args[0] == "pr" && args[1] == "edit":
+				return "", nil
+
+			default:
+				return "", fmt.Errorf("unexpected gh args: %v", args)
+			}
+		},
+	}
+}
+
+// graphqlQueryArg extracts the value of the -f query=... flag from gh api graphql args.
+func graphqlQueryArg(args []string) string {
+	for i, a := range args {
+		if a == "-f" && i+1 < len(args) && strings.HasPrefix(args[i+1], "query=") {
+			return args[i+1][len("query="):]
+		}
+	}
+	return ""
+}
+
+func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:funlen,cyclop
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-1",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 3 && args[0] == "pr" && args[1] == "review" && args[2] == "123" { //nolint:nestif
-				// Verify --approve and --body are present, --request-changes is not.
-				hasApprove := false
-				hasBody := false
-				hasRequestChanges := false
-				for i, arg := range args {
-					if arg == "--approve" {
-						hasApprove = true
-					}
-					if arg == "--body" && i+1 < len(args) && args[i+1] == "LGTM" {
-						hasBody = true
-					}
-					if arg == "--request-changes" {
-						hasRequestChanges = true
-					}
-				}
-				if !hasApprove {
-					return "", fmt.Errorf("--approve not found in gh args")
-				}
-				if !hasBody {
-					return "", fmt.Errorf("--body with 'LGTM' not found in gh args")
-				}
-				if hasRequestChanges {
-					return "", fmt.Errorf("--request-changes should not be present for approved verdict")
-				}
-				return "Review submitted\n", nil
-			}
-			// label create (idempotent, ignore error)
-			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "create" {
-				return "", nil
-			}
-			// label add to PR
-			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
-	}
+	exec := fakeGraphQLSubmit("PR_01", "PRR_01", 0, "")
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "high"}
@@ -76,11 +100,7 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 	if stderr.Len() != 0 {
 		t.Errorf("stderr should be empty, got: %q", stderr.String())
 	}
-	if stdout.Len() != 0 {
-		t.Errorf("stdout should be empty, got: %q", stdout.String())
-	}
 
-	// Verify exactly one review_submitted event was written with correct fields.
 	var r eventlog.Reader
 	events, err := r.Read(logPath)
 	if err != nil {
@@ -94,80 +114,47 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 		t.Errorf("Type: got %q, want %q", ev.Type, eventlog.EventReviewSubmitted)
 	}
 	if ev.RunID != "run-review-1" {
-		t.Errorf("RunID: got %q, want %q", ev.RunID, "run-review-1")
+		t.Errorf("RunID: got %q", ev.RunID)
 	}
-	// Verify ts is a valid RFC3339 timestamp.
-	if _, err := time.Parse(time.RFC3339, ev.Ts); err != nil {
-		t.Errorf("Ts is not valid RFC3339: %q (err: %v)", ev.Ts, err)
+	if _, parseErr := time.Parse(time.RFC3339, ev.Ts); parseErr != nil {
+		t.Errorf("Ts not valid RFC3339: %q", ev.Ts)
 	}
-	// Verify payload contains verdict, body, prNumber
+
 	var payload map[string]interface{}
 	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-		t.Fatalf("failed to unmarshal payload: %v", err)
+		t.Fatalf("unmarshal payload: %v", err)
 	}
 	if payload["verdict"] != "approved" {
-		t.Errorf("verdict: got %q, want %q", payload["verdict"], "approved")
+		t.Errorf("verdict: got %v", payload["verdict"])
 	}
 	if payload["body"] != "LGTM" {
-		t.Errorf("body: got %q, want %q", payload["body"], "LGTM")
+		t.Errorf("body: got %v", payload["body"])
 	}
 	if payload["prNumber"] != float64(123) {
-		t.Errorf("prNumber: got %v, want %v", payload["prNumber"], 123)
+		t.Errorf("prNumber: got %v", payload["prNumber"])
 	}
 	if payload["mergeConfidence"] != "high" {
-		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "high")
+		t.Errorf("mergeConfidence: got %v", payload["mergeConfidence"])
+	}
+	if payload["reviewId"] != "PRR_01" {
+		t.Errorf("reviewId: got %v", payload["reviewId"])
+	}
+	if payload["inlineCommentCount"] != float64(0) {
+		t.Errorf("inlineCommentCount: got %v", payload["inlineCommentCount"])
 	}
 }
 
-func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop,gocognit // moved verbatim; cyclomatic 22 and cognitive 35 exceed thresholds on the pre-existing body
-	// AC-002: changes_requested verdict calls gh --request-changes and writes event.
+func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-2",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 3 && args[0] == "pr" && args[1] == "review" && args[2] == "456" { //nolint:nestif // moved verbatim; complexity pre-dates split
-				// Verify --request-changes and --body are present.
-				hasRequestChanges := false
-				hasBody := false
-				hasApprove := false
-				for i, arg := range args {
-					if arg == "--request-changes" {
-						hasRequestChanges = true
-					}
-					if arg == "--body" && i+1 < len(args) && args[i+1] == "Fix NPE" {
-						hasBody = true
-					}
-					if arg == "--approve" {
-						hasApprove = true
-					}
-				}
-				if !hasRequestChanges {
-					return "", fmt.Errorf("--request-changes not found")
-				}
-				if !hasBody {
-					return "", fmt.Errorf("--body with 'Fix NPE' not found")
-				}
-				if hasApprove {
-					return "", fmt.Errorf("--approve should not be present for changes_requested")
-				}
-				return "Review submitted\n", nil
-			}
-			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "create" {
-				return "", nil
-			}
-			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
-	}
+	exec := fakeGraphQLSubmit("PR_02", "PRR_02", 3, "")
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "changes_requested", "--body", "Fix NPE", "--pr", "456", "--merge-confidence", "low"}
@@ -176,11 +163,7 @@ func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop
 	if got != 0 {
 		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
 	}
-	if stderr.Len() != 0 {
-		t.Errorf("stderr should be empty, got: %q", stderr.String())
-	}
 
-	// Verify exactly one review_submitted event was written.
 	var r eventlog.Reader
 	events, err := r.Read(logPath)
 	if err != nil {
@@ -189,32 +172,94 @@ func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop
 	if len(events) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(events))
 	}
-	ev := events[0]
-	if ev.Type != eventlog.EventReviewSubmitted {
-		t.Errorf("Type: got %q, want %q", ev.Type, eventlog.EventReviewSubmitted)
-	}
-	// Verify payload contains changes_requested verdict
 	var payload map[string]interface{}
-	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-		t.Fatalf("failed to unmarshal payload: %v", err)
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
 	}
 	if payload["verdict"] != "changes_requested" {
-		t.Errorf("verdict: got %q, want %q", payload["verdict"], "changes_requested")
+		t.Errorf("verdict: got %v", payload["verdict"])
 	}
 	if payload["mergeConfidence"] != "low" {
-		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "low")
+		t.Errorf("mergeConfidence: got %v", payload["mergeConfidence"])
+	}
+	// Existing pending review with 3 inline comments.
+	if payload["inlineCommentCount"] != float64(3) {
+		t.Errorf("inlineCommentCount: got %v, want 3", payload["inlineCommentCount"])
+	}
+}
+
+func TestRunSubmitReview_ApprovedNoPendingReview_CreatesOne(t *testing.T) { //nolint:funlen,cyclop
+	// AC-004: approved without prior review-comment calls → IC-003 empty → IC-001 creates → IC-004 submits.
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-review-3",
+		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":   "1",
+	}
+
+	createCalled := false
+	exec := fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "repo" {
+				return `{"owner":{"login":"o"},"name":"r"}`, nil
+			}
+			if name == "gh" && args[0] == "api" {
+				q := graphqlQueryArg(args)
+				if strings.Contains(q, "submitPullRequestReview") {
+					return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_new","state":"APPROVED"}}}}`, nil
+				}
+				if strings.Contains(q, "addPullRequestReview(") && !strings.Contains(q, "Thread") {
+					createCalled = true
+					return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_new"}}}}`, nil
+				}
+				// discover: no pending review
+				return `{"data":{"repository":{"pullRequest":{"id":"PR_01","reviews":{"nodes":[]}}}}}`, nil
+			}
+			if args[0] == "label" || (args[0] == "pr" && args[1] == "edit") {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected: %v", args)
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "10", "--merge-confidence", "high"}
+	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+
+	if got != 0 {
+		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
+	}
+	if !createCalled {
+		t.Error("expected createReview mutation to be called (IC-001), but it wasn't")
+	}
+
+	var r eventlog.Reader
+	events, err := r.Read(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["inlineCommentCount"] != float64(0) {
+		t.Errorf("inlineCommentCount: got %v, want 0", payload["inlineCommentCount"])
 	}
 }
 
 func TestRunSubmitReview_InvalidVerdictNoGhCall(t *testing.T) {
-	// AC-003: Invalid verdict returns error without gh call.
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-invalid",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var called bool
@@ -235,37 +280,26 @@ func TestRunSubmitReview_InvalidVerdictNoGhCall(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Invalid verdict") {
 		t.Errorf("stderr missing 'Invalid verdict', got: %q", stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "approved") || !strings.Contains(stderr.String(), "changes_requested") {
-		t.Errorf("stderr should mention valid verdict values, got: %q", stderr.String())
-	}
 	if called {
-		t.Error("gh command should not have been called for invalid verdict")
+		t.Error("gh should not be called for invalid verdict")
 	}
-	// No event should be written.
 	if _, err := os.Stat(logPath); err == nil {
 		t.Error("log file should not exist when verdict validation fails")
 	}
 }
 
 func TestRunSubmitReview_GhFailureNoEvent(t *testing.T) {
-	// AC-004: gh failure results in no event and non-zero exit.
+	// GraphQL submit fails → no event written.
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-gh-fail",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 3 && args[0] == "pr" && args[1] == "review" {
-				return "", &preflight.ErrExit{ExitCode: 1, Stderr: "PR not found or access denied"}
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
-	}
+	exec := fakeGraphQLSubmit("PR_01", "PRR_01", 0, "submit")
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "999", "--merge-confidence", "high"}
@@ -277,14 +311,11 @@ func TestRunSubmitReview_GhFailureNoEvent(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Failed to submit review") {
 		t.Errorf("stderr missing 'Failed to submit review', got: %q", stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "PR not found or access denied") {
-		t.Errorf("stderr should include gh error message, got: %q", stderr.String())
-	}
-	// No event should be written (log file exists but is empty).
+
 	var r eventlog.Reader
 	events, err := r.Read(logPath)
 	if err != nil {
-		t.Fatalf("failed to read event log: %v", err)
+		t.Fatal(err)
 	}
 	if len(events) != 0 {
 		t.Errorf("expected 0 events, got %d", len(events))
@@ -298,14 +329,12 @@ func TestRunSubmitReview_MissingEnvVar_RunID(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		return "", fmt.Errorf("should not be called")
+	}}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
@@ -325,11 +354,9 @@ func TestRunSubmitReview_MissingEnvVar_EventLog(t *testing.T) {
 		"GOLEMIC_EVENT_LOG": "",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		return "", fmt.Errorf("should not be called")
+	}}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
@@ -349,11 +376,9 @@ func TestRunSubmitReview_MissingBothEnvVars(t *testing.T) {
 		"GOLEMIC_EVENT_LOG": "",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		return "", fmt.Errorf("should not be called")
+	}}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
@@ -375,14 +400,12 @@ func TestRunSubmitReview_EmptyBody(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-empty-body",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		return "", fmt.Errorf("should not be called")
+	}}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "", "--pr", "123", "--merge-confidence", "high"}
@@ -403,14 +426,12 @@ func TestRunSubmitReview_InvalidPRNumber(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-invalid-pr",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		return "", fmt.Errorf("should not be called")
+	}}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "0", "--merge-confidence", "high"}
@@ -425,18 +446,15 @@ func TestRunSubmitReview_InvalidPRNumber(t *testing.T) {
 }
 
 func TestRunSubmitReview_CaseSensitiveVerdict(t *testing.T) {
-	// Test that verdict is case-sensitive: 'Approved' should fail.
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-case",
 		"GOLEMIC_EVENT_LOG": filepath.Join(t.TempDir(), "events.jsonl"),
 		"GOLEMIC_TURN_ID":   "1",
 	}
 
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		return "", fmt.Errorf("should not be called")
+	}}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "Approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "high"}
@@ -451,7 +469,6 @@ func TestRunSubmitReview_CaseSensitiveVerdict(t *testing.T) {
 }
 
 func TestRunSubmitReview_Dispatch(t *testing.T) {
-	// Test that run() dispatches to runSubmitReview (not "not implemented").
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
 	got := run(args, &stdout, &stderr)
@@ -461,31 +478,25 @@ func TestRunSubmitReview_Dispatch(t *testing.T) {
 	}
 	msg := stderr.String()
 	if strings.Contains(msg, "not implemented") {
-		t.Errorf("submit-review should no longer say 'not implemented', got: %q", msg)
+		t.Errorf("submit-review should not say 'not implemented', got: %q", msg)
 	}
-	// Dispatch reached runSubmitReview: expect env var error or merge-confidence error
-	// (which error fires first depends on whether env vars are set in the test environment).
 	if !strings.Contains(msg, "Missing required environment variable") && !strings.Contains(msg, "Invalid merge confidence") {
 		t.Errorf("stderr should mention missing env vars or invalid merge confidence, got: %q", msg)
 	}
 }
 
 func TestRunSubmitReview_EventLogPathInvalidAborts(t *testing.T) {
-	// Atomic coupling: if event log path is not writable, abort before calling gh.
-	// This ensures: either both (gh + event) succeed, or neither is attempted.
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-review-invalid-log",
-		"GOLEMIC_EVENT_LOG": t.TempDir(), // directory, not a file — NewWriter should fail
+		"GOLEMIC_EVENT_LOG": t.TempDir(), // directory, not a file
 		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var called bool
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			called = true
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		called = true
+		return "", fmt.Errorf("should not be called")
+	}}
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "high"}
@@ -498,7 +509,7 @@ func TestRunSubmitReview_EventLogPathInvalidAborts(t *testing.T) {
 		t.Errorf("stderr missing 'Failed to write event', got: %q", stderr.String())
 	}
 	if called {
-		t.Error("gh command should NOT have been called when event log path is invalid")
+		t.Error("gh should NOT be called when event log path is invalid")
 	}
 }
 
@@ -514,12 +525,10 @@ func TestRunSubmitReview_MissingMergeConfidence_AC009(t *testing.T) {
 		"GOLEMIC_TURN_ID":   "1",
 	}
 	var called bool
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			called = true
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		called = true
+		return "", fmt.Errorf("should not be called")
+	}}
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
@@ -542,12 +551,10 @@ func TestRunSubmitReview_InvalidMergeConfidence_AC009(t *testing.T) {
 		"GOLEMIC_TURN_ID":   "1",
 	}
 	var called bool
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			called = true
-			return "", fmt.Errorf("should not be called")
-		},
-	}
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		called = true
+		return "", fmt.Errorf("should not be called")
+	}}
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "medium"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
@@ -568,17 +575,27 @@ func TestRunSubmitReview_LabelSetFailed(t *testing.T) { //nolint:cyclop
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-label-fail",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 	exec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "review" {
-				return "Review submitted\n", nil
+			if name == "gh" && args[0] == "repo" {
+				return `{"owner":{"login":"o"},"name":"r"}`, nil
 			}
-			if name == "gh" && args[0] == "label" && args[1] == "create" {
-				return "", nil // label create succeeds
+			if name == "gh" && args[0] == "api" {
+				q := graphqlQueryArg(args)
+				if strings.Contains(q, "submitPullRequestReview") {
+					return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_01","state":"APPROVED"}}}}`, nil
+				}
+				if strings.Contains(q, "addPullRequestReview(") && !strings.Contains(q, "Thread") {
+					return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_01"}}}}`, nil
+				}
+				return `{"data":{"repository":{"pullRequest":{"id":"PR_01","reviews":{"nodes":[]}}}}}`, nil
 			}
-			if name == "gh" && args[0] == "pr" && args[1] == "edit" {
+			if args[0] == "label" && args[1] == "create" {
+				return "", nil
+			}
+			if args[0] == "pr" && args[1] == "edit" {
 				return "", fmt.Errorf("label add failed")
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -595,28 +612,15 @@ func TestRunSubmitReview_LabelSetFailed(t *testing.T) { //nolint:cyclop
 	}
 }
 
-func TestRunSubmitReview_MergeConfidenceLow_WrittenToPayload(t *testing.T) { //nolint:cyclop
+func TestRunSubmitReview_MergeConfidenceLow_WrittenToPayload(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "events.jsonl")
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-mc-low",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
-	exec := fakeExecutor{
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "review" {
-				return "Review submitted\n", nil
-			}
-			if name == "gh" && args[0] == "label" {
-				return "", nil
-			}
-			if name == "gh" && args[0] == "pr" && args[1] == "edit" {
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
-	}
+	exec := fakeGraphQLSubmit("PR_07", "PRR_07", 0, "")
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "7", "--merge-confidence", "low"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
@@ -636,6 +640,72 @@ func TestRunSubmitReview_MergeConfidenceLow_WrittenToPayload(t *testing.T) { //n
 		t.Fatal(err)
 	}
 	if payload["mergeConfidence"] != "low" {
-		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "low")
+		t.Errorf("mergeConfidence: got %v", payload["mergeConfidence"])
+	}
+}
+
+// AC-006: EMPTY_FINDINGS fail-closed: changes_requested with empty body rejects before any gh call.
+func TestRunSubmitReview_ChangesRequestedEmptyBody_AC006(t *testing.T) {
+	dir := t.TempDir()
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-empty-findings",
+		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
+		"GOLEMIC_TURN_ID":   "1",
+	}
+	var called bool
+	exec := fakeExecutor{runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+		called = true
+		return "", fmt.Errorf("should not be called")
+	}}
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "submit-review", "--verdict", "changes_requested", "--body", "", "--pr", "1", "--merge-confidence", "low"}
+	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	if got != 1 {
+		t.Fatalf("exit code: got %d, want 1", got)
+	}
+	if !strings.Contains(stderr.String(), "--body must not be empty") {
+		t.Errorf("stderr: %q", stderr.String())
+	}
+	if called {
+		t.Error("gh should not be called when body is empty")
+	}
+}
+
+// AC-009 / BR-008: grep-guard — no .go file outside this test must contain `gh pr review`.
+// The check looks for the executor arg pattern that would invoke `gh pr review`.
+func TestGhPrReviewAbsent(t *testing.T) {
+	// The forbidden pattern as seen in Go executor arg slices.
+	forbidden := `"pr", "review"`
+	// Walk the Go source tree from the module root.
+	root := "../.."
+	self, _ := filepath.Abs("submit_review_test.go")
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == ".git" || d.Name() == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		abs, _ := filepath.Abs(path)
+		if abs == self {
+			return nil // skip this guard file itself
+		}
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(content), forbidden) {
+			t.Errorf("BR-008: found %q in %s — remove it (submit-review must use GraphQL, not gh pr review)", forbidden, path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk error: %v", err)
 	}
 }

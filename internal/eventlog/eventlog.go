@@ -191,12 +191,15 @@ func ValidatePROpenedPayload(raw json.RawMessage) error {
 
 // reviewSubmittedData is the expected payload shape for review_submitted events.
 type reviewSubmittedData struct {
-	Verdict         string `json:"verdict"`
-	MergeConfidence string `json:"mergeConfidence"`
+	Verdict            string `json:"verdict"`
+	MergeConfidence    string `json:"mergeConfidence"`
+	ReviewID           string `json:"reviewId"`
+	InlineCommentCount *int   `json:"inlineCommentCount"`
 }
 
 // ValidateReviewSubmittedPayload checks that payload decodes to an object with
-// verdict ∈ {approved, changes_requested} and mergeConfidence ∈ {high, low}.
+// verdict ∈ {approved, changes_requested}, mergeConfidence ∈ {high, low},
+// a non-empty reviewId, and an inlineCommentCount >= 0.
 func ValidateReviewSubmittedPayload(raw json.RawMessage) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("review_submitted payload is empty")
@@ -213,11 +216,20 @@ func ValidateReviewSubmittedPayload(raw json.RawMessage) error {
 	}
 	switch d.MergeConfidence {
 	case "high", "low":
-		return nil
 	default:
 		return fmt.Errorf("review_submitted payload: mergeConfidence must be %q or %q, got %q",
 			"high", "low", d.MergeConfidence)
 	}
+	if d.ReviewID == "" {
+		return fmt.Errorf("review_submitted payload: reviewId is required and must not be empty")
+	}
+	if d.InlineCommentCount == nil {
+		return fmt.Errorf("review_submitted payload: inlineCommentCount is required")
+	}
+	if *d.InlineCommentCount < 0 {
+		return fmt.Errorf("review_submitted payload: inlineCommentCount must be >= 0, got %d", *d.InlineCommentCount)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
