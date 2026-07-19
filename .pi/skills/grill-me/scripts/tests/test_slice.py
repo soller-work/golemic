@@ -179,6 +179,56 @@ class TestSetBusinessRules(unittest.TestCase):
         self.assertEqual(data_before["business_rules"], data_after["business_rules"])
 
 
+    def test_empty_array_fragment_rejected_min_items(self):
+        rc, _, stderr = run_slice("set", str(self.path), "business_rules", "[]")
+        self.assertEqual(rc, 1)
+        self.assertIn("business_rules", stderr)
+        # jsonschema renders minItems as "should be non-empty" or similar
+        self.assertTrue(
+            "non-empty" in stderr or "minItems" in stderr or "minimum" in stderr.lower(),
+            msg=f"Expected a minItems-related error in: {stderr}",
+        )
+
+    def test_malformed_item_integer_rejected_cleanly(self):
+        rc, stdout, stderr = run_slice("set", str(self.path), "business_rules", "[1]")
+        self.assertEqual(rc, 1)
+        self.assertNotIn("Traceback", stderr)
+        self.assertIn("business_rules[0]", stderr)
+        # type name may be 'int' or 'integer' depending on Python version
+        self.assertTrue(
+            "int" in stderr,
+            msg=f"Expected type name in: {stderr}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# set: applicability guard (P1)
+# ---------------------------------------------------------------------------
+
+class TestSetApplicability(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.path = self.dir / "s.json"
+        run_slice("init", "query", "--out", str(self.path))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_state_changes_rejected_for_query_slice(self):
+        fragment = json.dumps([{
+            "target": "Order", "precondition": "exists",
+            "changes": [{"field": "status", "operation": "set", "value_source": "DONE"}],
+        }])
+        data_before = read_json(self.path)
+        rc, _, stderr = run_slice("set", str(self.path), "state_changes", fragment)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("state_changes", stderr)
+        self.assertIn("query", stderr)
+        data_after = read_json(self.path)
+        self.assertEqual(data_before["state_changes"], data_after["state_changes"])
+
+
 # ---------------------------------------------------------------------------
 # set: cross-reference validation
 # ---------------------------------------------------------------------------
