@@ -100,7 +100,7 @@ func TestRunOpenPR_AppendsClosesToGhBody(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "open-pr", "--title", "My PR", "--body", "Implements issue #6"}
-	if got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec); got != 0 {
+	if got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec, testOKLoadConfig()); got != 0 {
 		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
 	}
 	if !strings.Contains(sentBody, "Closes #6") {

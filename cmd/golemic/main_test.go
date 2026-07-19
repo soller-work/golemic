@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"golemic/internal/config"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
 )
@@ -42,6 +43,22 @@ func (f fakeExecutor) RunWithEnvInDir(env map[string]string, _ string, name stri
 	return f.RunWithEnv(env, name, args...)
 }
 
+// testOKLoadConfig returns a loadConfig stub that succeeds with a minimal config.
+func testOKLoadConfig() func() (*config.Config, error) {
+	return func() (*config.Config, error) {
+		return &config.Config{VerifyCommand: "true"}, nil
+	}
+}
+
+// testNoLoadConfig returns a loadConfig stub that fails the test if called.
+func testNoLoadConfig(t *testing.T) func() (*config.Config, error) {
+	t.Helper()
+	return func() (*config.Config, error) {
+		t.Fatal("loadConfig must not be called before env/flag validation")
+		return nil, nil
+	}
+}
+
 func TestRun(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -70,16 +87,18 @@ func TestRun(t *testing.T) {
 			wantStderrSubs: []string{"--issue must be a positive integer"},
 		},
 		{
-			name:           "emit dispatches to runEmit",
-			args:           []string{"golemic", "emit"},
-			wantExit:       1,
-			wantStderrSubs: []string{"Missing required environment variable"},
+			// Which error fires depends on whether GOLEMIC_RUN_ID/GOLEMIC_EVENT_LOG
+			// are set in the test environment; just verify dispatch is reached.
+			name:     "emit dispatches to runEmit",
+			args:     []string{"golemic", "emit"},
+			wantExit: 1,
 		},
 		{
-			name:           "open-pr without flags fails with env var error",
-			args:           []string{"golemic", "open-pr"},
-			wantExit:       1,
-			wantStderrSubs: []string{"Missing required environment variable"},
+			// Which error fires depends on whether GOLEMIC_RUN_ID/GOLEMIC_EVENT_LOG
+			// are set in the test environment; just verify dispatch is reached.
+			name:     "open-pr without flags fails with env var error",
+			args:     []string{"golemic", "open-pr"},
+			wantExit: 1,
 		},
 		{
 			// Dispatch reached runSubmitReview: which error fires depends on whether
@@ -154,6 +173,9 @@ func TestRunOpenPR_AC001_NoPR(t *testing.T) { //nolint:cyclop
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-42\n", nil
 			}
@@ -172,7 +194,7 @@ func TestRunOpenPR_AC001_NoPR(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, testOKLoadConfig())
 
 	if code != 0 {
 		t.Errorf("exit code: got %d, want 0; stderr: %s", code, stderr.String())
@@ -207,6 +229,9 @@ func TestRunOpenPR_AC002_OnePR(t *testing.T) { //nolint:cyclop
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-31\n", nil
 			}
@@ -225,7 +250,7 @@ func TestRunOpenPR_AC002_OnePR(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, testOKLoadConfig())
 
 	if code != 0 {
 		t.Errorf("exit code: got %d, want 0; stderr: %s", code, stderr.String())
@@ -260,6 +285,9 @@ func TestRunOpenPR_AC003_MultiplePRs(t *testing.T) { //nolint:cyclop
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-42\n", nil
 			}
@@ -278,7 +306,7 @@ func TestRunOpenPR_AC003_MultiplePRs(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, testOKLoadConfig())
 
 	if code != 1 {
 		t.Errorf("exit code: got %d, want 1", code)
@@ -306,6 +334,9 @@ func TestRunOpenPR_AC004_ListFails(t *testing.T) { //nolint:cyclop
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-42\n", nil
 			}
@@ -324,7 +355,7 @@ func TestRunOpenPR_AC004_ListFails(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, testOKLoadConfig())
 
 	if code != 1 {
 		t.Errorf("exit code: got %d, want 1", code)
@@ -362,7 +393,7 @@ func TestRunOpenPR_AC005_MissingEnvVar(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, testNoLoadConfig(t))
 
 	if code != 1 {
 		t.Errorf("exit code: got %d, want 1", code)

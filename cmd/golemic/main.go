@@ -128,7 +128,9 @@ func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit
 	}
 
 	if command == "open-pr" {
-		return runOpenPR(args, stdout, stderr, os.Getenv, osExecutor{})
+		return runOpenPR(args, stdout, stderr, os.Getenv, osExecutor{}, func() (*config.Config, error) {
+			return config.Load(".")
+		})
 	}
 
 	if command == "submit-review" {
@@ -316,7 +318,7 @@ func ensureBodyClosesIssue(body, branch string) string {
 // runOpenPR executes the open-pr subcommand: golemic open-pr --title <t> --body <b>
 // It validates env var context, resolves the current branch, creates a PR via gh,
 // parses the PR number and URL, and writes a pr_opened event atomically.
-func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int { //nolint:gocognit,cyclop,funlen,maintidx
+func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor, loadConfig func() (*config.Config, error)) int { //nolint:gocognit,cyclop,funlen,maintidx
 	fs := flag.NewFlagSet("open-pr", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -358,6 +360,24 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	}
 	if bodyFlag == "" {
 		fmt.Fprintln(stderr, "--body must not be empty") //nolint:errcheck
+		return 1
+	}
+
+	// BR-001: Load config before any gh call; abort if missing or invalid.
+	cfg, err := loadConfig()
+	if err != nil {
+		fmt.Fprintf(stderr, "Failed to load config: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	// BR-002, BR-003: Execute verify_command via sh -c before any gh call.
+	if _, verifyErr := executor.Run("sh", "-c", cfg.VerifyCommand); verifyErr != nil {
+		var ee *preflight.ErrExit
+		if errors.As(verifyErr, &ee) {
+			fmt.Fprintf(stderr, "verify_command failed: %s\n", strings.TrimSpace(ee.Stderr)) //nolint:errcheck
+		} else {
+			fmt.Fprintf(stderr, "verify_command failed: %v\n", verifyErr) //nolint:errcheck
+		}
 		return 1
 	}
 
