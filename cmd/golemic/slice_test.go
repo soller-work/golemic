@@ -53,7 +53,7 @@ func sliceFixture(t *testing.T, project, devToken string) (homeDir, repoRoot str
 
 // sliceExec returns a fakeExecutor that satisfies repo/config plumbing and
 // routes gh issue view / gh api comments to the given handlers.
-func sliceExec(repoRoot, viewResp, commentsResp string) fakeExecutor {
+func sliceExec(repoRoot, viewResp, commentsResp string) fakeExecutor { //nolint:cyclop // test routing dispatcher; branches are inherent
 	handleGh := func(env map[string]string, args ...string) (string, error) {
 		if env["GH_TOKEN"] == "" {
 			return "", fmt.Errorf("GH_TOKEN not injected")
@@ -192,7 +192,7 @@ func TestRunSlice_GHFailure(t *testing.T) {
 }
 
 // AC: missing credentials file returns a clean error, no stdout output.
-func TestRunSlice_MissingCredentials(t *testing.T) {
+func TestRunSlice_MissingCredentials(t *testing.T) { //nolint:cyclop // sequential env setup + assertions; splitting hurts readability
 	homeDir := t.TempDir()
 	repoRoot := t.TempDir()
 
