@@ -59,6 +59,7 @@ var knownCommands = []struct {
 	{"status", "Show run health status"},
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
 	{"slice", "Print the authoritative task spec for an issue (golemic slice --issue N)"},
+	{"claim-issue", "Claim an issue as in-progress for the dev-bot (golemic claim-issue --number N)"},
 }
 
 func usage(w io.Writer) {
@@ -71,7 +72,7 @@ func usage(w io.Writer) {
 
 // run dispatches subcommands. All error and usage output goes to stderr.
 // stdout is left untouched for error states. Returns the process exit code.
-func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop
+func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit
 	if len(args) < 2 {
 		usage(stderr)
 		return 1
@@ -136,6 +137,10 @@ func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop
 
 	if command == "slice" {
 		return runSlice(args, stdout, stderr, osExecutor{})
+	}
+
+	if command == "claim-issue" {
+		return runClaimIssue(args, stdout, stderr, os.Getenv, osExecutor{})
 	}
 
 	for _, c := range knownCommands {
