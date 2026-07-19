@@ -1,6 +1,6 @@
 {
     "project": "golemic",
-    "verify_command": "go build ./... && go test ./...",
+    "verify_command": "go build ./... && go vet ./... && go test -count=1 ./... && make lint",
     "label": "ready-for-agent",
     "models": {
         "dev": "claude-bridge/claude-sonnet-4-6",

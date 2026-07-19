@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Fetch origin/main for lint baseline
+        run: git fetch origin main:refs/remotes/origin/main --depth=1
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -33,3 +36,5 @@ jobs:
       - run: go test ./...
         env:
           GOLEMIC_BINARY: ${{ github.workspace }}/golemic
+
+      - run: make lint
