@@ -264,7 +264,7 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
-  printf '{"title":"Timeout Test Issue","body":"Automated timeout E2E test."}'
+  printf '{"title":"Timeout Test Issue","body":"Automated timeout E2E test.","state":"OPEN"}'
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then

@@ -106,7 +106,7 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			}
 			if len(args) >= 1 && args[0] == "issue" {
-				return `{"title":"T","body":"B"}`, nil
+				return `{"title":"T","body":"B","state":"OPEN","labels":[]}`, nil
 			}
 			if len(args) < 2 || args[0] != "pr" {
 				return "[]", nil

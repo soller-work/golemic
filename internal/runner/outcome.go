@@ -15,6 +15,7 @@ const (
 	outcomeTimeout      = "timeout"
 	outcomeAborted      = "aborted"
 	outcomeMergeFailed  = "merge_failed"
+	outcomeSkipped      = "skipped"
 	branchPrefix        = "golemic/issue-"
 )
 

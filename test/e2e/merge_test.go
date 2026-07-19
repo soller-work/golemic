@@ -300,10 +300,10 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
   # Return a risk label appropriate to the test mode.
   case "${MERGE_MODE}" in
     skip_risk_high)
-      printf '{"title":"Merge Phase Test","body":"Test issue.","labels":[{"name":"risk:high"}]}'
+      printf '{"title":"Merge Phase Test","body":"Test issue.","state":"OPEN","labels":[{"name":"risk:high"}]}'
       ;;
     *)
-      printf '{"title":"Merge Phase Test","body":"Test issue.","labels":[{"name":"risk:low"}]}'
+      printf '{"title":"Merge Phase Test","body":"Test issue.","state":"OPEN","labels":[{"name":"risk:low"}]}'
       ;;
   esac
   exit 0

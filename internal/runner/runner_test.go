@@ -157,7 +157,7 @@ func setupHappyExecutor(repoRoot string) *fakeExecutor {
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			switch {
 			case name == "gh" && len(args) >= 1 && args[0] == "issue":
-				return `{"title":"Test Issue","body":"This is a test"}`, nil
+				return `{"title":"Test Issue","labels":[],"state":"OPEN"}`, nil
 			case name == "gh" && len(args) >= 1 && args[0] == "pr":
 				return `[]`, nil // no open PR
 			}
@@ -341,7 +341,7 @@ func TestRun_LocalBranchCollision_AC003(t *testing.T) {
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			switch {
 			case name == "gh" && len(args) >= 1 && args[0] == "issue":
-				return `{"title":"Test","body":"Body"}`, nil
+				return `{"title":"Test","labels":[],"state":"OPEN"}`, nil
 			case name == "gh" && len(args) >= 1 && args[0] == "pr":
 				return `[]`, nil
 			}
@@ -393,7 +393,7 @@ func TestRun_RemoteBranchCollision_AC003(t *testing.T) {
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			switch {
 			case name == "gh" && len(args) >= 1 && args[0] == "issue":
-				return `{"title":"Test","body":"Body"}`, nil
+				return `{"title":"Test","labels":[],"state":"OPEN"}`, nil
 			case name == "gh" && len(args) >= 1 && args[0] == "pr":
 				return `[]`, nil
 			}
@@ -441,7 +441,7 @@ func TestRun_OpenPRCollision_AC004(t *testing.T) {
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			switch {
 			case name == "gh" && len(args) >= 1 && args[0] == "issue":
-				return `{"title":"Test","body":"Body"}`, nil
+				return `{"title":"Test","labels":[],"state":"OPEN"}`, nil
 			case name == "gh" && len(args) >= 1 && args[0] == "pr":
 				return `[{"url":"https://github.com/owner/repo/pull/123","state":"OPEN"}]`, nil
 			}
@@ -1464,7 +1464,7 @@ func TestLoadIssue_PinnedToRepoRoot_AC002(t *testing.T) {
 
 	exec := &dirCapturingExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
-			return `{"title":"T","body":"B"}`, nil
+			return `{"title":"T","body":"B","state":"OPEN","labels":[]}`, nil
 		},
 	}
 	r := &Runner{executor: exec, repoRoot: repoRoot, issueNum: 5, creds: creds}

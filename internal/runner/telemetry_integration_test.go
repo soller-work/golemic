@@ -222,7 +222,7 @@ func telemetryGhHandler(args []string) (string, error) {
 	}
 	switch args[0] {
 	case "issue":
-		return `{"title":"Test Issue","body":"Test body"}`, nil
+		return `{"title":"Test Issue","labels":[],"state":"OPEN"}`, nil
 	case "pr":
 		if len(args) >= 2 && args[1] == "comment" {
 			return "", nil

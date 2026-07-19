@@ -294,7 +294,7 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
-  printf '{"title":"Reviewer Failure Test Issue","body":"Automated reviewer failure E2E test."}'
+  printf '{"title":"Reviewer Failure Test Issue","body":"Automated reviewer failure E2E test.","state":"OPEN"}'
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
