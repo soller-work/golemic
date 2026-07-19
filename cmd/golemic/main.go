@@ -58,6 +58,7 @@ var knownCommands = []struct {
 	{"submit-review", "Submit a review"},
 	{"status", "Show run health status"},
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
+	{"slice", "Print the authoritative task spec for an issue (golemic slice --issue N)"},
 }
 
 func usage(w io.Writer) {
@@ -131,6 +132,10 @@ func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop
 
 	if command == "next-issue" {
 		return runNextIssue(args, stdout, stderr, osExecutor{})
+	}
+
+	if command == "slice" {
+		return runSlice(args, stdout, stderr, osExecutor{})
 	}
 
 	for _, c := range knownCommands {
