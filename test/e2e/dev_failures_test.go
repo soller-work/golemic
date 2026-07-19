@@ -325,6 +325,10 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   printf '[]'
   exit 0
 fi
+if [ "$1" = "label" ] && [ "$2" = "list" ]; then
+  printf '[{"name":"in-progress"},{"name":"needs-human"}]'
+  exit 0
+fi
 printf "gh shim: unhandled command: %s\n" "$*" >&2
 exit 1
 `
