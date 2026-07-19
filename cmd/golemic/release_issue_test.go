@@ -10,14 +10,18 @@ import (
 	"testing"
 )
 
-// releaseIssueRun runs runReleaseIssue with a controlled environment and executor.
-func releaseIssueRun( //nolint:cyclop
+func newReleaseFixture(t *testing.T) (string, string) {
+	t.Helper()
+	return claimIssueFixture(t, testProject, testToken)
+}
+
+func releaseIssueRun(
 	t *testing.T,
 	homeDir, repoRoot string,
 	envOverrides map[string]string,
 	ghResponses func(env map[string]string, name string, args []string) (string, error),
 	extraArgs ...string,
-) (int, string, string, string) { // code, stdout, stderr, eventLogPath
+) (int, string, string, string) {
 	t.Helper()
 
 	origHome := os.Getenv("HOME")
@@ -33,7 +37,6 @@ func releaseIssueRun( //nolint:cyclop
 	}
 
 	eventLogPath := filepath.Join(t.TempDir(), "events.jsonl")
-
 	envDefaults := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-test-001",
 		"GOLEMIC_EVENT_LOG": eventLogPath,
@@ -44,8 +47,17 @@ func releaseIssueRun( //nolint:cyclop
 	}
 
 	getenv := func(key string) string { return envDefaults[key] }
+	exec := newReleaseExecutor(repoRoot, ghResponses)
 
-	exec := fakeExecutor{
+	defaultArgs := []string{"golemic", "release-issue", "--number", "42", "--reason", "done"}
+	args := append(defaultArgs[:4:4], extraArgs...)
+	var stdout, stderr bytes.Buffer
+	code := runReleaseIssue(args, &stdout, &stderr, getenv, exec)
+	return code, stdout.String(), stderr.String(), eventLogPath
+}
+
+func newReleaseExecutor(repoRoot string, ghResponses func(map[string]string, string, []string) (string, error)) fakeExecutor {
+	return fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
 				return repoRoot + "\n", nil
@@ -62,12 +74,47 @@ func releaseIssueRun( //nolint:cyclop
 			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
 		},
 	}
+}
 
-	defaultArgs := []string{"golemic", "release-issue", "--number", "42", "--reason", "done"}
-	args := append(defaultArgs[:4:4], extraArgs...)
-	var stdout, stderr bytes.Buffer
-	code := runReleaseIssue(args, &stdout, &stderr, getenv, exec)
-	return code, stdout.String(), stderr.String(), eventLogPath
+func assertReleaseEventPayload(t *testing.T, eventLogPath string, issueNum int, reason string) {
+	t.Helper()
+	data, err := os.ReadFile(eventLogPath)
+	if err != nil {
+		t.Fatalf("event log not written: %v", err)
+	}
+	var ev map[string]interface{}
+	if err := json.Unmarshal(bytes.TrimSpace(data), &ev); err != nil {
+		t.Fatalf("event log JSON invalid: %v", err)
+	}
+	if ev["type"] != "issue_released" {
+		t.Errorf("event type: got %v, want issue_released", ev["type"])
+	}
+	payload, _ := ev["payload"].(map[string]interface{})
+	if payload["issue_number"] != float64(issueNum) {
+		t.Errorf("event payload issue_number: got %v, want %d", payload["issue_number"], issueNum)
+	}
+	if payload["reason"] != reason {
+		t.Errorf("event payload reason: got %v, want %s", payload["reason"], reason)
+	}
+}
+
+func assertEditArgsLabel(t *testing.T, args []string, shouldAdd bool, label string) {
+	t.Helper()
+	found := false
+	for i, a := range args {
+		if (shouldAdd && a == "--add-label" || !shouldAdd && a == "--remove-label") &&
+			i+1 < len(args) && args[i+1] == label {
+			found = true
+			break
+		}
+	}
+	if !found {
+		op := "add"
+		if !shouldAdd {
+			op = "remove"
+		}
+		t.Errorf("edit args must include --%s-label %s; args: %s", op, label, strings.Join(args, " "))
+	}
 }
 
 // releaseIssueViewJSON returns a minimal gh issue view JSON response.
@@ -84,33 +131,76 @@ func releaseIssueViewJSON(labels []string, assignees []string) string {
 		strings.Join(lblParts, ","), strings.Join(asgParts, ","))
 }
 
+func handleGHHappyPath(args []string, issueView string, capturedEditArgs *[]string) (string, error) {
+	if len(args) < 2 {
+		return "", fmt.Errorf("invalid gh args")
+	}
+	if args[0] == "api" && args[1] == "user" {
+		return userAPIResponse(testDevLogin), nil
+	}
+	if args[0] == "issue" && args[1] == "view" {
+		return issueView, nil
+	}
+	if args[0] == "issue" && args[1] == "edit" {
+		*capturedEditArgs = append([]string{}, args...)
+		return "", nil
+	}
+	return "", fmt.Errorf("unexpected gh args: %v", args)
+}
+
+func handleGHIdempotent(args []string, issueView string, editCalled *bool) (string, error) {
+	if len(args) < 2 {
+		return "", fmt.Errorf("invalid gh args")
+	}
+	if args[0] == "api" && args[1] == "user" {
+		return userAPIResponse(testDevLogin), nil
+	}
+	if args[0] == "issue" && args[1] == "view" {
+		return issueView, nil
+	}
+	if args[0] == "issue" && args[1] == "edit" {
+		*editCalled = true
+		return "", nil
+	}
+	return "", fmt.Errorf("unexpected gh args: %v", args)
+}
+
+func mockGHResponsesHappyPath(repoRoot, issueView string, capturedGHToken *string, capturedEditArgs *[]string) func(map[string]string, string, []string) (string, error) {
+	return func(env map[string]string, name string, args []string) (string, error) {
+		if tok := env["GH_TOKEN"]; tok != "" {
+			*capturedGHToken = tok
+		}
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return repoRoot + "\n", nil
+		}
+		if name == "gh" {
+			return handleGHHappyPath(args, issueView, capturedEditArgs)
+		}
+		return "", fmt.Errorf("unexpected: %s %v", name, args)
+	}
+}
+
+func mockGHResponsesIdempotent(repoRoot, issueView string, editCalled *bool) func(map[string]string, string, []string) (string, error) {
+	return func(_ map[string]string, name string, args []string) (string, error) {
+		if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
+			return repoRoot + "\n", nil
+		}
+		if name == "gh" {
+			return handleGHIdempotent(args, issueView, editCalled)
+		}
+		return "", fmt.Errorf("unexpected: %s %v", name, args)
+	}
+}
+
 // AC-001: Happy path reason=done — lock cleared, event written, exit 0.
-func TestReleaseIssue_AC001_HappyPathDone(t *testing.T) { //nolint:cyclop,gocognit
-	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
-
+func TestReleaseIssue_AC001_HappyPathDone(t *testing.T) {
+	homeDir, repoRoot := newReleaseFixture(t)
 	issueView := releaseIssueViewJSON([]string{"in-progress"}, []string{testDevLogin})
-
 	var capturedGHToken string
 	var capturedEditArgs []string
 
 	code, stdout, stderr, eventLogPath := releaseIssueRun(t, homeDir, repoRoot, nil,
-		func(env map[string]string, name string, args []string) (string, error) {
-			if tok := env["GH_TOKEN"]; tok != "" {
-				capturedGHToken = tok
-			}
-			switch {
-			case name == "git" && args[0] == "rev-parse":
-				return repoRoot + "\n", nil
-			case name == "gh" && args[0] == "api" && args[1] == "user":
-				return userAPIResponse(testDevLogin), nil
-			case name == "gh" && args[0] == "issue" && args[1] == "view":
-				return issueView, nil
-			case name == "gh" && args[0] == "issue" && args[1] == "edit":
-				capturedEditArgs = args
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
+		mockGHResponsesHappyPath(repoRoot, issueView, &capturedGHToken, &capturedEditArgs),
 		"--reason", "done",
 	)
 
@@ -129,67 +219,24 @@ func TestReleaseIssue_AC001_HappyPathDone(t *testing.T) { //nolint:cyclop,gocogn
 	if strings.Contains(stdout, testToken) || strings.Contains(stderr, testToken) {
 		t.Error("dev_token must not appear in stdout or stderr")
 	}
-
-	// done: should not add any extra label.
 	for _, a := range capturedEditArgs {
 		if a == "needs-human" || a == "ready-for-agent" {
 			t.Errorf("reason=done must not add label %q", a)
 		}
 	}
-	// should remove in-progress.
-	found := false
-	for i, a := range capturedEditArgs {
-		if a == "--remove-label" && i+1 < len(capturedEditArgs) && capturedEditArgs[i+1] == "in-progress" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("edit args must include --remove-label in-progress")
-	}
-
-	// Verify issue_released event was written.
-	data, err := os.ReadFile(eventLogPath)
-	if err != nil {
-		t.Fatalf("event log not written: %v", err)
-	}
-	var ev map[string]interface{}
-	if err := json.Unmarshal(bytes.TrimSpace(data), &ev); err != nil {
-		t.Fatalf("event log JSON invalid: %v", err)
-	}
-	if ev["type"] != "issue_released" {
-		t.Errorf("event type: got %v, want issue_released", ev["type"])
-	}
-	payload, _ := ev["payload"].(map[string]interface{})
-	if payload["issue_number"] != float64(42) {
-		t.Errorf("event payload issue_number: got %v, want 42", payload["issue_number"])
-	}
-	if payload["reason"] != "done" {
-		t.Errorf("event payload reason: got %v, want done", payload["reason"])
-	}
+	assertEditArgsLabel(t, capturedEditArgs, false, "in-progress")
+	assertReleaseEventPayload(t, eventLogPath, 42, "done")
 }
 
 // AC-002: reason=failed adds needs-human label.
-func TestReleaseIssue_AC002_ReasonFailed(t *testing.T) { //nolint:cyclop
-	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
-
+func TestReleaseIssue_AC002_ReasonFailed(t *testing.T) {
+	homeDir, repoRoot := newReleaseFixture(t)
 	issueView := releaseIssueViewJSON([]string{"in-progress"}, []string{testDevLogin})
 	var capturedEditArgs []string
+	var ghToken string
 
 	code, stdout, stderr, eventLogPath := releaseIssueRun(t, homeDir, repoRoot, nil,
-		func(_ map[string]string, name string, args []string) (string, error) {
-			switch {
-			case name == "git" && args[0] == "rev-parse":
-				return repoRoot + "\n", nil
-			case name == "gh" && args[0] == "api" && args[1] == "user":
-				return userAPIResponse(testDevLogin), nil
-			case name == "gh" && args[0] == "issue" && args[1] == "view":
-				return issueView, nil
-			case name == "gh" && args[0] == "issue" && args[1] == "edit":
-				capturedEditArgs = args
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
+		mockGHResponsesHappyPath(repoRoot, issueView, &ghToken, &capturedEditArgs),
 		"--reason", "failed",
 	)
 
@@ -199,50 +246,19 @@ func TestReleaseIssue_AC002_ReasonFailed(t *testing.T) { //nolint:cyclop
 	if !strings.Contains(stdout, "released issue #42 as failed") {
 		t.Errorf("stdout: got %q", stdout)
 	}
-
-	// should add needs-human.
-	found := false
-	for i, a := range capturedEditArgs {
-		if a == "--add-label" && i+1 < len(capturedEditArgs) && capturedEditArgs[i+1] == "needs-human" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("reason=failed must add --add-label needs-human; args: " + strings.Join(capturedEditArgs, " "))
-	}
-
-	// Verify event reason=failed.
-	data, _ := os.ReadFile(eventLogPath)
-	var ev map[string]interface{}
-	_ = json.Unmarshal(bytes.TrimSpace(data), &ev)
-	payload, _ := ev["payload"].(map[string]interface{})
-	if payload["reason"] != "failed" {
-		t.Errorf("event payload reason: got %v, want failed", payload["reason"])
-	}
+	assertEditArgsLabel(t, capturedEditArgs, true, "needs-human")
+	assertReleaseEventPayload(t, eventLogPath, 42, "failed")
 }
 
 // AC-003: reason=abandoned restores ready-for-agent.
-func TestReleaseIssue_AC003_ReasonAbandoned(t *testing.T) { //nolint:cyclop
-	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
-
+func TestReleaseIssue_AC003_ReasonAbandoned(t *testing.T) {
+	homeDir, repoRoot := newReleaseFixture(t)
 	issueView := releaseIssueViewJSON([]string{"in-progress"}, []string{testDevLogin})
 	var capturedEditArgs []string
+	var ghToken string
 
 	code, stdout, stderr, eventLogPath := releaseIssueRun(t, homeDir, repoRoot, nil,
-		func(_ map[string]string, name string, args []string) (string, error) {
-			switch {
-			case name == "git" && args[0] == "rev-parse":
-				return repoRoot + "\n", nil
-			case name == "gh" && args[0] == "api" && args[1] == "user":
-				return userAPIResponse(testDevLogin), nil
-			case name == "gh" && args[0] == "issue" && args[1] == "view":
-				return issueView, nil
-			case name == "gh" && args[0] == "issue" && args[1] == "edit":
-				capturedEditArgs = args
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
+		mockGHResponsesHappyPath(repoRoot, issueView, &ghToken, &capturedEditArgs),
 		"--reason", "abandoned",
 	)
 
@@ -252,49 +268,18 @@ func TestReleaseIssue_AC003_ReasonAbandoned(t *testing.T) { //nolint:cyclop
 	if !strings.Contains(stdout, "released issue #42 as abandoned") {
 		t.Errorf("stdout: got %q", stdout)
 	}
-
-	// should add ready-for-agent.
-	found := false
-	for i, a := range capturedEditArgs {
-		if a == "--add-label" && i+1 < len(capturedEditArgs) && capturedEditArgs[i+1] == "ready-for-agent" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("reason=abandoned must add --add-label ready-for-agent; args: " + strings.Join(capturedEditArgs, " "))
-	}
-
-	data, _ := os.ReadFile(eventLogPath)
-	var ev map[string]interface{}
-	_ = json.Unmarshal(bytes.TrimSpace(data), &ev)
-	payload, _ := ev["payload"].(map[string]interface{})
-	if payload["reason"] != "abandoned" {
-		t.Errorf("event payload reason: got %v, want abandoned", payload["reason"])
-	}
+	assertEditArgsLabel(t, capturedEditArgs, true, "ready-for-agent")
+	assertReleaseEventPayload(t, eventLogPath, 42, "abandoned")
 }
 
 // AC-004: Idempotent — already released: exit 0, no event, no edit call.
-func TestReleaseIssue_AC004_Idempotent(t *testing.T) { //nolint:cyclop
-	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
-
-	issueView := releaseIssueViewJSON(nil, nil) // no in-progress, no assignees
-
+func TestReleaseIssue_AC004_Idempotent(t *testing.T) {
+	homeDir, repoRoot := newReleaseFixture(t)
+	issueView := releaseIssueViewJSON(nil, nil)
 	editCalled := false
+
 	code, stdout, stderr, eventLogPath := releaseIssueRun(t, homeDir, repoRoot, nil,
-		func(_ map[string]string, name string, args []string) (string, error) {
-			switch {
-			case name == "git" && args[0] == "rev-parse":
-				return repoRoot + "\n", nil
-			case name == "gh" && args[0] == "api" && args[1] == "user":
-				return userAPIResponse(testDevLogin), nil
-			case name == "gh" && args[0] == "issue" && args[1] == "view":
-				return issueView, nil
-			case name == "gh" && args[0] == "issue" && args[1] == "edit":
-				editCalled = true
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
+		mockGHResponsesIdempotent(repoRoot, issueView, &editCalled),
 		"--reason", "done",
 	)
 
@@ -316,27 +301,13 @@ func TestReleaseIssue_AC004_Idempotent(t *testing.T) { //nolint:cyclop
 }
 
 // AC-005: Foreign-owned issue — exit 3, no edit, no event.
-func TestReleaseIssue_AC005_ForeignClaim(t *testing.T) { //nolint:cyclop
-	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
-
+func TestReleaseIssue_AC005_ForeignClaim(t *testing.T) {
+	homeDir, repoRoot := newReleaseFixture(t)
 	issueView := releaseIssueViewJSON([]string{"in-progress"}, []string{"other-bot"})
-
 	editCalled := false
+
 	code, stdout, stderr, eventLogPath := releaseIssueRun(t, homeDir, repoRoot, nil,
-		func(_ map[string]string, name string, args []string) (string, error) {
-			switch {
-			case name == "git" && args[0] == "rev-parse":
-				return repoRoot + "\n", nil
-			case name == "gh" && args[0] == "api" && args[1] == "user":
-				return userAPIResponse(testDevLogin), nil
-			case name == "gh" && args[0] == "issue" && args[1] == "view":
-				return issueView, nil
-			case name == "gh" && args[0] == "issue" && args[1] == "edit":
-				editCalled = true
-				return "", nil
-			}
-			return "", fmt.Errorf("unexpected: %s %v", name, args)
-		},
+		mockGHResponsesIdempotent(repoRoot, issueView, &editCalled),
 		"--reason", "done",
 	)
 
