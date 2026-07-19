@@ -65,6 +65,7 @@ var knownCommands = []struct {
 	{"status", "Show run health status"},
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
 	{"slice", "Print the authoritative task spec for an issue (golemic slice --issue N)"},
+	{"claim-issue", "Claim an issue as in-progress for the dev-bot (golemic claim-issue --number N)"},
 	{"run-loop", "Run the autonomous 60-second polling loop for takeable issues"},
 }
 
@@ -143,6 +144,10 @@ func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit
 
 	if command == "slice" {
 		return runSlice(args, stdout, stderr, osExecutor{})
+	}
+
+	if command == "claim-issue" {
+		return runClaimIssue(args, stdout, stderr, os.Getenv, osExecutor{})
 	}
 
 	if command == "run-loop" {
