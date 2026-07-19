@@ -227,7 +227,7 @@ func (nopWriter) Write(eventlog.Event) error { return nil }
 // Merge phase: up-to-date shortcut skips rebase, verify, push (BR-003)
 // ---------------------------------------------------------------------------
 
-func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
+func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 42)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
@@ -236,6 +236,9 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			calls = append(calls, fmt.Sprintf("%s %s", name, strings.Join(args, " ")))
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
 			if name == "git" && len(args) >= 2 && args[0] == "merge-base" {
 				return "", nil // is-ancestor check passes → up to date
 			}
@@ -247,7 +250,7 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			calls = append(calls, fmt.Sprintf("%s %s", name, strings.Join(args, " ")))
 			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return "", nil // not called on up-to-date path, but just in case
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "abc123\n", nil
@@ -257,16 +260,18 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
 	}
 
 	r := &Runner{
-		executor:   exec,
-		issueNum:   5,
-		runID:      "test-run",
-		repoRoot:   "/repo",
-		homeDir:    t.TempDir(),
-		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:        &config.Config{Project: "proj"},
-		creds:      mustLoadCreds(t),
-		branchName: "golemic/issue-5",
-		stderr:     &strings.Builder{},
+		executor:               exec,
+		issueNum:               5,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                t.TempDir(),
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: "proj"},
+		creds:                  mustLoadCreds(t),
+		branchName:             "golemic/issue-5",
+		stderr:                 &strings.Builder{},
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
 	}
 
 	outcome := r.runMergePhase(nopWriter{}, logPath)
@@ -274,7 +279,7 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
 
-	// Verify no push was made (up-to-date shortcut)
+	// Verify no push or rebase was made (up-to-date path)
 	for _, c := range calls {
 		if strings.Contains(c, "push") {
 			t.Errorf("push should not happen on up-to-date path, got call: %q", c)
@@ -522,12 +527,18 @@ func TestRunMergePhase_MergeFailure_AutomergeFailed_AC011(t *testing.T) { //noli
 
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
 			if name == "git" && args[0] == "merge-base" {
-				return "", nil // up to date → skip rebase/push
+				return "", nil // up to date
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "", fmt.Errorf("gh pr merge failed: branch protection required")
 			}
@@ -539,15 +550,17 @@ func TestRunMergePhase_MergeFailure_AutomergeFailed_AC011(t *testing.T) { //noli
 	}
 
 	r := &Runner{
-		executor:   exec,
-		issueNum:   30,
-		runID:      "test-run",
-		repoRoot:   "/repo",
-		homeDir:    t.TempDir(),
-		issue:      &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
-		cfg:        &config.Config{Project: "proj"},
-		creds:      mustLoadCreds(t),
-		branchName: "golemic/issue-30",
+		executor:               exec,
+		issueNum:               30,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                t.TempDir(),
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
+		cfg:                    &config.Config{Project: "proj"},
+		creds:                  mustLoadCreds(t),
+		branchName:             "golemic/issue-30",
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
 	}
 	buf := &strings.Builder{}
 	r.stderr = buf
@@ -887,7 +900,7 @@ func TestRunVerifyCommand_CompoundCommand_ExecutedViaShell(t *testing.T) {
 // TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed verifies that a
 // git merge-base error with exit code != 1 (e.g. bad revision) is propagated
 // as automerge_failed without attempting rebase, push, or merge.
-func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //nolint:cyclop
+func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //nolint:cyclop,funlen,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 40)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
@@ -895,6 +908,9 @@ func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //
 	var rebaseCalled, pushCalled bool
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 1 && args[0] == "fetch" {
+				return "", nil
+			}
 			if name == "git" && len(args) >= 1 && args[0] == "merge-base" {
 				// exit code 2 = bad revision — must not be treated as "not ancestor"
 				return "", &preflight.ErrExit{ExitCode: 2, Stderr: "bad revision 'origin/main'"}
@@ -1010,8 +1026,11 @@ func TestRunMergePhase_DeletesRemoteBranchAfterMerge(t *testing.T) { //nolint:cy
 
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
 			if name == "git" && args[0] == "merge-base" {
-				return "", nil // up-to-date → skip rebase
+				return "", nil // up-to-date
 			}
 			if name == "git" && args[0] == "ls-remote" {
 				lsRemoteCalled = true
@@ -1020,6 +1039,9 @@ func TestRunMergePhase_DeletesRemoteBranchAfterMerge(t *testing.T) { //nolint:cy
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-002", nil
 			}
@@ -1033,16 +1055,18 @@ func TestRunMergePhase_DeletesRemoteBranchAfterMerge(t *testing.T) { //nolint:cy
 	}
 
 	r := &Runner{
-		executor:   exec,
-		issueNum:   42,
-		runID:      "test-run",
-		repoRoot:   "/repo",
-		homeDir:    t.TempDir(),
-		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:        &config.Config{Project: "proj"},
-		creds:      creds,
-		branchName: "golemic/issue-42",
-		stderr:     &strings.Builder{},
+		executor:               exec,
+		issueNum:               42,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                t.TempDir(),
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: "proj"},
+		creds:                  creds,
+		branchName:             "golemic/issue-42",
+		stderr:                 &strings.Builder{},
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
 	}
 
 	var written []eventlog.Event
@@ -1085,6 +1109,9 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 	stderr := &strings.Builder{}
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
 			if name == "git" && args[0] == "merge-base" {
 				return "", nil
 			}
@@ -1094,6 +1121,9 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-003", nil
 			}
@@ -1106,16 +1136,18 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 	}
 
 	r := &Runner{
-		executor:   exec,
-		issueNum:   43,
-		runID:      "test-run",
-		repoRoot:   "/repo",
-		homeDir:    t.TempDir(),
-		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:        &config.Config{Project: "proj"},
-		creds:      mustLoadCreds(t),
-		branchName: "golemic/issue-43",
-		stderr:     stderr,
+		executor:               exec,
+		issueNum:               43,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                t.TempDir(),
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: "proj"},
+		creds:                  mustLoadCreds(t),
+		branchName:             "golemic/issue-43",
+		stderr:                 stderr,
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
 	}
 
 	outcome := r.runMergePhase(nopWriter{}, logPath)
@@ -1129,7 +1161,7 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 }
 
 // AC-004: push --delete fails after successful merge → warning on stderr, outcome still success.
-func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclop
+func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclop,funlen,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 44)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
@@ -1137,6 +1169,9 @@ func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclo
 	stderr := &strings.Builder{}
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
 			if name == "git" && args[0] == "merge-base" {
 				return "", nil
 			}
@@ -1146,6 +1181,9 @@ func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclo
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-004", nil
 			}
@@ -1157,16 +1195,18 @@ func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclo
 	}
 
 	r := &Runner{
-		executor:   exec,
-		issueNum:   44,
-		runID:      "test-run",
-		repoRoot:   "/repo",
-		homeDir:    t.TempDir(),
-		issue:      &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:        &config.Config{Project: "proj"},
-		creds:      mustLoadCreds(t),
-		branchName: "golemic/issue-44",
-		stderr:     stderr,
+		executor:               exec,
+		issueNum:               44,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                t.TempDir(),
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: "proj"},
+		creds:                  mustLoadCreds(t),
+		branchName:             "golemic/issue-44",
+		stderr:                 stderr,
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
 	}
 
 	var written []eventlog.Event
@@ -1248,5 +1288,426 @@ func TestRunMergePhase_GateSkipDoesNotDeleteRemote(t *testing.T) { //nolint:cycl
 	}
 	if !skippedFound {
 		t.Error("automerge_skipped event not written")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Issue #50: fetch + CI gate on up-to-date branch (AC-001 through AC-006)
+// ---------------------------------------------------------------------------
+
+// makeMergePhaseRunner builds a minimal Runner for runMergePhase tests with
+// short CI timeouts so polling tests complete quickly.
+func makeMergePhaseRunner(t *testing.T, exec *fakeExecutor, issueNum int, logPath string) (*Runner, *[]eventlog.Event) {
+	t.Helper()
+	homeDir := t.TempDir()
+	project := "proj"
+	mkCredDir(t, homeDir, project)
+	creds := mustLoadCredsFromDir(t, homeDir, project)
+
+	var written []eventlog.Event
+	r := &Runner{
+		executor:               exec,
+		issueNum:               issueNum,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                homeDir,
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
+		cfg:                    &config.Config{Project: project},
+		creds:                  creds,
+		branchName:             fmt.Sprintf("golemic/issue-%d", issueNum),
+		stderr:                 &strings.Builder{},
+		ciTimeoutOverride:      200 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
+	}
+	writePROpenedEvent(t, logPath, issueNum)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+	return r, &written
+}
+
+// AC-001: git fetch origin fails → merge_failed with "git fetch origin failed:" reason;
+// isBranchUpToDate and gh pr merge must never be called.
+func TestRunMergePhase_FetchFails_MergeFailed_AC001(t *testing.T) { //nolint:cyclop,gocognit
+	logPath := newLogPath(t)
+
+	var mergeBaseCalled, ghMergeCalled bool
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", fmt.Errorf("network error: unable to reach origin")
+			}
+			if name == "git" && args[0] == "merge-base" {
+				mergeBaseCalled = true
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				ghMergeCalled = true
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "comment" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r, eventsPtr := makeMergePhaseRunner(t, exec, 101, logPath)
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+	if mergeBaseCalled {
+		t.Error("isBranchUpToDate must not be called when fetch fails (AC-001)")
+	}
+	if ghMergeCalled {
+		t.Error("gh pr merge must not be called when fetch fails (AC-001)")
+	}
+
+	var found bool
+	var reason string
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			found = true
+			var p map[string]string
+			_ = json.Unmarshal(ev.Payload, &p)
+			reason = p["reason"]
+		}
+	}
+	if !found {
+		t.Fatal("automerge_failed event not written")
+	}
+	if !strings.HasPrefix(reason, "git fetch origin failed:") {
+		t.Errorf("reason: got %q, want prefix 'git fetch origin failed:'", reason)
+	}
+}
+
+// AC-002: up-to-date branch + green CI → exactly one gh pr merge --squash, pr_merged event, outcomeSuccess;
+// rebaseBranch and runVerifyCommand must not be invoked.
+func TestRunMergePhase_UpToDate_GreenCI_Merges_AC002(t *testing.T) { //nolint:cyclop,gocognit
+	logPath := newLogPath(t)
+
+	var rebaseCalled bool
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil // up-to-date
+			}
+			if name == "git" && args[0] == "rebase" {
+				rebaseCalled = true
+				return "", fmt.Errorf("must not be called")
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil // branch gone; skip delete
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-ac002", nil
+			}
+			if name == "sh" {
+				t.Error("runVerifyCommand must not be called on up-to-date CI-green path (AC-002)")
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r, eventsPtr := makeMergePhaseRunner(t, exec, 102, logPath)
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if rebaseCalled {
+		t.Error("rebaseBranch must not be called on up-to-date path (AC-002)")
+	}
+
+	var prMergedFound bool
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventPRMerged {
+			prMergedFound = true
+		}
+		if ev.Type == eventlog.EventAutomergeFailed {
+			t.Error("automerge_failed must not be written on success path (AC-002)")
+		}
+	}
+	if !prMergedFound {
+		t.Error("pr_merged event not written (AC-002)")
+	}
+}
+
+// AC-003: up-to-date branch + CI pending then green → pollCIChecks polls at least twice,
+// then squash-merges and writes pr_merged.
+func TestRunMergePhase_UpToDate_PendingThenGreen_Merges_AC003(t *testing.T) { //nolint:cyclop,gocognit
+	logPath := newLogPath(t)
+
+	checksCall := 0
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil // up-to-date
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				checksCall++
+				if checksCall == 1 {
+					return `[{"name":"verify","bucket":"waiting","link":""}]`, nil
+				}
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-ac003", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r, eventsPtr := makeMergePhaseRunner(t, exec, 103, logPath)
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if checksCall < 2 {
+		t.Errorf("pollCIChecks must poll at least twice (pending→green); got %d calls", checksCall)
+	}
+
+	var found bool
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventPRMerged {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("pr_merged event not written (AC-003)")
+	}
+}
+
+// AC-004: up-to-date branch + red CI → merge_failed with reason containing "CI checks failed" and check name.
+func TestRunMergePhase_UpToDate_RedCI_MergeFailed_AC004(t *testing.T) { //nolint:cyclop,gocognit
+	logPath := newLogPath(t)
+
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil // up-to-date
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return `[{"name":"verify","bucket":"fail","link":""}]`, nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				t.Error("gh pr merge must not be called when CI is red (AC-004)")
+				return "", nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "comment" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r, eventsPtr := makeMergePhaseRunner(t, exec, 104, logPath)
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+
+	var found bool
+	var reason string
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			found = true
+			var p map[string]string
+			_ = json.Unmarshal(ev.Payload, &p)
+			reason = p["reason"]
+		}
+	}
+	if !found {
+		t.Fatal("automerge_failed event not written (AC-004)")
+	}
+	if !strings.Contains(reason, "CI checks failed") {
+		t.Errorf("reason: got %q, want it to contain 'CI checks failed' (AC-004)", reason)
+	}
+	if !strings.Contains(reason, "verify") {
+		t.Errorf("reason: got %q, want it to contain check name 'verify' (AC-004)", reason)
+	}
+}
+
+// AC-005: up-to-date branch + no CI checks → merge_failed with "required check not reported for PR head";
+// runVerifyCommand and forcePushBranch must not be called.
+func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nolint:cyclop,gocognit
+	logPath := newLogPath(t)
+
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil // up-to-date
+			}
+			if name == "sh" {
+				t.Error("runVerifyCommand must not be called on up-to-date no_checks path (AC-005)")
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return "", noChecksErr()
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				t.Error("gh pr merge must not be called when no checks reported (AC-005)")
+				return "", nil
+			}
+			if name == "git" && args[0] == "push" {
+				t.Error("forcePushBranch must not be called on up-to-date no_checks path (AC-005)")
+				return "", nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "comment" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r, eventsPtr := makeMergePhaseRunner(t, exec, 105, logPath)
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+
+	const wantReason = "required check not reported for PR head"
+	var found bool
+	var reason string
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			found = true
+			var p map[string]string
+			_ = json.Unmarshal(ev.Payload, &p)
+			reason = p["reason"]
+		}
+	}
+	if !found {
+		t.Fatal("automerge_failed event not written (AC-005)")
+	}
+	if reason != wantReason {
+		t.Errorf("reason: got %q, want %q (AC-005)", reason, wantReason)
+	}
+}
+
+// AC-006: behind branch (isBranchUpToDate=false after fetch) → rebaseBranch + verifyAndPush flow,
+// and the existing AC-008 no_checks path in verifyAndPush still runs runVerifyCommand (BR-005 regression).
+func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //nolint:cyclop,gocognit,funlen
+	logPath := newLogPath(t)
+
+	homeDir := t.TempDir()
+	project := "proj"
+	mkCredDir(t, homeDir, project)
+	creds := mustLoadCredsFromDir(t, homeDir, project)
+
+	var rebaseCalled, verifyCommandCalled, forcePushCalled bool
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil // both the new top-level fetch and rebaseBranch's internal fetch
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", &preflight.ErrExit{ExitCode: 1} // behind origin/main
+			}
+			if name == "git" && args[0] == "rebase" && args[1] == "origin/main" {
+				rebaseCalled = true
+				return "", nil
+			}
+			if name == "sh" && args[0] == "-c" {
+				verifyCommandCalled = true
+				return "", nil // verify_command passes
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				// no_checks → verifyAndPush runs local verify_command (AC-008 / BR-005)
+				return "", noChecksErr()
+			}
+			if name == "git" && args[0] == "push" {
+				forcePushCalled = true
+				return "", nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-ac006", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	var written []eventlog.Event
+	r := &Runner{
+		executor:               exec,
+		issueNum:               106,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                homeDir,
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: project, VerifyCommand: "echo ok"},
+		creds:                  creds,
+		branchName:             "golemic/issue-106",
+		stderr:                 &strings.Builder{},
+		ciTimeoutOverride:      200 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
+	}
+	writePROpenedEvent(t, logPath, 106)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q (AC-006)", outcome, outcomeSuccess)
+	}
+	if !rebaseCalled {
+		t.Error("rebaseBranch must be called on behind-branch path (AC-006)")
+	}
+	if !verifyCommandCalled {
+		t.Error("runVerifyCommand must be called in verifyAndPush no_checks path (AC-006 / BR-005)")
+	}
+	if !forcePushCalled {
+		t.Error("forcePushBranch must be called after verify_command passes (AC-006 / BR-005)")
+	}
+
+	var prMergedFound bool
+	for _, ev := range written {
+		if ev.Type == eventlog.EventPRMerged {
+			prMergedFound = true
+		}
+	}
+	if !prMergedFound {
+		t.Error("pr_merged event not written (AC-006)")
 	}
 }
