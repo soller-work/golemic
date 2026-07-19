@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate an implementation slice structurally and semantically."""
+"""Validate a slice.json v2 against schema and semantic rules."""
 
 from __future__ import annotations
 
@@ -11,10 +11,8 @@ from typing import Any, Iterable
 
 try:
     from jsonschema import Draft202012Validator
-except ImportError as exc:  # pragma: no cover
-    raise SystemExit(
-        "Missing dependency 'jsonschema'. Install it with: python -m pip install jsonschema"
-    ) from exc
+except ImportError as exc:
+    raise SystemExit("Missing dependency 'jsonschema'. Install: pip install jsonschema") from exc
 
 PLACEHOLDER_RE = re.compile(
     r"\b(?:tbd|todo|unknown|later|to be decided|not specified|fixme)\b",
@@ -24,37 +22,24 @@ PLACEHOLDER_RE = re.compile(
 _QUOTED_RE = re.compile(r"`[^`]*`|\"[^\"]*\"")
 
 
-def _unquoted_placeholder(text: str) -> "re.Match | None":
+def load_schema(schema_path: Path = None) -> dict:
+    """Load schema from default location or provided path."""
+    if schema_path is None:
+        schema_path = Path(__file__).parent.parent / "schema.json"
+    try:
+        return json.loads(schema_path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise SystemExit(f"Schema not found: {schema_path}") from exc
+
+
+def _unquoted_placeholder(text: str) -> re.Match | None:
+    """Find placeholder tokens outside quotes."""
     cleaned = _QUOTED_RE.sub(lambda m: " " * len(m.group()), text)
     return PLACEHOLDER_RE.search(cleaned)
 
-ID_COLLECTIONS = (
-    "business_rules",
-    "decision_tables",
-    "interfaces",
-    "read_models",
-    "process_steps",
-    "integration_contracts",
-    "state_changes",
-    "side_effects",
-    "acceptance_scenarios",
-    "decision_log",
-    "codebase_evidence",
-)
-
-TRACE_COLLECTIONS = (
-    "business_rules",
-    "decision_tables",
-    "interfaces",
-    "read_models",
-    "process_steps",
-    "integration_contracts",
-    "state_changes",
-    "side_effects",
-)
-
 
 def load_json(path: Path) -> Any:
+    """Load JSON file."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -66,6 +51,7 @@ def load_json(path: Path) -> Any:
 
 
 def json_path(parts: Iterable[Any]) -> str:
+    """Format a JSON path from parts."""
     result = "$"
     for part in parts:
         if isinstance(part, int):
@@ -76,6 +62,7 @@ def json_path(parts: Iterable[Any]) -> str:
 
 
 def walk_strings(value: Any, path: tuple[Any, ...] = ()) -> Iterable[tuple[tuple[Any, ...], str]]:
+    """Walk all strings in a nested structure."""
     if isinstance(value, str):
         yield path, value
     elif isinstance(value, list):
@@ -86,178 +73,96 @@ def walk_strings(value: Any, path: tuple[Any, ...] = ()) -> Iterable[tuple[tuple
             yield from walk_strings(item, path + (key,))
 
 
-def collect_ids(document: dict[str, Any]) -> tuple[dict[str, str], list[str]]:
-    locations: dict[str, str] = {}
-    errors: list[str] = []
-    for collection in ID_COLLECTIONS:
-        for index, item in enumerate(document.get(collection, [])):
-            item_id = item.get("id")
-            if not isinstance(item_id, str):
-                continue
-            location = f"$.{collection}[{index}].id"
-            if item_id in locations:
-                errors.append(
-                    f"Duplicate identifier {item_id!r} at {location}; first defined at {locations[item_id]}"
-                )
-            else:
-                locations[item_id] = location
-    return locations, errors
-
-
 def semantic_errors(document: dict[str, Any]) -> list[str]:
+    """Check semantic rules beyond structural schema validation."""
     errors: list[str] = []
-    ids, duplicate_errors = collect_ids(document)
-    errors.extend(duplicate_errors)
-
-    traceable_ids = {
-        item["id"]
-        for collection in TRACE_COLLECTIONS
-        for item in document.get(collection, [])
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    }
-    evidence_ids = {
-        item["id"]
-        for item in document.get("codebase_evidence", [])
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    }
-    business_rule_ids = {
-        item["id"]
-        for item in document.get("business_rules", [])
-        if isinstance(item, dict) and isinstance(item.get("id"), str)
-    }
-
-    traced_ids: set[str] = set()
-    for index, scenario in enumerate(document.get("acceptance_scenarios", [])):
-        for trace_id in scenario.get("traces_to", []):
-            traced_ids.add(trace_id)
-            if trace_id not in traceable_ids:
-                errors.append(
-                    f"Unknown trace reference {trace_id!r} at $.acceptance_scenarios[{index}].traces_to"
-                )
-
-    for trace_id in sorted(traceable_ids - traced_ids):
-        errors.append(f"Traceable item {trace_id!r} is not covered by any acceptance scenario")
-
-    for table_index, table in enumerate(document.get("decision_tables", [])):
-        for row_index, row in enumerate(table.get("rows", [])):
-            for rule_id in row.get("rule_ids", []):
-                if rule_id not in business_rule_ids:
-                    errors.append(
-                        f"Unknown business-rule reference {rule_id!r} at "
-                        f"$.decision_tables[{table_index}].rows[{row_index}].rule_ids"
-                    )
-
-    slice_type = document.get("slice_type")
-    state_changes = document.get("state_changes", [])
-    read_models = document.get("read_models", [])
-    process_steps = document.get("process_steps", [])
-    integration_contracts = document.get("integration_contracts", [])
-
-    if slice_type == "command" and not state_changes:
-        errors.append("A command slice requires at least one state change")
-    elif slice_type == "query":
-        if not read_models:
-            errors.append("A query slice requires at least one read model")
-        if state_changes:
-            errors.append("A query slice must not contain domain state changes")
-    elif slice_type == "process":
-        if len(process_steps) < 2:
-            errors.append("A process slice requires at least two ordered process steps")
-        step_orders = [step.get("order") for step in process_steps]
-        if len(step_orders) != len(set(step_orders)):
-            errors.append("Process-step order values must be unique")
-        if process_steps and not any(step.get("terminal") is True for step in process_steps):
-            errors.append("A process slice requires at least one terminal process step")
-    elif slice_type == "integration" and not integration_contracts:
-        errors.append("An integration slice requires at least one integration contract")
-
-    referenced_evidence: set[str] = set()
-    for index, decision in enumerate(document.get("decision_log", [])):
-        decision_evidence = decision.get("evidence_ids", [])
-        for evidence_id in decision_evidence:
-            referenced_evidence.add(evidence_id)
-            if evidence_id not in evidence_ids:
-                errors.append(
-                    f"Unknown evidence reference {evidence_id!r} at $.decision_log[{index}].evidence_ids"
-                )
-        if decision.get("source") == "codebase" and not decision_evidence:
-            errors.append(
-                f"Codebase-sourced decision at $.decision_log[{index}] must reference at least one evidence item"
-            )
 
     readiness = document.get("readiness")
-    unresolved_lists = (
-        "open_questions",
-        "assumptions_requiring_confirmation",
-        "blockers",
-    )
+    blockers = document.get("blockers", [])
 
+    # Rule 1: ready slices must have empty blockers
+    if readiness == "ready" and blockers:
+        errors.append(f"A ready slice requires $.blockers to be empty, but found {len(blockers)} blocker(s)")
+
+    # Rule 2: blocked slices must have at least one blocker
+    if readiness == "blocked" and not blockers:
+        errors.append("A blocked slice must have at least one blocker (question, assumption, or blocker)")
+
+    # Rule 3: no unquoted placeholder tokens in ready slices
     if readiness == "ready":
-        for field in unresolved_lists:
-            if document.get(field):
-                errors.append(f"A ready slice requires $.{field} to be empty")
-
         for path, text in walk_strings(document):
             m = _unquoted_placeholder(text)
             if m:
                 token = m.group()
                 errors.append(
-                    f"Unresolved placeholder token {token!r} in ready slice at {json_path(path)}"
-                    f" (wrap the word in backticks if it is a verbatim quote)"
+                    f"Unresolved placeholder token {token!r} in ready slice at {json_path(path)} "
+                    f"(wrap verbatim quotes in backticks to ignore)"
                 )
 
-        unreferenced_evidence = evidence_ids - referenced_evidence
-        for evidence_id in sorted(unreferenced_evidence):
-            errors.append(
-                f"Codebase evidence {evidence_id!r} is not referenced by any decision"
-            )
-
-        for index, evidence in enumerate(document.get("codebase_evidence", [])):
-            if evidence.get("verified") is not True:
-                errors.append(
-                    f"Ready slice requires verified codebase evidence at $.codebase_evidence[{index}]"
-                )
-
-    if readiness == "blocked" and not any(document.get(field) for field in unresolved_lists):
-        errors.append(
-            "A blocked slice must contain at least one open question, unconfirmed assumption, or blocker"
-        )
+    # Rule 4: if security_relevant=true, security field must be present and non-empty
+    if document.get("security_relevant") is True:
+        security = document.get("security", "").strip()
+        if not security:
+            errors.append("If $.security_relevant=true, $.security must be present and non-empty")
 
     return errors
 
 
+def full_validate(document: dict[str, Any], schema: dict = None) -> list[str]:
+    """Run structural + semantic validation. Returns list of all errors (empty = valid)."""
+    if schema is None:
+        schema = load_schema()
+
+    # Structural validation
+    try:
+        validator = Draft202012Validator(schema)
+    except Exception as exc:
+        return [f"Invalid schema: {exc}"]
+
+    structural = sorted(validator.iter_errors(document), key=lambda err: list(err.absolute_path))
+    structural_errors = [
+        f"{json_path(e.absolute_path)}: {e.message}"
+        for e in structural
+    ]
+
+    # Semantic validation (only if structural is clean)
+    semantic = semantic_errors(document) if not structural_errors else []
+
+    return structural_errors + semantic
+
+
 def main() -> int:
+    """CLI entry point: validate <schema.json> <slice.json>"""
     if len(sys.argv) != 3:
         print(
-            "Usage: python scripts/validate_slice.py <schema.json> <implementation-slice.json>",
+            "Usage: python validate_slice.py <schema.json> <slice.json>",
             file=sys.stderr,
         )
         return 2
 
     schema_path = Path(sys.argv[1])
     document_path = Path(sys.argv[2])
+
     schema = load_json(schema_path)
     document = load_json(document_path)
 
+    # Check schema validity
     try:
         Draft202012Validator.check_schema(schema)
     except Exception as exc:
         print(f"Invalid schema {schema_path}: {exc}", file=sys.stderr)
         return 2
 
-    validator = Draft202012Validator(schema)
-    structural = sorted(validator.iter_errors(document), key=lambda err: list(err.absolute_path))
-    semantic = semantic_errors(document) if not structural else []
+    # Run full validation
+    errors = full_validate(document, schema)
 
-    if structural or semantic:
+    if errors:
         print("Validation failed:", file=sys.stderr)
-        for error in structural:
-            print(f"- {json_path(error.absolute_path)}: {error.message}", file=sys.stderr)
-        for error in semantic:
+        for error in errors:
             print(f"- {error}", file=sys.stderr)
         return 1
 
-    print(f"Validation passed: {document_path}")
+    print(f"✓ Validation passed: {document_path}")
     return 0
 
 
