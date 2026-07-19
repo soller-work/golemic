@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -8,14 +9,19 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"golemic/internal/config"
+	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
 	"golemic/internal/repo"
+	"golemic/internal/runloop"
 	"golemic/internal/runner"
 )
 
@@ -60,6 +66,7 @@ var knownCommands = []struct {
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
 	{"slice", "Print the authoritative task spec for an issue (golemic slice --issue N)"},
 	{"claim-issue", "Claim an issue as in-progress for the dev-bot (golemic claim-issue --number N)"},
+	{"run-loop", "Run the autonomous 60-second polling loop for takeable issues"},
 }
 
 func usage(w io.Writer) {
@@ -141,6 +148,12 @@ func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit
 
 	if command == "claim-issue" {
 		return runClaimIssue(args, stdout, stderr, os.Getenv, osExecutor{})
+	}
+
+	if command == "run-loop" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return runRunLoop(ctx, args, stdout, stderr, osRunLoopExecutor{})
 	}
 
 	for _, c := range knownCommands {
@@ -768,6 +781,78 @@ func (e osExecutor) RunWithEnvInDir(env map[string]string, dir string, name stri
 		return "", err
 	}
 	return string(out), nil
+}
+
+// runRunLoop executes the run-loop subcommand. It resolves the host repo,
+// loads config and credentials, verifies preflight labels, then runs the
+// autonomous tick loop until ctx is cancelled (SIGINT or SIGTERM in production).
+func runRunLoop(ctx context.Context, _ []string, _, stderr io.Writer, executor runloop.Executor) int {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "run-loop startup failed: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(stderr, "run-loop startup failed: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	repoRoot, err := repo.ResolveHostRepo(executor, cwd)
+	if err != nil {
+		fmt.Fprintf(stderr, "run-loop startup failed: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	cfg, err := config.Load(repoRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "run-loop startup failed: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	if _, err := credentials.NewLoader(homeDir).Load(cfg.Project); err != nil {
+		fmt.Fprintf(stderr, "run-loop startup failed: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	if _, err := executor.RunInDir(repoRoot, "golemic", "preflight", "--check"); err != nil {
+		fmt.Fprintf(stderr, "run-loop startup failed: preflight check: %v\n", err) //nolint:errcheck
+		return 1
+	}
+
+	l := runloop.New(executor, homeDir, repoRoot, cfg.Project, stderr)
+	l.Run(ctx)
+	return 0
+}
+
+// osRunLoopExecutor wraps osExecutor and adds subprocess lifecycle support for
+// the runner via StartWithEnvInDir.
+type osRunLoopExecutor struct {
+	osExecutor
+}
+
+// osProcessHandle wraps an exec.Cmd and implements runloop.ProcessHandle.
+type osProcessHandle struct {
+	cmd *exec.Cmd
+}
+
+func (h *osProcessHandle) Wait() error                { return h.cmd.Wait() }
+func (h *osProcessHandle) Signal(sig os.Signal) error { return h.cmd.Process.Signal(sig) }
+
+func (e osRunLoopExecutor) StartWithEnvInDir(env map[string]string, dir, name string, args ...string) (runloop.ProcessHandle, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	for k, v := range env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return &osProcessHandle{cmd: cmd}, nil
 }
 
 func main() {
