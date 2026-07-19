@@ -443,8 +443,6 @@ func (r *Runner) postEscalationComment(prNumber, roundCount int) {
 // runSpanID is the parent telemetry span ID for all phases within orchestration.
 // Returns final outcome.
 func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, runSpanID string) string {
-	const maxRounds = 3
-
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	var timeoutDuration time.Duration
 	if r.cfg.TimeoutSeconds > 0 {
