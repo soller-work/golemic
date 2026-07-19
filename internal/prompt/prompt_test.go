@@ -372,6 +372,8 @@ func TestRenderDevCIRetry_ContainsFailedCheckInfo(t *testing.T) {
 		"golemic/issue-42",
 		"go test",
 		"Do not open a new PR",
+		"golemic slice --issue 42",
+		"authoritative spec",
 	})
 }
 

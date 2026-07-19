@@ -156,7 +156,7 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
 	r.cfg = &config.Config{
-		VerifyCommand: "go test",
+		VerifyCommand:  "go test",
 		TimeoutMinutes: 30,
 		Models:         config.Models{Dev: "claude-3-5-sonnet-20241022", Reviewer: "claude-3-5-sonnet-20241022"},
 	}
@@ -482,6 +482,11 @@ func TestRenderDevRetry_VerbatimFindings(t *testing.T) {
 	}
 	if !strings.Contains(p, findings) {
 		t.Errorf("dev retry prompt must contain verbatim findings %q, got: %s", findings, p)
+	}
+	for _, want := range []string{"golemic slice --issue 42", "authoritative spec"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("dev retry prompt must contain %q, got: %s", want, p)
+		}
 	}
 }
 

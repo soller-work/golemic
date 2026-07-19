@@ -166,8 +166,6 @@ func setupHappyExecutor(repoRoot string) *fakeExecutor {
 	}
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Preflighter stubs
 // ---------------------------------------------------------------------------
@@ -1048,6 +1046,7 @@ func TestCheckPRCollision_GhFails(t *testing.T) {
 		t.Errorf("error should contain 'failed to check PR state', got: %v", err)
 	}
 }
+
 // ---------------------------------------------------------------------------
 // AC-001: Failing Preflighter stub → exit 1, no run dir/event log/GitHub access
 // ---------------------------------------------------------------------------

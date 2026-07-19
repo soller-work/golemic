@@ -198,7 +198,7 @@ The reviewer has requested the following changes:
 
 ## Instructions
 
-1. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The reviewer findings above are the primary input for this retry.
+1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue’s web UI.
 2. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
 3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
@@ -274,7 +274,7 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 
 ## Instructions
 
-1. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The failing checks above are the primary input for this retry.
+1. The failing checks above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue’s web UI.
 2. Diagnose and fix the failing CI checks described above on branch ` + "`" + `{{.Branch}}` + "`" + `.
 3. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
