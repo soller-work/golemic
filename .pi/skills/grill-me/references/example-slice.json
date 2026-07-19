@@ -1,0 +1,36 @@
+{
+  "slice_type": "command",
+  "title": "Cancel a paid order before shipment",
+  "stakeholder": "Authenticated customer who owns the order",
+  "trigger": "The customer selects Cancel order on an eligible order",
+  "success_outcome": "The order is cancelled and one refund request is recorded",
+  "tldr": "Cancel an owned PAID order and create a refund request",
+  "scope": {
+    "in": [
+      "Cancel an owned order in PAID state",
+      "Create one refund request"
+    ],
+    "out": [
+      "Cancelling shipped orders",
+      "Executing the external refund settlement"
+    ]
+  },
+  "behavior": "On POST /orders/{orderId}/cancel, verify ownership and PAID state, transition order to CANCELLED, and persist one RefundRequest keyed on the cancellation id.",
+  "business_rules": "- ORDER_NOT_OWNED: only the owning customer may cancel; reject non-owners with 403.\n- ORDER_ALREADY_SHIPPED: cancel only PAID orders; reject SHIPPED orders with 409.\n- ORDER_NOT_FOUND: reject unrecognised order ids with 404.\n- At most one refund request per payment; reuse cancellation id as idempotency key.",
+  "acceptance_scenarios": [
+    "Given an authenticated owner of a PAID order, when they cancel it, then status becomes CANCELLED and a refund request is created",
+    "Given a non-owner, when they cancel, then 403 ORDER_NOT_OWNED is returned",
+    "Given an owner of a SHIPPED order, when they cancel, then 409 ORDER_ALREADY_SHIPPED is returned"
+  ],
+  "inputs_outputs_errors": "Input: orderId (UUID, path param). Output: updated Order with status=CANCELLED. Errors: 404 ORDER_NOT_FOUND, 403 ORDER_NOT_OWNED, 409 ORDER_ALREADY_SHIPPED.",
+  "verify_commands": [
+    "go test ./..."
+  ],
+  "definition_of_done": [
+    "All acceptance scenarios have passing tests",
+    "Errors ORDER_NOT_FOUND, ORDER_NOT_OWNED, ORDER_ALREADY_SHIPPED are returned with correct HTTP status codes"
+  ],
+  "readiness": "ready",
+  "blockers": [],
+  "security_relevant": false
+}

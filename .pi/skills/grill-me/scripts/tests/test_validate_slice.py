@@ -171,5 +171,87 @@ class TestValidateSlice:
             assert code != 0, "Should fail: missing required field"
 
 
+class TestUnreferencedErrorCode:
+    """Unit tests for the interfaces[].errors[].code semantic check (AC-001 through AC-006)."""
+
+    def _make_doc(self, code: str, business_rules=None, decision_tables=None, readiness="ready", blockers=None):
+        """Build a minimal dict with interfaces and the given code."""
+        if blockers is None:
+            blockers = [] if readiness == "ready" else [{"kind": "question", "text": "?"}]
+        return {
+            "readiness": readiness,
+            "blockers": blockers,
+            "interfaces": [{"errors": [{"code": code}]}],
+            "business_rules": business_rules if business_rules is not None else [],
+            "decision_tables": decision_tables if decision_tables is not None else [],
+        }
+
+    def _errors(self, doc):
+        from validate_slice import semantic_errors
+        return semantic_errors(doc)
+
+    def test_code_referenced_in_business_rule_outcome_passes(self):
+        """AC-001: error code verbatim in a business_rules outcome emits no finding."""
+        doc = self._make_doc(
+            "ORDER_NOT_OWNED",
+            business_rules=[{"rule": "Only the owner may cancel", "outcome": "Reject non-owners with ORDER_NOT_OWNED"}],
+        )
+        errs = self._errors(doc)
+        assert not any("ORDER_NOT_OWNED" in e and "Unreferenced" in e for e in errs)
+
+    def test_code_referenced_in_decision_table_then_passes(self):
+        """AC-002: error code verbatim in decision_tables row then value emits no finding."""
+        doc = self._make_doc(
+            "ORDER_ALREADY_SHIPPED",
+            business_rules=[{"rule": "Only PAID orders can be cancelled", "outcome": "Cancel PAID orders"}],
+            decision_tables=[{
+                "rows": [{"when": {}, "then": {"result": "reject with ORDER_ALREADY_SHIPPED"}}]
+            }],
+        )
+        errs = self._errors(doc)
+        assert not any("ORDER_ALREADY_SHIPPED" in e and "Unreferenced" in e for e in errs)
+
+    def test_unreferenced_code_fails_with_correct_path(self):
+        """AC-003: unreferenced error code emits finding with correct JSON path and token."""
+        doc = self._make_doc("UNKNOWN_CODE", business_rules=[], decision_tables=[])
+        errs = self._errors(doc)
+        assert any("Unreferenced error code UNKNOWN_CODE" in e for e in errs)
+        assert any("$.interfaces[0].errors[0].code" in e for e in errs)
+
+    def test_paraphrase_does_not_satisfy_check(self):
+        """AC-004: lowercase paraphrase without verbatim token yields a finding."""
+        doc = self._make_doc(
+            "ORDER_NOT_OWNED",
+            business_rules=[{"rule": "Only the owner may cancel; reject if not owned", "outcome": "reject if not owned"}],
+        )
+        errs = self._errors(doc)
+        assert any("Unreferenced error code ORDER_NOT_OWNED" in e for e in errs)
+
+    def test_empty_interfaces_passes_vacuously(self):
+        """AC-005: empty interfaces array emits no UNREFERENCED_ERROR_CODE findings."""
+        from validate_slice import semantic_errors
+        doc = {"readiness": "ready", "blockers": [], "interfaces": [], "business_rules": [], "decision_tables": []}
+        errs = semantic_errors(doc)
+        assert not any("Unreferenced error code" in e for e in errs)
+
+    def test_blocked_slice_still_checked(self):
+        """AC-006: blocked slice with unreferenced code still emits a finding."""
+        doc = self._make_doc(
+            "GHOST_CODE",
+            business_rules=[{"rule": "Some rule", "outcome": "Some outcome"}],
+            readiness="blocked",
+            blockers=[{"kind": "question", "text": "Is this correct?"}],
+        )
+        errs = self._errors(doc)
+        assert any("Unreferenced error code GHOST_CODE" in e for e in errs)
+
+    def test_absent_interfaces_field_is_no_op(self):
+        """Documents without an interfaces field (e.g. v2 format) pass the check."""
+        from validate_slice import semantic_errors
+        doc = {"readiness": "blocked", "blockers": [{"kind": "question", "text": "?"}]}
+        errs = semantic_errors(doc)
+        assert not any("Unreferenced error code" in e for e in errs)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

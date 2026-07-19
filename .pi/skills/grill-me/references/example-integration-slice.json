@@ -1,0 +1,39 @@
+{
+  "slice_type": "integration",
+  "title": "Inbound PayStream payment webhook handler",
+  "stakeholder": "Finance operations team",
+  "trigger": "PayStream posts a payment event to /webhooks/paystream",
+  "success_outcome": "The payment event is validated, persisted, and the corresponding order is updated",
+  "tldr": "Validate and persist PayStream payment webhook events, update order payment status",
+  "scope": {
+    "in": [
+      "Signature validation of incoming webhook requests",
+      "Persist payment events and update order payment status"
+    ],
+    "out": [
+      "Initiating outbound PayStream API calls",
+      "Refund processing"
+    ]
+  },
+  "behavior": "On POST /webhooks/paystream, validate the HMAC-SHA256 signature header, parse the event, upsert the payment record, and update the referenced order's payment status. Respond 200 on success; PayStream retries on non-2xx.",
+  "business_rules": "- INVALID_SIGNATURE: reject requests with a missing or invalid HMAC-SHA256 signature with 401.\n- UNKNOWN_ORDER: reject events referencing an order id not present in the system with 422 UNKNOWN_ORDER.\n- DUPLICATE_EVENT: idempotently accept replayed events; return 200 without reprocessing when the event id was already handled.",
+  "acceptance_scenarios": [
+    "Given a valid signed payment event for a recognised order, when posted, then the order payment status is updated and 200 is returned",
+    "Given a request with an invalid signature, when posted, then 401 INVALID_SIGNATURE is returned",
+    "Given an event referencing an order not in the system, when posted, then 422 UNKNOWN_ORDER is returned",
+    "Given a previously processed event id, when posted again, then 200 is returned without duplicate processing"
+  ],
+  "inputs_outputs_errors": "Input: POST /webhooks/paystream with X-PayStream-Signature header and JSON body {eventId, orderId, amount, currency, status}. Output: 200 OK. Errors: 401 INVALID_SIGNATURE, 422 UNKNOWN_ORDER.",
+  "verify_commands": [
+    "go test ./..."
+  ],
+  "definition_of_done": [
+    "Signature validation is tested with valid and tampered payloads",
+    "Idempotency is verified by replaying an event",
+    "UNKNOWN_ORDER rejection is covered"
+  ],
+  "readiness": "ready",
+  "blockers": [],
+  "security_relevant": true,
+  "security": "All incoming requests must carry a valid HMAC-SHA256 signature computed over the raw request body using the shared PayStream webhook secret. Requests with missing or invalid signatures are rejected with 401 before any processing."
+}

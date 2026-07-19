@@ -1,0 +1,36 @@
+{
+  "slice_type": "process",
+  "title": "Document approval workflow for regulatory submissions",
+  "stakeholder": "Regulatory affairs specialist",
+  "trigger": "A document is submitted for approval via the review portal",
+  "success_outcome": "The document progresses through draft, review, and approved states with an audit trail",
+  "tldr": "Multi-step document approval: draft → under-review → approved with audit trail",
+  "scope": {
+    "in": [
+      "State transitions: draft → under-review → approved or rejected",
+      "Audit trail entry per transition"
+    ],
+    "out": [
+      "External regulatory body submission",
+      "Document content editing"
+    ]
+  },
+  "behavior": "Step 1: author submits document (draft → under-review). Step 2: reviewer approves or rejects. Approved documents move to approved state; rejected documents return to draft. Each transition appends an audit log entry with actor and timestamp.",
+  "business_rules": "- DOCUMENT_NOT_FOUND: reject operations on unrecognised document ids with 404.\n- INVALID_TRANSITION: only permitted state transitions are allowed; reject others with 409 INVALID_TRANSITION.\n- Reviewers may not approve their own submissions; return SELF_APPROVAL_FORBIDDEN (403) otherwise.",
+  "acceptance_scenarios": [
+    "Given an author with a draft document, when they submit it, then the document moves to under-review and an audit entry is created",
+    "Given a reviewer, when they approve an under-review document, then status becomes approved",
+    "Given the original author acting as reviewer, when they try to approve their own document, then 403 SELF_APPROVAL_FORBIDDEN is returned"
+  ],
+  "inputs_outputs_errors": "Input: documentId (UUID), action (submit|approve|reject), reviewerId (UUID). Output: updated Document with new status and audit trail. Errors: 404 DOCUMENT_NOT_FOUND, 409 INVALID_TRANSITION, 403 SELF_APPROVAL_FORBIDDEN.",
+  "verify_commands": [
+    "go test ./..."
+  ],
+  "definition_of_done": [
+    "All state transitions are covered by tests",
+    "Audit trail is written for every transition"
+  ],
+  "readiness": "ready",
+  "blockers": [],
+  "security_relevant": false
+}

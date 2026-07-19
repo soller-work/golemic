@@ -1,0 +1,36 @@
+{
+  "slice_type": "query",
+  "title": "Search open orders for warehouse staff",
+  "stakeholder": "Warehouse staff member",
+  "trigger": "Staff member queries the order list with optional filters",
+  "success_outcome": "A paginated list of open orders matching the filters is returned",
+  "tldr": "Return paginated open orders filtered by status and warehouse",
+  "scope": {
+    "in": [
+      "Filter by status and warehouse id",
+      "Return paginated results sorted by created-at descending"
+    ],
+    "out": [
+      "Modifying order state",
+      "Returning cancelled or shipped orders"
+    ]
+  },
+  "behavior": "GET /orders?status=&warehouseId=&page=&size= returns a page of orders in OPEN or PAID status visible to the requesting warehouse. Default page size is 20; max is 100.",
+  "business_rules": "- WAREHOUSE_NOT_FOUND: reject unrecognised warehouse ids with 404.\n- INVALID_PAGE_SIZE: page size must be between 1 and 100; reject out-of-range values with 400.\n- Staff may only query warehouses assigned to them; return WAREHOUSE_ACCESS_DENIED (403) otherwise.",
+  "acceptance_scenarios": [
+    "Given a warehouse id the staff member is assigned to, when they query open orders, then a paginated list is returned",
+    "Given an unrecognised warehouse id, when queried, then 404 WAREHOUSE_NOT_FOUND is returned",
+    "Given a page size of 0, when queried, then 400 INVALID_PAGE_SIZE is returned"
+  ],
+  "inputs_outputs_errors": "Input: status (enum), warehouseId (UUID), page (int), size (int 1-100). Output: {items: Order[], total: int, page: int}. Errors: 404 WAREHOUSE_NOT_FOUND, 400 INVALID_PAGE_SIZE, 403 WAREHOUSE_ACCESS_DENIED.",
+  "verify_commands": [
+    "go test ./..."
+  ],
+  "definition_of_done": [
+    "All acceptance scenarios have passing tests",
+    "Pagination defaults and limits are enforced"
+  ],
+  "readiness": "ready",
+  "blockers": [],
+  "security_relevant": false
+}
