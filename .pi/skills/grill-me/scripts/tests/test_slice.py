@@ -12,6 +12,7 @@ SKILL_DIR = SCRIPTS_DIR.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import slice as sl
+from validate_slice import semantic_errors
 
 SCHEMA_PATH = SKILL_DIR / "schema.json"
 EXAMPLE_SLICE = SKILL_DIR / "references" / "example-slice.json"
@@ -151,10 +152,11 @@ class TestSetBusinessRules(unittest.TestCase):
         self.assertEqual(ids, ["BR-001", "BR-002", "BR-003"])
 
     def test_sequential_sets_continue_numbering(self):
+        """--append keeps the old accumulate-and-number behavior."""
         frag1 = json.dumps([{"rule": "R1", "applies_when": "a", "outcome": "x"}])
         frag2 = json.dumps([{"rule": "R2", "applies_when": "b", "outcome": "y"}])
         run_slice("set", str(self.path), "business_rules", frag1)
-        run_slice("set", str(self.path), "business_rules", frag2)
+        run_slice("set", str(self.path), "business_rules", "--append", frag2)
         data = read_json(self.path)
         ids = [item["id"] for item in data["business_rules"]]
         self.assertEqual(ids, ["BR-001", "BR-002"])
@@ -388,6 +390,337 @@ class TestStatus(unittest.TestCase):
     def test_status_shows_sections(self):
         _, stdout, _ = run_slice("status", str(self.path))
         self.assertIn("business_rules", stdout)
+
+
+# ---------------------------------------------------------------------------
+# F1: set replaces array by default; --append keeps old behavior
+# ---------------------------------------------------------------------------
+
+class TestSetReplace(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.path = self.dir / "s.json"
+        run_slice("init", "command", "--out", str(self.path))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_ac_f1_1_set_replaces_by_default(self):
+        frag1 = json.dumps([
+            {"rule": "A", "applies_when": "x", "outcome": "ok"},
+            {"rule": "B", "applies_when": "y", "outcome": "ok"},
+        ])
+        frag2 = json.dumps([
+            {"rule": "C", "applies_when": "z", "outcome": "ok"},
+            {"rule": "D", "applies_when": "w", "outcome": "ok"},
+        ])
+        run_slice("set", str(self.path), "business_rules", frag1)
+        rc, stdout, stderr = run_slice("set", str(self.path), "business_rules", frag2)
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        ids = [item["id"] for item in data["business_rules"]]
+        self.assertEqual(ids, ["BR-001", "BR-002"])
+        self.assertIn("replaced", stdout)
+
+    def test_ac_f1_2_append_flag_accumulates(self):
+        frag1 = json.dumps([
+            {"rule": "A", "applies_when": "x", "outcome": "ok"},
+            {"rule": "B", "applies_when": "y", "outcome": "ok"},
+        ])
+        frag2 = json.dumps([
+            {"rule": "C", "applies_when": "z", "outcome": "ok"},
+            {"rule": "D", "applies_when": "w", "outcome": "ok"},
+        ])
+        run_slice("set", str(self.path), "business_rules", frag1)
+        rc, stdout, stderr = run_slice("set", str(self.path), "business_rules", "--append", frag2)
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        ids = [item["id"] for item in data["business_rules"]]
+        self.assertEqual(ids, ["BR-001", "BR-002", "BR-003", "BR-004"])
+        self.assertIn("appended", stdout)
+        self.assertIn("total now 4", stdout)
+
+    def test_ac_f1_3_replace_breaks_cross_ref_fails(self):
+        # Seed BR-001 and BR-002
+        frag_br = json.dumps([
+            {"rule": "A", "applies_when": "x", "outcome": "ok"},
+            {"rule": "B", "applies_when": "y", "outcome": "ok"},
+        ])
+        run_slice("set", str(self.path), "business_rules", frag_br)
+        sc_frag = json.dumps([{
+            "target": "Order", "precondition": "exists",
+            "changes": [{"field": "status", "operation": "set", "value_source": "DONE"}],
+        }])
+        run_slice("set", str(self.path), "state_changes", sc_frag)
+        # Add acceptance scenario referencing BR-002
+        ac_frag = json.dumps([{
+            "title": "S", "given": ["g"], "when": ["w"], "then": ["t"],
+            "traces_to": ["BR-002", "SC-001"],
+        }])
+        run_slice("set", str(self.path), "acceptance_scenarios", ac_frag)
+        # Replace business_rules with only one item — BR-002 vanishes
+        replace_frag = json.dumps([{"rule": "C", "applies_when": "z", "outcome": "ok"}])
+        rc, stdout, stderr = run_slice("set", str(self.path), "business_rules", replace_frag)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("BR-002", stderr)
+        self.assertIn("$.acceptance_scenarios[", stderr)
+        self.assertIn("].traces_to[", stderr)
+
+    def test_ac_f1_4_scalar_set_unaffected(self):
+        rc, stdout, stderr = run_slice("set", str(self.path), "risk", '"low"')
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        self.assertEqual(data["risk"], "low")
+
+    def test_replace_success_message_format(self):
+        frag = json.dumps([{"rule": "A", "applies_when": "x", "outcome": "ok"}])
+        _, stdout, _ = run_slice("set", str(self.path), "business_rules", frag)
+        self.assertIn("replaced with 1 item(s)", stdout)
+        self.assertIn("BR-001", stdout)
+
+
+# ---------------------------------------------------------------------------
+# F2: placeholder detection ignores quoted domain text
+# ---------------------------------------------------------------------------
+
+class TestValidatePlaceholder(unittest.TestCase):
+    def _ready_doc_with_summary(self, text: str) -> dict:
+        doc = _make_full_slice()
+        doc["summary"] = text
+        return doc
+
+    def test_ac_f2_1_backtick_quoted_passes(self):
+        doc = self._ready_doc_with_summary("`Unknown business-rule reference`")
+        errs = [e for e in semantic_errors(doc) if "placeholder" in e.lower()]
+        self.assertEqual(errs, [], errs)
+
+    def test_ac_f2_1_double_quote_quoted_passes(self):
+        doc = self._ready_doc_with_summary('"Unknown business-rule reference"')
+        errs = [e for e in semantic_errors(doc) if "placeholder" in e.lower()]
+        self.assertEqual(errs, [], errs)
+
+    def test_ac_f2_2_bare_unknown_fails(self):
+        doc = self._ready_doc_with_summary("Unknown value here")
+        errs = [e for e in semantic_errors(doc) if "placeholder" in e.lower()]
+        self.assertGreater(len(errs), 0)
+
+    def test_ac_f2_2_bare_tbd_fails(self):
+        doc = self._ready_doc_with_summary("TBD")
+        errs = [e for e in semantic_errors(doc) if "placeholder" in e.lower()]
+        self.assertGreater(len(errs), 0)
+
+    def test_ac_f2_2_bare_fixme_fails(self):
+        doc = self._ready_doc_with_summary("fixme this part")
+        errs = [e for e in semantic_errors(doc) if "placeholder" in e.lower()]
+        self.assertGreater(len(errs), 0)
+
+    def test_ac_f2_3_error_contains_token_and_path(self):
+        doc = self._ready_doc_with_summary("Unknown value here")
+        errs = [e for e in semantic_errors(doc) if "placeholder" in e.lower()]
+        self.assertTrue(any("unknown" in e.lower() for e in errs))
+        self.assertTrue(any("$." in e for e in errs))
+
+
+# ---------------------------------------------------------------------------
+# F3: init error message names exact recovery command
+# ---------------------------------------------------------------------------
+
+class TestInitErrorMessage(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.path = self.dir / "s.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_ac_f3_1_error_names_exact_recovery_command(self):
+        run_slice("init", "query", "--out", str(self.path))
+        rc, stdout, stderr = run_slice("init", "query", "--out", str(self.path))
+        self.assertEqual(rc, 1)
+        self.assertIn("init --force query", stderr)
+
+    def test_f3_includes_type_in_recovery_command(self):
+        run_slice("init", "command", "--out", str(self.path))
+        _, _, stderr = run_slice("init", "command", "--out", str(self.path))
+        self.assertIn("init --force command", stderr)
+
+
+# ---------------------------------------------------------------------------
+# F4: set-scalar for bare-string scalar sections
+# ---------------------------------------------------------------------------
+
+class TestSetScalar(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.path = self.dir / "s.json"
+        run_slice("init", "command", "--out", str(self.path))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_ac_f4_1_set_scalar_risk(self):
+        rc, _, stderr = run_slice("set-scalar", str(self.path), "risk", "low")
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        self.assertEqual(data["risk"], "low")
+
+    def test_ac_f4_1_set_scalar_matches_json_quoted_form(self):
+        path2 = self.path.parent / "s2.json"
+        run_slice("init", "command", "--out", str(path2))
+        run_slice("set-scalar", str(self.path), "risk", "low")
+        run_slice("set", str(path2), "risk", '"low"')
+        self.assertEqual(read_json(self.path)["risk"], read_json(path2)["risk"])
+
+    def test_ac_f4_2_set_scalar_wrong_section_exits_nonzero(self):
+        rc, _, stderr = run_slice("set-scalar", str(self.path), "business_rules", "foo")
+        self.assertNotEqual(rc, 0)
+        for name in ("title", "summary", "risk", "readiness"):
+            self.assertIn(name, stderr, f"'{name}' missing from stderr: {stderr}")
+
+    def test_ac_f4_3_set_scalar_readiness_ready(self):
+        rc, _, stderr = run_slice("set-scalar", str(self.path), "readiness", "ready")
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        self.assertEqual(data["readiness"], "ready")
+
+    def test_f4_set_scalar_title(self):
+        rc, _, stderr = run_slice("set-scalar", str(self.path), "title", "My Feature")
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        self.assertEqual(data["title"], "My Feature")
+
+    def test_f4_set_scalar_summary(self):
+        rc, _, stderr = run_slice("set-scalar", str(self.path), "summary", "A brief summary.")
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        self.assertEqual(data["summary"], "A brief summary.")
+
+
+# ---------------------------------------------------------------------------
+# F5: remove an item by ID with dangling-reference guard
+# ---------------------------------------------------------------------------
+
+class TestRemove(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.path = self.dir / "s.json"
+        run_slice("init", "command", "--out", str(self.path))
+        frag = json.dumps([
+            {"rule": "A", "applies_when": "x", "outcome": "ok"},
+            {"rule": "B", "applies_when": "y", "outcome": "ok"},
+            {"rule": "C", "applies_when": "z", "outcome": "ok"},
+        ])
+        run_slice("set", str(self.path), "business_rules", frag)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_ac_f5_1_remove_middle_item_renumbers(self):
+        rc, stdout, stderr = run_slice("remove", str(self.path), "business_rules", "BR-002")
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        ids = [item["id"] for item in data["business_rules"]]
+        self.assertEqual(ids, ["BR-001", "BR-002"])
+        rules = [item["rule"] for item in data["business_rules"]]
+        self.assertEqual(rules, ["A", "C"])  # order preserved, B removed
+        self.assertIn("renumbered 2 item(s)", stdout)
+
+    def test_ac_f5_2_remove_referenced_item_exits_nonzero(self):
+        sc_frag = json.dumps([{
+            "target": "O", "precondition": "e",
+            "changes": [{"field": "f", "operation": "set", "value_source": "v"}],
+        }])
+        run_slice("set", str(self.path), "state_changes", sc_frag)
+        ac_frag = json.dumps([{
+            "title": "S", "given": ["g"], "when": ["w"], "then": ["t"],
+            "traces_to": ["BR-002", "SC-001"],
+        }])
+        run_slice("set", str(self.path), "acceptance_scenarios", ac_frag)
+        data_before = read_json(self.path)
+        rc, _, stderr = run_slice("remove", str(self.path), "business_rules", "BR-002")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("BR-002", stderr)
+        self.assertIn("$.acceptance_scenarios[", stderr)
+        self.assertIn("].traces_to[", stderr)
+        # File must not be modified
+        data_after = read_json(self.path)
+        self.assertEqual(data_before["business_rules"], data_after["business_rules"])
+
+    def test_ac_f5_3_remove_renumbers_updates_cross_refs(self):
+        # Add evidence that references BR-002 via decision_log rule_ids — not directly
+        # Instead test: decision_tables row referencing BR-003 is updated when BR-002 removed
+        sc_frag = json.dumps([{
+            "target": "O", "precondition": "e",
+            "changes": [{"field": "f", "operation": "set", "value_source": "v"}],
+        }])
+        run_slice("set", str(self.path), "state_changes", sc_frag)
+        ac_frag = json.dumps([{
+            "title": "S", "given": ["g"], "when": ["w"], "then": ["t"],
+            "traces_to": ["BR-003", "SC-001"],
+        }])
+        run_slice("set", str(self.path), "acceptance_scenarios", ac_frag)
+        # Remove BR-002 — BR-003 must become BR-002 and the trace must update
+        rc, _, stderr = run_slice("remove", str(self.path), "business_rules", "BR-002")
+        self.assertEqual(rc, 0, stderr)
+        data = read_json(self.path)
+        # BR-003 is now BR-002 in business_rules
+        ids = [item["id"] for item in data["business_rules"]]
+        self.assertIn("BR-002", ids)
+        self.assertNotIn("BR-003", ids)
+        # acceptance_scenarios trace must be updated to the new ID
+        traces = data["acceptance_scenarios"][0]["traces_to"]
+        self.assertNotIn("BR-003", traces)
+        self.assertIn("BR-002", traces)
+
+    def test_ac_f5_4_remove_nonexistent_id_exits_nonzero(self):
+        data_before = read_json(self.path)
+        rc, _, stderr = run_slice("remove", str(self.path), "business_rules", "BR-999")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("BR-999", stderr)
+        data_after = read_json(self.path)
+        self.assertEqual(data_before["business_rules"], data_after["business_rules"])
+
+    def test_f5_remove_unknown_section_exits_nonzero(self):
+        rc, _, stderr = run_slice("remove", str(self.path), "nonexistent_section", "X-001")
+        self.assertNotEqual(rc, 0)
+
+    def test_f5_remove_last_required_item_refuses(self):
+        """Removing the sole item from a minItems:1 section must be refused."""
+        tmp = tempfile.TemporaryDirectory()
+        path = Path(tmp.name) / "s.json"
+        run_slice("init", "command", "--out", str(path))
+        frag = json.dumps([{"rule": "Only", "applies_when": "x", "outcome": "ok"}])
+        run_slice("set", str(path), "business_rules", frag)
+        data_before = read_json(path)
+        rc, _, stderr = run_slice("remove", str(path), "business_rules", "BR-001")
+        self.assertNotEqual(rc, 0, "should refuse: business_rules has minItems 1")
+        data_after = read_json(path)
+        self.assertEqual(data_before["business_rules"], data_after["business_rules"])
+        tmp.cleanup()
+
+    def test_f5_finalize_passes_after_remove(self):
+        """AC-F5-3: finalize must pass on a complete slice after removing an unreferenced item."""
+        tmp = tempfile.TemporaryDirectory()
+        path = Path(tmp.name) / "s.json"
+        # Start from the full valid example slice
+        import shutil
+        shutil.copy(EXAMPLE_SLICE, path)
+        # Append an extra unreferenced business rule
+        extra = json.dumps([{"rule": "Extra", "applies_when": "never", "outcome": "none"}])
+        run_slice("set", str(path), "business_rules", "--append", extra)
+        data_mid = read_json(path)
+        extra_id = data_mid["business_rules"][-1]["id"]
+        # Remove the extra item
+        rc, _, stderr = run_slice("remove", str(path), "business_rules", extra_id)
+        self.assertEqual(rc, 0, stderr)
+        # Full finalize (normalize + validate) must pass
+        rc2, stdout2, stderr2 = run_slice("finalize", str(path))
+        self.assertEqual(rc2, 0, stderr2)
+        tmp.cleanup()
 
 
 if __name__ == "__main__":

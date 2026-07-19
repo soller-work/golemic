@@ -154,9 +154,8 @@ def id_format(prefix: str, n: int) -> str:
     return f"{prefix}-{n:03d}"
 
 
-def assign_ids(section: str, items: list, existing: list) -> list:
+def assign_ids(section: str, items: list, start: int = 1) -> list:
     prefix = ARRAY_SECTIONS[section]
-    start = len(existing) + 1
     result = []
     for i, item in enumerate(items):
         new_id = id_format(prefix, start + i)
@@ -177,6 +176,7 @@ def assign_ids(section: str, items: list, existing: list) -> list:
 # Cross-reference validation
 # ---------------------------------------------------------------------------
 
+
 def collect_all_ids(data: dict) -> set[str]:
     ids: set[str] = set()
     for section in ARRAY_SECTIONS:
@@ -184,6 +184,32 @@ def collect_all_ids(data: dict) -> set[str]:
             if isinstance(item, dict) and "id" in item:
                 ids.add(item["id"])
     return ids
+
+
+def check_dangling_refs(data: dict) -> list[str]:
+    """Return dangling-reference errors for the document as-is."""
+    errors: list[str] = []
+    all_ids = collect_all_ids(data)
+    br_ids = {item["id"] for item in data.get("business_rules", []) if isinstance(item, dict) and "id" in item}
+    ev_ids = {item["id"] for item in data.get("codebase_evidence", []) if isinstance(item, dict) and "id" in item}
+
+    for i, sc in enumerate(data.get("acceptance_scenarios", [])):
+        for j, trace_id in enumerate(sc.get("traces_to", [])):
+            if trace_id not in all_ids:
+                errors.append(f"$.acceptance_scenarios[{i}].traces_to[{j}]: dangling reference {trace_id!r}")
+
+    for i, dt in enumerate(data.get("decision_tables", [])):
+        for j, row in enumerate(dt.get("rows", [])):
+            for k, rule_id in enumerate(row.get("rule_ids", [])):
+                if rule_id not in br_ids:
+                    errors.append(f"$.decision_tables[{i}].rows[{j}].rule_ids[{k}]: dangling reference {rule_id!r}")
+
+    for i, d in enumerate(data.get("decision_log", [])):
+        for j, ev_id in enumerate(d.get("evidence_ids", [])):
+            if ev_id not in ev_ids:
+                errors.append(f"$.decision_log[{i}].evidence_ids[{j}]: dangling reference {ev_id!r}")
+
+    return errors
 
 
 def check_cross_refs(data: dict, section: str, new_items: list) -> list[str]:
@@ -290,7 +316,7 @@ def _base_skeleton(slice_type: str) -> dict:
 def cmd_init(args: argparse.Namespace) -> int:
     out = Path(args.out)
     if out.exists() and not args.force:
-        print(f"❌ File already exists: {out}. Use --force to overwrite.", file=sys.stderr)
+        print(f"❌ File already exists: {out}. Re-run as: slice.py init --force {args.slice_type}", file=sys.stderr)
         return 1
     skeleton = _base_skeleton(args.slice_type)
     save_slice(out, skeleton)
@@ -386,6 +412,8 @@ def cmd_set(args: argparse.Namespace) -> int:
         print(f"❌ Invalid JSON fragment: {exc}", file=sys.stderr)
         return 1
 
+    append_mode = getattr(args, "append", False)
+
     if section in ARRAY_SECTIONS:
         if not isinstance(fragment, list):
             print(f"❌ Section '{section}' expects a JSON array fragment.", file=sys.stderr)
@@ -398,7 +426,8 @@ def cmd_set(args: argparse.Namespace) -> int:
                 )
                 return 1
         existing = data.get(section, [])
-        new_items = assign_ids(section, fragment, existing)
+        start = len(existing) + 1 if append_mode else 1
+        new_items = assign_ids(section, fragment, start)
 
         cross_errors = check_cross_refs(data, section, new_items)
         if cross_errors:
@@ -406,9 +435,17 @@ def cmd_set(args: argparse.Namespace) -> int:
                 print(f"❌ {e}", file=sys.stderr)
             return 1
 
-        merged = existing + new_items
-        test_data = dict(data)
-        test_data[section] = merged
+        effective_existing = existing if append_mode else []
+        merged = effective_existing + new_items
+
+        if not append_mode:
+            test_data = dict(data)
+            test_data[section] = merged
+            dangling = check_dangling_refs(test_data)
+            if dangling:
+                for e in dangling:
+                    print(f"❌ {e}", file=sys.stderr)
+                return 1
 
         sub = extract_subschema(schema, section)
         if sub.get("type") == "array":
@@ -431,10 +468,17 @@ def cmd_set(args: argparse.Namespace) -> int:
                 return 1
 
         data[section] = merged
-        start_id = id_format(ARRAY_SECTIONS[section], len(existing) + 1)
-        end_id = id_format(ARRAY_SECTIONS[section], len(existing) + len(new_items))
-        range_str = start_id if len(new_items) == 1 else f"{start_id}..{end_id}"
-        print(f"set {section}: {len(new_items)} item(s) ({range_str})")
+        if append_mode:
+            start_id = id_format(ARRAY_SECTIONS[section], len(existing) + 1)
+            end_id = id_format(ARRAY_SECTIONS[section], len(existing) + len(new_items))
+            range_str = start_id if len(new_items) == 1 else f"{start_id}..{end_id}"
+            total = len(existing) + len(new_items)
+            print(f"set {section}: appended {len(new_items)} item(s) ({range_str}); total now {total}")
+        else:
+            start_id = id_format(ARRAY_SECTIONS[section], 1)
+            end_id = id_format(ARRAY_SECTIONS[section], len(new_items))
+            range_str = start_id if len(new_items) == 1 else f"{start_id}..{end_id}"
+            print(f"set {section}: replaced with {len(new_items)} item(s) ({range_str})")
 
     elif section in OBJECT_SECTIONS:
         if not isinstance(fragment, dict):
@@ -598,6 +642,121 @@ def cmd_finalize(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: set-scalar
+# ---------------------------------------------------------------------------
+
+_SCALAR_SET_ALLOWED = frozenset({"title", "summary", "risk", "readiness"})
+
+
+def cmd_set_scalar(args: argparse.Namespace) -> int:
+    section = args.section
+    if section not in _SCALAR_SET_ALLOWED:
+        allowed = ", ".join(sorted(_SCALAR_SET_ALLOWED))
+        print(
+            f"❌ set-scalar: '{section}' is not allowed. Allowed sections: {allowed}",
+            file=sys.stderr,
+        )
+        return 1
+    set_args = argparse.Namespace(
+        slice_json=args.slice_json,
+        section=section,
+        json_fragment=json.dumps(args.value),
+        append=False,
+    )
+    return cmd_set(set_args)
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: remove
+# ---------------------------------------------------------------------------
+
+
+def _find_all_references(data: dict, target_id: str) -> list[str]:
+    refs: list[str] = []
+    for i, sc in enumerate(data.get("acceptance_scenarios", [])):
+        for j, t in enumerate(sc.get("traces_to", [])):
+            if t == target_id:
+                refs.append(f"$.acceptance_scenarios[{i}].traces_to[{j}]")
+    for i, dt in enumerate(data.get("decision_tables", [])):
+        for j, row in enumerate(dt.get("rows", [])):
+            for k, r in enumerate(row.get("rule_ids", [])):
+                if r == target_id:
+                    refs.append(f"$.decision_tables[{i}].rows[{j}].rule_ids[{k}]")
+    for i, d in enumerate(data.get("decision_log", [])):
+        for j, e in enumerate(d.get("evidence_ids", [])):
+            if e == target_id:
+                refs.append(f"$.decision_log[{i}].evidence_ids[{j}]")
+    return refs
+
+
+def _apply_id_remap(data: dict, remap: dict) -> dict:
+    for sc in data.get("acceptance_scenarios", []):
+        sc["traces_to"] = [remap.get(t, t) for t in sc.get("traces_to", [])]
+    for dt in data.get("decision_tables", []):
+        for row in dt.get("rows", []):
+            row["rule_ids"] = [remap.get(r, r) for r in row.get("rule_ids", [])]
+    for d in data.get("decision_log", []):
+        d["evidence_ids"] = [remap.get(e, e) for e in d.get("evidence_ids", [])]
+    return data
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    path = Path(args.slice_json)
+    data = load_slice(path)
+    section = args.section
+    target_id = args.item_id
+
+    if section not in ARRAY_SECTIONS:
+        print(
+            f"❌ remove: '{section}' is not an array section. Valid: {sorted(ARRAY_SECTIONS)}",
+            file=sys.stderr,
+        )
+        return 1
+
+    items = data.get(section, [])
+    target_item = next((item for item in items if isinstance(item, dict) and item.get("id") == target_id), None)
+    if target_item is None:
+        print(f"❌ No {section} item with id {target_id}", file=sys.stderr)
+        return 1
+
+    refs = _find_all_references(data, target_id)
+    if refs:
+        print(f"❌ Cannot remove {target_id}: referenced at:", file=sys.stderr)
+        for ref in refs:
+            print(f"  {ref}", file=sys.stderr)
+        return 1
+
+    remaining = [item for item in items if item.get("id") != target_id]
+    prefix = ARRAY_SECTIONS[section]
+    remap: dict[str, str] = {}
+    new_items = []
+    for i, item in enumerate(remaining):
+        old_id = item["id"]
+        new_id = id_format(prefix, i + 1)
+        if old_id != new_id:
+            remap[old_id] = new_id
+        new_items.append({**item, "id": new_id})
+
+    data[section] = new_items
+    if remap:
+        data = _apply_id_remap(data, remap)
+
+    # Validate the resulting array against the section's own schema (catches minItems)
+    sub = extract_subschema(load_schema(), section)
+    if sub:
+        array_validator = Draft202012Validator(sub)
+        array_errs = list(array_validator.iter_errors(new_items))
+        if array_errs:
+            for e in array_errs:
+                print(f"❌ remove: would violate {section} schema: {e.message}", file=sys.stderr)
+            return 1
+
+    save_slice(path, data)
+    print(f"remove {section} {target_id}: renumbered {len(new_items)} item(s)")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -617,6 +776,17 @@ def main() -> int:
     p_set.add_argument("slice_json")
     p_set.add_argument("section")
     p_set.add_argument("json_fragment")
+    p_set.add_argument("--append", action="store_true", help="Append to array instead of replacing")
+
+    p_set_scalar = sub.add_parser("set-scalar", help="Set a scalar section with a bare string (no JSON quoting)")
+    p_set_scalar.add_argument("slice_json")
+    p_set_scalar.add_argument("section")
+    p_set_scalar.add_argument("value")
+
+    p_remove = sub.add_parser("remove", help="Remove an array item by ID and renumber remaining")
+    p_remove.add_argument("slice_json")
+    p_remove.add_argument("section")
+    p_remove.add_argument("item_id")
 
     p_status = sub.add_parser("status", help="Show fill status and cross-reference gaps")
     p_status.add_argument("slice_json")
@@ -630,8 +800,10 @@ def main() -> int:
         "init": cmd_init,
         "plan": cmd_plan,
         "set": cmd_set,
+        "set-scalar": cmd_set_scalar,
         "status": cmd_status,
         "finalize": cmd_finalize,
+        "remove": cmd_remove,
     }
     return dispatch[args.cmd](args)
 

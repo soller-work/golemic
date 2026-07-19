@@ -21,6 +21,13 @@ PLACEHOLDER_RE = re.compile(
     re.IGNORECASE,
 )
 
+_QUOTED_RE = re.compile(r"`[^`]*`|\"[^\"]*\"")
+
+
+def _unquoted_placeholder(text: str) -> "re.Match | None":
+    cleaned = _QUOTED_RE.sub(lambda m: " " * len(m.group()), text)
+    return PLACEHOLDER_RE.search(cleaned)
+
 ID_COLLECTIONS = (
     "business_rules",
     "decision_tables",
@@ -191,9 +198,12 @@ def semantic_errors(document: dict[str, Any]) -> list[str]:
                 errors.append(f"A ready slice requires $.{field} to be empty")
 
         for path, text in walk_strings(document):
-            if PLACEHOLDER_RE.search(text):
+            m = _unquoted_placeholder(text)
+            if m:
+                token = m.group()
                 errors.append(
-                    f"Unresolved placeholder in ready slice at {json_path(path)}: {text!r}"
+                    f"Unresolved placeholder token {token!r} in ready slice at {json_path(path)}"
+                    f" (wrap the word in backticks if it is a verbatim quote)"
                 )
 
         unreferenced_evidence = evidence_ids - referenced_evidence
