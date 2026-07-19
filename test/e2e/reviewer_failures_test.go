@@ -1,3 +1,5 @@
+//go:build e2e
+
 package e2e
 
 // AC→test mapping (spec 006_e2e-test-reviewer-role-failures):

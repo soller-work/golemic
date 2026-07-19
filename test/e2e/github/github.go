@@ -1,3 +1,5 @@
+//go:build e2e
+
 // Package github provides GitHub API helpers for E2E tests.
 //
 // All helpers use the gh CLI under the hood and require gh to be

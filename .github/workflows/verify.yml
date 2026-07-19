@@ -30,11 +30,6 @@ jobs:
 
       - run: go build ./...
 
-      - name: Build golemic binary for e2e tests
-        run: go build -o golemic ./cmd/golemic
-
       - run: go test ./...
-        env:
-          GOLEMIC_BINARY: ${{ github.workspace }}/golemic
 
       - run: make lint
