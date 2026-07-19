@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Driver script for grill-me slice workflow. Subcommands: init, plan, set, status, finalize."""
+"""Slice workflow CLI for grill-me v2. Subcommands: new, write, set, check, plan, finalize."""
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -19,80 +19,61 @@ except ImportError as exc:
 SCHEMA_PATH = Path(__file__).parent.parent / "schema.json"
 VALIDATE_SLICE = Path(__file__).parent / "validate_slice.py"
 
-# Section → (id_prefix, is_array, is_object)
-ARRAY_SECTIONS = {
-    "business_rules": "BR",
-    "decision_tables": "DT",
-    "interfaces": "IF",
-    "read_models": "RM",
-    "process_steps": "PS",
-    "integration_contracts": "IC",
-    "state_changes": "SC",
-    "side_effects": "SE",
-    "acceptance_scenarios": "AC",
-    "codebase_evidence": "EV",
-    "decision_log": "D",
-}
+# Load validate_slice module for full_validate
+def _load_validate_module():
+    spec = importlib.util.spec_from_file_location("_validate_slice", VALIDATE_SLICE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-OBJECT_SECTIONS = {"stakeholder_intent", "scope", "security", "implementation_context", "quality"}
+_validate_mod = _load_validate_module()
 
-SCALAR_SECTIONS = {
-    "title", "summary", "risk", "readiness", "preconditions",
-    "open_questions", "assumptions_requiring_confirmation", "blockers", "depends_on",
+# Type-specific N/A sections (not created by 'new')
+TYPE_SECTIONS = {
+    "command": ["behavior", "business_rules", "inputs_outputs_errors"],
+    "query": ["behavior", "business_rules", "inputs_outputs_errors"],
+    "process": ["behavior", "business_rules", "inputs_outputs_errors"],
+    "integration": ["behavior", "business_rules", "inputs_outputs_errors"],
 }
 
 PLAN_ORDER = [
-    "stakeholder_intent",
-    "scope",
-    "preconditions",
-    "business_rules",
-    "decision_tables",
-    "interfaces",
-    "read_models",
-    "process_steps",
-    "integration_contracts",
-    "state_changes",
-    "side_effects",
-    "security",
-    "implementation_context",
-    "acceptance_scenarios",
-    "quality",
-    "decision_log",
-    "codebase_evidence",
-    "open_questions",
-    "assumptions_requiring_confirmation",
-    "blockers",
+    "stakeholder", "trigger", "success_outcome", "tldr", "scope",
+    "behavior", "business_rules", "acceptance_scenarios", "inputs_outputs_errors",
+    "codebase_evidence", "verify_commands", "definition_of_done",
+    "security_relevant", "security", "blockers", "readiness",
 ]
 
 PLAN_HINTS = {
-    "stakeholder_intent": "Provide a single object with keys: actor, goal, business_value, trigger, success_outcome. All non-empty strings.",
-    "scope": "Provide {in_scope: [...], out_of_scope: [...]}. in_scope must have ≥1 item.",
-    "preconditions": "Provide a non-empty array of non-empty strings.",
-    "business_rules": "Provide array of {rule, applies_when, outcome} objects. IDs (BR-001..N) are assigned by driver.",
-    "decision_tables": "Provide array of {name, inputs, rows, default_outcome} objects. IDs (DT-001..N) assigned by driver. rows: [{when:{}, then:{}, rule_ids:[BR-xxx]}].",
-    "interfaces": "Provide array of {kind, name, operation, inputs, outputs, errors} objects. IDs (IF-001..N) assigned by driver. kind ∈ ui|http_api|internal_api|cli|event|scheduled_job|other.",
-    "read_models": "Provide array of {name, purpose, sources, fields, freshness, filtering_sorting_pagination, empty_result, authorization_filtering}. IDs (RM-001..N) assigned by driver.",
-    "process_steps": "Provide array of {order, name, trigger, action, state_before, state_after, outcome, failure_behavior, terminal}. IDs (PS-001..N) assigned by driver.",
-    "integration_contracts": "Provide array of {external_system, direction, transport, operation, request_contract, response_contract, idempotency, timeout, retry_policy, failure_mapping, compatibility}. IDs (IC-001..N) assigned by driver.",
-    "state_changes": "Provide array of {target, precondition, changes:[{field, operation, value_source}]}. IDs (SC-001..N) assigned by driver. operation ∈ set|clear|increment|decrement|append|remove|create|delete.",
-    "side_effects": "Provide array of {type, description, delivery, idempotency, failure_policy}. IDs (SE-001..N) assigned by driver. type ∈ domain_event|integration_event|notification|external_call|payment|audit|cache|other. delivery ∈ synchronous|asynchronous.",
-    "security": "Provide {authentication, authorization_rules:[...], data_classification, audit_requirements:[...]}.",
-    "implementation_context": "Provide {target_modules, integration_points, architecture_constraints, allowed_changes, forbidden_changes, dependencies, migration_strategy, consistency_and_concurrency}.",
-    "acceptance_scenarios": "Provide array of {title, given:[...], when:[...], then:[...], traces_to:[BR-xxx|DT-xxx|...]}. IDs (AC-001..N) assigned by driver. traces_to must reference existing IDs.",
-    "quality": "Provide {required_test_levels:[unit|component|integration|contract|end_to_end|migration|security], test_cases:[...], quality_commands:[...], non_functional_requirements:[...], definition_of_done:[...]}.",
-    "decision_log": "Provide array of {topic, decision, source, evidence_ids:[EV-xxx], rationale}. IDs (D-001..N) assigned by driver. source ∈ user|codebase|confirmed_recommendation.",
-    "codebase_evidence": "Provide array of {path, symbol, location, finding, verified:bool}. IDs (EV-001..N) assigned by driver.",
-    "open_questions": "Provide array of strings (or [] if none). Non-empty → readiness stays blocked.",
-    "assumptions_requiring_confirmation": "Provide array of strings (or [] if none). Non-empty → readiness stays blocked.",
-    "blockers": "Provide array of strings (or [] if none). Non-empty → readiness stays blocked.",
+    "stakeholder": "String: who is the primary stakeholder.",
+    "trigger": "String: what triggers this capability.",
+    "success_outcome": "String: the desired outcome.",
+    "tldr": "String (≤140 chars): concise summary.",
+    "scope": "Object: {in: [...], out: [...]} — at least 1 in-scope item.",
+    "behavior": "String (Markdown): type-specific behavior (mutations/read-model/steps/contract).",
+    "business_rules": "String (Markdown): decision logic, constraints.",
+    "acceptance_scenarios": "Array of strings: 'Given...When...Then...' proton.",
+    "inputs_outputs_errors": "String (Markdown): I/O contract, validation, errors.",
+    "codebase_evidence": "Array of {location: 'path:line', note: '...'} — findings from repo.",
+    "verify_commands": "Array of strings: test, lint, deploy commands.",
+    "definition_of_done": "Array of strings: completion criteria.",
+    "security_relevant": "Boolean: set true if security implications exist.",
+    "security": "String (Markdown, required if security_relevant=true).",
+    "blockers": "Array of {kind: 'question'|'assumption'|'blocker', text: '...'} — empty when ready.",
+    "readiness": "Enum: 'ready' or 'blocked' (set by finalize).",
 }
 
 
 def load_schema() -> dict:
-    return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    """Load schema from disk."""
+    try:
+        return json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        print(f"❌ Schema not found: {SCHEMA_PATH}", file=sys.stderr)
+        sys.exit(1)
 
 
 def load_slice(path: Path) -> dict:
+    """Load slice JSON from disk."""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -104,709 +85,241 @@ def load_slice(path: Path) -> dict:
 
 
 def save_slice(path: Path, data: dict) -> None:
+    """Save slice JSON to disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# Sub-schema extraction
-# ---------------------------------------------------------------------------
-
-def resolve_ref(schema: dict, node: Any) -> Any:
-    if not isinstance(node, dict) or "$ref" not in node:
-        return node
-    ref = node["$ref"]
-    if ref.startswith("#/$defs/"):
-        name = ref[len("#/$defs/"):]
-        resolved = schema.get("$defs", {}).get(name)
-        if resolved is not None:
-            return resolved
-    return node
+def validate_full(data: dict, schema: dict = None) -> tuple[bool, list[str]]:
+    """Full validation (structural + semantic). Returns (valid, errors)."""
+    if schema is None:
+        schema = load_schema()
+    errors = _validate_mod.full_validate(data, schema)
+    return len(errors) == 0, errors
 
 
-def inline_refs(schema: dict, node: Any, depth: int = 0) -> Any:
-    if depth > 20:
-        return node
-    if isinstance(node, dict):
-        if "$ref" in node:
-            resolved = resolve_ref(schema, node)
-            return inline_refs(schema, resolved, depth + 1)
-        return {k: inline_refs(schema, v, depth + 1) for k, v in node.items()}
-    if isinstance(node, list):
-        return [inline_refs(schema, item, depth + 1) for item in node]
-    return node
+def cmd_new(args: argparse.Namespace) -> None:
+    """Create a skeleton slice without N/A sections for the type."""
+    slice_type = args.type.lower()
+    if slice_type not in ["command", "query", "process", "integration"]:
+        print(f"❌ Unknown slice_type: {slice_type}. Must be: command|query|process|integration", file=sys.stderr)
+        sys.exit(1)
 
+    path = Path(args.file) if args.file else Path(".pi/skills/grill-me/.tmp/slice.json")
 
-def extract_subschema(schema: dict, section: str) -> dict:
-    props = schema.get("properties", {})
-    if section not in props:
-        return {}
-    node = props[section]
-    return inline_refs(schema, node)
-
-
-# ---------------------------------------------------------------------------
-# ID assignment
-# ---------------------------------------------------------------------------
-
-def id_format(prefix: str, n: int) -> str:
-    if prefix == "D":
-        return f"D-{n:03d}"
-    return f"{prefix}-{n:03d}"
-
-
-def assign_ids(section: str, items: list, start: int = 1) -> list:
-    prefix = ARRAY_SECTIONS[section]
-    result = []
-    for i, item in enumerate(items):
-        new_id = id_format(prefix, start + i)
-        if "id" in item:
-            if item["id"] != new_id:
-                print(
-                    f"❌ ID mismatch: fragment item[{i}].id = {item['id']!r}, expected {new_id!r}",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            result.append(item)
-        else:
-            result.append({"id": new_id, **item})
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Cross-reference validation
-# ---------------------------------------------------------------------------
-
-
-def collect_all_ids(data: dict) -> set[str]:
-    ids: set[str] = set()
-    for section in ARRAY_SECTIONS:
-        for item in data.get(section, []):
-            if isinstance(item, dict) and "id" in item:
-                ids.add(item["id"])
-    return ids
-
-
-def check_dangling_refs(data: dict) -> list[str]:
-    """Return dangling-reference errors for the document as-is."""
-    errors: list[str] = []
-    all_ids = collect_all_ids(data)
-    br_ids = {item["id"] for item in data.get("business_rules", []) if isinstance(item, dict) and "id" in item}
-    ev_ids = {item["id"] for item in data.get("codebase_evidence", []) if isinstance(item, dict) and "id" in item}
-
-    for i, sc in enumerate(data.get("acceptance_scenarios", [])):
-        for j, trace_id in enumerate(sc.get("traces_to", [])):
-            if trace_id not in all_ids:
-                errors.append(f"$.acceptance_scenarios[{i}].traces_to[{j}]: dangling reference {trace_id!r}")
-
-    for i, dt in enumerate(data.get("decision_tables", [])):
-        for j, row in enumerate(dt.get("rows", [])):
-            for k, rule_id in enumerate(row.get("rule_ids", [])):
-                if rule_id not in br_ids:
-                    errors.append(f"$.decision_tables[{i}].rows[{j}].rule_ids[{k}]: dangling reference {rule_id!r}")
-
-    for i, d in enumerate(data.get("decision_log", [])):
-        for j, ev_id in enumerate(d.get("evidence_ids", [])):
-            if ev_id not in ev_ids:
-                errors.append(f"$.decision_log[{i}].evidence_ids[{j}]: dangling reference {ev_id!r}")
-
-    return errors
-
-
-def check_cross_refs(data: dict, section: str, new_items: list) -> list[str]:
-    errors: list[str] = []
-    all_ids = collect_all_ids(data)
-
-    if section == "acceptance_scenarios":
-        br_ids = {item["id"] for item in data.get("business_rules", []) if "id" in item}
-        traceable_ids = set()
-        for s in ("business_rules", "decision_tables", "interfaces", "read_models",
-                  "process_steps", "integration_contracts", "state_changes", "side_effects"):
-            for item in data.get(s, []):
-                if isinstance(item, dict) and "id" in item:
-                    traceable_ids.add(item["id"])
-        for i, item in enumerate(new_items):
-            for trace_id in item.get("traces_to", []):
-                if trace_id not in all_ids and trace_id not in traceable_ids:
-                    errors.append(f"acceptance_scenarios[{i}].traces_to references unknown ID {trace_id!r}")
-
-    if section == "decision_tables":
-        br_ids = {item["id"] for item in data.get("business_rules", []) if "id" in item}
-        for i, item in enumerate(new_items):
-            for j, row in enumerate(item.get("rows", [])):
-                for rule_id in row.get("rule_ids", []):
-                    if rule_id not in br_ids:
-                        errors.append(f"decision_tables[{i}].rows[{j}].rule_ids references unknown BR ID {rule_id!r}")
-
-    if section == "decision_log":
-        ev_ids = {item["id"] for item in data.get("codebase_evidence", []) if "id" in item}
-        for i, item in enumerate(new_items):
-            for ev_id in item.get("evidence_ids", []):
-                if ev_id not in ev_ids:
-                    errors.append(f"decision_log[{i}].evidence_ids references unknown EV ID {ev_id!r}")
-
-    return errors
-
-
-# ---------------------------------------------------------------------------
-# Skeleton builders
-# ---------------------------------------------------------------------------
-
-def _base_skeleton(slice_type: str) -> dict:
-    return {
-        "schema_version": "1.1.0",
+    skeleton = {
         "slice_type": slice_type,
-        "risk": "medium",
-        "depends_on": [],
         "title": "",
-        "summary": "",
-        "readiness": "blocked",
-        "stakeholder_intent": {
-            "actor": "",
-            "goal": "",
-            "business_value": "",
-            "trigger": "",
-            "success_outcome": "",
-        },
-        "scope": {"in_scope": [], "out_of_scope": []},
-        "preconditions": [],
-        "business_rules": [],
-        "decision_tables": [],
-        "interfaces": [],
-        "read_models": [],
-        "process_steps": [],
-        "integration_contracts": [],
-        "state_changes": [],
-        "side_effects": [],
-        "security": {
-            "authentication": "",
-            "authorization_rules": [],
-            "data_classification": "",
-            "audit_requirements": [],
-        },
-        "implementation_context": {
-            "target_modules": [],
-            "integration_points": [],
-            "architecture_constraints": [],
-            "allowed_changes": [],
-            "forbidden_changes": [],
-            "dependencies": [],
-            "migration_strategy": "",
-            "consistency_and_concurrency": "",
-        },
+        "stakeholder": "",
+        "trigger": "",
+        "success_outcome": "",
+        "tldr": "",
+        "scope": {"in": [], "out": []},
+        "behavior": "",
+        "business_rules": "",
         "acceptance_scenarios": [],
-        "quality": {
-            "required_test_levels": [],
-            "test_cases": [],
-            "quality_commands": [],
-            "non_functional_requirements": [],
-            "definition_of_done": [],
-        },
-        "decision_log": [],
+        "inputs_outputs_errors": "",
         "codebase_evidence": [],
-        "open_questions": [],
-        "assumptions_requiring_confirmation": [],
+        "verify_commands": [],
+        "definition_of_done": [],
+        "security_relevant": False,
         "blockers": [],
+        "readiness": "blocked",
     }
 
-
-# ---------------------------------------------------------------------------
-# Subcommand: init
-# ---------------------------------------------------------------------------
-
-def cmd_init(args: argparse.Namespace) -> int:
-    out = Path(args.out)
-    if out.exists() and not args.force:
-        print(f"❌ File already exists: {out}. Re-run as: slice.py init --force {args.slice_type}", file=sys.stderr)
-        return 1
-    skeleton = _base_skeleton(args.slice_type)
-    save_slice(out, skeleton)
-    print(f"init: wrote {args.slice_type} skeleton to {out}")
-    return 0
+    save_slice(path, skeleton)
+    print(f"✓ Created skeleton at {path}")
+    print(f"  Next: slice.py write {path} '<json>' or slice.py set {path} <section> '<fragment>'")
 
 
-# ---------------------------------------------------------------------------
-# Subcommand: plan
-# ---------------------------------------------------------------------------
-
-def _is_applicable(slice_type: str, section: str) -> bool:
-    if section == "state_changes" and slice_type == "query":
-        return False
-    if section == "read_models" and slice_type not in ("query",):
-        return True
-    if section == "process_steps" and slice_type not in ("process",):
-        return True
-    if section == "integration_contracts" and slice_type not in ("integration",):
-        return True
-    return True
-
-
-def _is_filled(data: dict, section: str) -> bool:
-    val = data.get(section)
-    if val is None:
-        return False
-    if isinstance(val, list):
-        return len(val) > 0
-    if isinstance(val, dict):
-        return any(v not in ("", [], {}, None) for v in val.values())
-    if isinstance(val, str):
-        return val.strip() != ""
-    return bool(val)
-
-
-def cmd_plan(args: argparse.Namespace) -> int:
-    path = Path(args.slice_json)
-    data = load_slice(path)
-    schema = load_schema()
-
-    slice_type = data.get("slice_type", "?")
-    readiness = data.get("readiness", "?")
-
-    filled = sum(1 for s in PLAN_ORDER if _is_filled(data, s))
-    total = len(PLAN_ORDER)
-    print(f"slice_type: {slice_type}  readiness: {readiness}  progress: {filled}/{total} sections filled\n")
-
-    for section in PLAN_ORDER:
-        if not _is_applicable(slice_type, section):
-            continue
-
-        sub = extract_subschema(schema, section)
-        compact_sub = json.dumps(sub, indent=2)
-
-        existing_ids: list[str] = []
-        if section in ARRAY_SECTIONS:
-            existing_ids = [item.get("id", "") for item in data.get(section, []) if isinstance(item, dict)]
-
-        status = "✅" if _is_filled(data, section) else "○"
-        print(f"{status} {section}")
-        print(f"```json")
-        print(compact_sub)
-        print(f"```")
-        if existing_ids:
-            print(f"   existing IDs: {', '.join(existing_ids)}")
-        print(f"   → {PLAN_HINTS.get(section, 'Fill this section.')}")
-        print()
-
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Subcommand: set
-# ---------------------------------------------------------------------------
-
-def cmd_set(args: argparse.Namespace) -> int:
-    path = Path(args.slice_json)
-    data = load_slice(path)
-    schema = load_schema()
-    section = args.section
-    slice_type = data.get("slice_type", "")
-    if not _is_applicable(slice_type, section):
-        print(
-            f"❌ set {section}: not applicable for slice_type={slice_type} (schema conditional forbids it)",
-            file=sys.stderr,
-        )
-        return 1
+def cmd_write(args: argparse.Namespace) -> None:
+    """Bulk write: load full JSON in one call, validate atomically."""
+    path = Path(args.path)
+    
+    # Parse JSON from stdin or CLI arg
+    if args.json.startswith("@"):
+        json_path = Path(args.json[1:])
+        try:
+            json_text = json_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(f"❌ File not found: {json_path}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        json_text = args.json
 
     try:
-        fragment = json.loads(args.json_fragment)
+        data = json.loads(json_text)
+    except json.JSONDecodeError as exc:
+        print(f"❌ Invalid JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    schema = load_schema()
+    valid, errors = validate_full(data, schema)
+    if not valid:
+        print("❌ Validation failed:", file=sys.stderr)
+        for err in errors:
+            print(f"  {err}", file=sys.stderr)
+        sys.exit(1)
+
+    save_slice(path, data)
+    print(f"✓ Written and validated {path}")
+
+
+def cmd_set(args: argparse.Namespace) -> None:
+    """Set a single section with a JSON fragment, validate the whole."""
+    path = Path(args.path)
+    section = args.section
+    fragment_text = args.fragment
+
+    slice_data = load_slice(path)
+    schema = load_schema()
+
+    # Parse fragment
+    try:
+        fragment = json.loads(fragment_text)
     except json.JSONDecodeError as exc:
         print(f"❌ Invalid JSON fragment: {exc}", file=sys.stderr)
-        return 1
+        sys.exit(1)
 
-    append_mode = getattr(args, "append", False)
+    # Set and validate
+    slice_data[section] = fragment
+    valid, errors = validate_full(slice_data, schema)
+    if not valid:
+        print(f"❌ Validation failed after setting {section}:", file=sys.stderr)
+        for err in errors:
+            print(f"  {err}", file=sys.stderr)
+        sys.exit(1)
 
-    if section in ARRAY_SECTIONS:
-        if not isinstance(fragment, list):
-            print(f"❌ Section '{section}' expects a JSON array fragment.", file=sys.stderr)
-            return 1
-        for i, item in enumerate(fragment):
-            if not isinstance(item, dict):
-                print(
-                    f"❌ {section}[{i}]: expected object, got {type(item).__name__}",
-                    file=sys.stderr,
-                )
-                return 1
-        existing = data.get(section, [])
-        start = len(existing) + 1 if append_mode else 1
-        new_items = assign_ids(section, fragment, start)
+    save_slice(path, slice_data)
+    print(f"✓ Set {section}")
 
-        cross_errors = check_cross_refs(data, section, new_items)
-        if cross_errors:
-            for e in cross_errors:
-                print(f"❌ {e}", file=sys.stderr)
-            return 1
 
-        effective_existing = existing if append_mode else []
-        merged = effective_existing + new_items
+def cmd_check(args: argparse.Namespace) -> None:
+    """Read-only validation: check without modifying."""
+    path = Path(args.path)
+    slice_data = load_slice(path)
+    schema = load_schema()
 
-        if not append_mode:
-            test_data = dict(data)
-            test_data[section] = merged
-            dangling = check_dangling_refs(test_data)
-            if dangling:
-                for e in dangling:
-                    print(f"❌ {e}", file=sys.stderr)
-                return 1
-
-        sub = extract_subschema(schema, section)
-        if sub.get("type") == "array":
-            item_schema = sub.get("items", {})
-            validator = Draft202012Validator(item_schema)
-            for idx, item in enumerate(new_items):
-                errs = list(validator.iter_errors(item))
-                if errs:
-                    for e in errs:
-                        ptr = "/".join(str(p) for p in e.absolute_path)
-                        loc = f"[{idx}]/{ptr}" if ptr else f"[{idx}]"
-                        print(f"❌ {section}{loc}: {e.message}", file=sys.stderr)
-                    return 1
-
-            array_validator = Draft202012Validator(sub)
-            array_errs = list(array_validator.iter_errors(merged))
-            if array_errs:
-                for e in array_errs:
-                    print(f"❌ {section}: {e.message}", file=sys.stderr)
-                return 1
-
-        data[section] = merged
-        if append_mode:
-            start_id = id_format(ARRAY_SECTIONS[section], len(existing) + 1)
-            end_id = id_format(ARRAY_SECTIONS[section], len(existing) + len(new_items))
-            range_str = start_id if len(new_items) == 1 else f"{start_id}..{end_id}"
-            total = len(existing) + len(new_items)
-            print(f"set {section}: appended {len(new_items)} item(s) ({range_str}); total now {total}")
-        else:
-            start_id = id_format(ARRAY_SECTIONS[section], 1)
-            end_id = id_format(ARRAY_SECTIONS[section], len(new_items))
-            range_str = start_id if len(new_items) == 1 else f"{start_id}..{end_id}"
-            print(f"set {section}: replaced with {len(new_items)} item(s) ({range_str})")
-
-    elif section in OBJECT_SECTIONS:
-        if not isinstance(fragment, dict):
-            print(f"❌ Section '{section}' expects a JSON object fragment.", file=sys.stderr)
-            return 1
-        sub = extract_subschema(schema, section)
-        validator = Draft202012Validator(sub)
-        errs = list(validator.iter_errors(fragment))
-        if errs:
-            for e in errs:
-                ptr = "/".join(str(p) for p in e.absolute_path)
-                loc = f"/{ptr}" if ptr else ""
-                print(f"❌ {section}{loc}: {e.message}", file=sys.stderr)
-            return 1
-        data[section] = fragment
-        print(f"set {section}: object written")
-
-    elif section in SCALAR_SECTIONS:
-        sub = extract_subschema(schema, section)
-        if sub:
-            validator = Draft202012Validator(sub)
-            errs = list(validator.iter_errors(fragment))
-            if errs:
-                for e in errs:
-                    print(f"❌ {section}: {e.message}", file=sys.stderr)
-                return 1
-        data[section] = fragment
-        print(f"set {section}: {json.dumps(fragment)}")
-
+    valid, errors = validate_full(slice_data, schema)
+    if valid:
+        print(f"✓ {path} is valid")
+        sys.exit(0)
     else:
-        print(f"❌ Unknown section: {section!r}. Valid sections: {sorted(list(ARRAY_SECTIONS) + list(OBJECT_SECTIONS) + list(SCALAR_SECTIONS))}", file=sys.stderr)
-        return 1
-
-    save_slice(path, data)
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Subcommand: status
-# ---------------------------------------------------------------------------
-
-def cmd_status(args: argparse.Namespace) -> int:
-    path = Path(args.slice_json)
-    data = load_slice(path)
-
-    slice_type = data.get("slice_type", "?")
-    readiness = data.get("readiness", "?")
-    print(f"slice_type: {slice_type}  readiness: {readiness}\n")
-
-    for section in PLAN_ORDER:
-        val = data.get(section)
-        filled = _is_filled(data, section)
-        status = "✅" if filled else "○"
-        if isinstance(val, list):
-            count = len(val)
-            print(f"{status} {section}: {count} item(s)")
-        elif isinstance(val, dict):
-            filled_keys = [k for k, v in val.items() if v not in ("", [], {}, None)]
-            print(f"{status} {section}: {len(filled_keys)}/{len(val)} keys filled")
-        else:
-            display = repr(val) if val is not None else "empty"
-            print(f"{status} {section}: {display}")
-
-    print()
-
-    # Cross-reference gaps
-    traceable_ids: set[str] = set()
-    for s in ("business_rules", "decision_tables", "interfaces", "read_models",
-              "process_steps", "integration_contracts", "state_changes", "side_effects"):
-        for item in data.get(s, []):
-            if isinstance(item, dict) and "id" in item:
-                traceable_ids.add(item["id"])
-
-    traced_ids: set[str] = set()
-    for sc in data.get("acceptance_scenarios", []):
-        for t in sc.get("traces_to", []):
-            traced_ids.add(t)
-
-    untraced = traceable_ids - traced_ids
-    if untraced:
-        print(f"⚠ Untraced items (not covered by any acceptance scenario): {', '.join(sorted(untraced))}")
-
-    ev_ids = {item["id"] for item in data.get("codebase_evidence", []) if isinstance(item, dict) and "id" in item}
-    referenced_ev: set[str] = set()
-    for d in data.get("decision_log", []):
-        for eid in d.get("evidence_ids", []):
-            referenced_ev.add(eid)
-    unreferenced_ev = ev_ids - referenced_ev
-    if unreferenced_ev:
-        print(f"⚠ Unreferenced evidence (not cited in any decision): {', '.join(sorted(unreferenced_ev))}")
-
-    return 0
+        print(f"❌ {path} has validation errors:", file=sys.stderr)
+        for err in errors:
+            print(f"  {err}", file=sys.stderr)
+        sys.exit(1)
 
 
-# ---------------------------------------------------------------------------
-# Subcommand: finalize
-# ---------------------------------------------------------------------------
+def cmd_finalize(args: argparse.Namespace) -> None:
+    """Normalize readiness first, then validate, then save."""
+    path = Path(args.path)
+    slice_data = load_slice(path)
+    schema = load_schema()
 
-def cmd_finalize(args: argparse.Namespace) -> int:
-    path = Path(args.slice_json)
-    data = load_slice(path)
+    # Step 1: Normalize readiness BEFORE validation
+    blockers = slice_data.get("blockers", [])
+    if args.blocked:
+        # User explicitly requested blocked
+        if len(blockers) == 0:
+            # Error: can't be blocked without blockers
+            print(
+                "❌ --blocked was requested but no blockers are set. "
+                "Add one first with: slice.py set <path> blockers "
+                "'[{\"kind\":\"blocker\",\"text\":\"...\"}]'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        slice_data["readiness"] = "blocked"
+    elif len(blockers) == 0:
+        # Auto-ready: no blockers means ready
+        slice_data["readiness"] = "ready"
+    else:
+        # Auto-blocked: blockers present means blocked
+        slice_data["readiness"] = "blocked"
 
-    blocking_fields = ["open_questions", "assumptions_requiring_confirmation", "blockers"]
-    has_blockers = any(data.get(f) for f in blocking_fields)
+    # Step 2: Validate the normalized document
+    valid, errors = validate_full(slice_data, schema)
+    if not valid:
+        print(f"❌ Validation failed:", file=sys.stderr)
+        for err in errors:
+            print(f"  {err}", file=sys.stderr)
+        sys.exit(1)
 
-    current_readiness = data.get("readiness")
-    violations: list[str] = []
-    readiness_flipped = False
+    # Step 3: Save only if validation passes
+    save_slice(path, slice_data)
+    print(f"✓ Finalized: readiness={slice_data['readiness']}")
 
-    if current_readiness == "ready" and has_blockers:
-        for f in blocking_fields:
-            if data.get(f):
-                violations.append(f"{f} is non-empty")
-        print(f"⚠ Warning: readiness was 'ready' but conditions violated: {'; '.join(violations)}", file=sys.stderr)
-        print("⚠ Warning: Flipping readiness to 'blocked'.", file=sys.stderr)
-        data["readiness"] = "blocked"
-        readiness_flipped = True
 
-    if has_blockers and data.get("readiness") != "blocked":
-        data["readiness"] = "blocked"
+def cmd_plan(args: argparse.Namespace) -> None:
+    """Show section names in fill order with one-line hints. --verbose shows sub-schemas."""
+    path = Path(args.path)
+    schema = load_schema()
 
-    # Normalize: sort ID-bearing arrays by ID, strip trailing whitespace in strings
-    def strip_strings(val: Any) -> Any:
-        if isinstance(val, str):
-            return val.rstrip()
-        if isinstance(val, list):
-            return [strip_strings(v) for v in val]
-        if isinstance(val, dict):
-            return {k: strip_strings(v) for k, v in val.items()}
-        return val
+    if args.verbose:
+        # Dump section sub-schemas
+        props = schema.get("properties", {})
+        for section in PLAN_ORDER:
+            if section in props:
+                print(f"\n## {section}")
+                print(json.dumps(props[section], indent=2))
+    else:
+        print("Fill order:")
+        for i, section in enumerate(PLAN_ORDER, 1):
+            hint = PLAN_HINTS.get(section, "")
+            print(f"{i:2d}. {section:30s} — {hint}")
 
-    data = strip_strings(data)
 
-    for section in ARRAY_SECTIONS:
-        items = data.get(section, [])
-        if items and isinstance(items[0], dict) and "id" in items[0]:
-            data[section] = sorted(items, key=lambda x: x.get("id", ""))
-
-    save_slice(path, data)
-
-    # Delegate to validate_slice.py
-    result = subprocess.run(
-        [sys.executable, str(VALIDATE_SLICE), str(SCHEMA_PATH), str(path)],
-        capture_output=True,
-        text=True,
+def main() -> None:
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description="Slice workflow for grill-me v2 (ephemeral JSON, full semantic validation).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    if result.stdout:
-        print(result.stdout, end="")
-    if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    if result.returncode != 0:
-        return result.returncode
+    # new <type> [--file PATH]
+    new_parser = subparsers.add_parser("new", help="Create skeleton (no N/A sections for type)")
+    new_parser.add_argument("type", help="Slice type: command|query|process|integration")
+    new_parser.add_argument("--file", help="Output path (default: .pi/skills/grill-me/.tmp/slice.json)")
+    new_parser.set_defaults(func=cmd_new)
 
-    if readiness_flipped:
-        print(f"finalize: {path} normalized but readiness was auto-flipped to 'blocked'", file=sys.stderr)
-        return 1
+    # write <path> <json>
+    write_parser = subparsers.add_parser("write", help="Bulk write: full JSON in one call, atomic validation")
+    write_parser.add_argument("path", help="Path to slice.json")
+    write_parser.add_argument("json", help="JSON string or @file")
+    write_parser.set_defaults(func=cmd_write)
 
-    print(f"finalize: {path} is valid and normalized")
-    return 0
+    # set <path> <section> <fragment>
+    set_parser = subparsers.add_parser("set", help="Set one section with JSON fragment")
+    set_parser.add_argument("path", help="Path to slice.json")
+    set_parser.add_argument("section", help="Section name (e.g., 'business_rules')")
+    set_parser.add_argument("fragment", help="JSON fragment")
+    set_parser.set_defaults(func=cmd_set)
 
+    # check <path>
+    check_parser = subparsers.add_parser("check", help="Read-only validation")
+    check_parser.add_argument("path", help="Path to slice.json")
+    check_parser.set_defaults(func=cmd_check)
 
-# ---------------------------------------------------------------------------
-# Subcommand: set-scalar
-# ---------------------------------------------------------------------------
+    # finalize <path> [--blocked]
+    finalize_parser = subparsers.add_parser("finalize", help="Validate and set readiness")
+    finalize_parser.add_argument("path", help="Path to slice.json")
+    finalize_parser.add_argument("--blocked", action="store_true", help="Force readiness=blocked")
+    finalize_parser.set_defaults(func=cmd_finalize)
 
-_SCALAR_SET_ALLOWED = frozenset({"title", "summary", "risk", "readiness"})
-
-
-def cmd_set_scalar(args: argparse.Namespace) -> int:
-    section = args.section
-    if section not in _SCALAR_SET_ALLOWED:
-        allowed = ", ".join(sorted(_SCALAR_SET_ALLOWED))
-        print(
-            f"❌ set-scalar: '{section}' is not allowed. Allowed sections: {allowed}",
-            file=sys.stderr,
-        )
-        return 1
-    set_args = argparse.Namespace(
-        slice_json=args.slice_json,
-        section=section,
-        json_fragment=json.dumps(args.value),
-        append=False,
-    )
-    return cmd_set(set_args)
-
-
-# ---------------------------------------------------------------------------
-# Subcommand: remove
-# ---------------------------------------------------------------------------
-
-
-def _find_all_references(data: dict, target_id: str) -> list[str]:
-    refs: list[str] = []
-    for i, sc in enumerate(data.get("acceptance_scenarios", [])):
-        for j, t in enumerate(sc.get("traces_to", [])):
-            if t == target_id:
-                refs.append(f"$.acceptance_scenarios[{i}].traces_to[{j}]")
-    for i, dt in enumerate(data.get("decision_tables", [])):
-        for j, row in enumerate(dt.get("rows", [])):
-            for k, r in enumerate(row.get("rule_ids", [])):
-                if r == target_id:
-                    refs.append(f"$.decision_tables[{i}].rows[{j}].rule_ids[{k}]")
-    for i, d in enumerate(data.get("decision_log", [])):
-        for j, e in enumerate(d.get("evidence_ids", [])):
-            if e == target_id:
-                refs.append(f"$.decision_log[{i}].evidence_ids[{j}]")
-    return refs
-
-
-def _apply_id_remap(data: dict, remap: dict) -> dict:
-    for sc in data.get("acceptance_scenarios", []):
-        sc["traces_to"] = [remap.get(t, t) for t in sc.get("traces_to", [])]
-    for dt in data.get("decision_tables", []):
-        for row in dt.get("rows", []):
-            row["rule_ids"] = [remap.get(r, r) for r in row.get("rule_ids", [])]
-    for d in data.get("decision_log", []):
-        d["evidence_ids"] = [remap.get(e, e) for e in d.get("evidence_ids", [])]
-    return data
-
-
-def cmd_remove(args: argparse.Namespace) -> int:
-    path = Path(args.slice_json)
-    data = load_slice(path)
-    section = args.section
-    target_id = args.item_id
-
-    if section not in ARRAY_SECTIONS:
-        print(
-            f"❌ remove: '{section}' is not an array section. Valid: {sorted(ARRAY_SECTIONS)}",
-            file=sys.stderr,
-        )
-        return 1
-
-    items = data.get(section, [])
-    target_item = next((item for item in items if isinstance(item, dict) and item.get("id") == target_id), None)
-    if target_item is None:
-        print(f"❌ No {section} item with id {target_id}", file=sys.stderr)
-        return 1
-
-    refs = _find_all_references(data, target_id)
-    if refs:
-        print(f"❌ Cannot remove {target_id}: referenced at:", file=sys.stderr)
-        for ref in refs:
-            print(f"  {ref}", file=sys.stderr)
-        return 1
-
-    remaining = [item for item in items if item.get("id") != target_id]
-    prefix = ARRAY_SECTIONS[section]
-    remap: dict[str, str] = {}
-    new_items = []
-    for i, item in enumerate(remaining):
-        old_id = item["id"]
-        new_id = id_format(prefix, i + 1)
-        if old_id != new_id:
-            remap[old_id] = new_id
-        new_items.append({**item, "id": new_id})
-
-    data[section] = new_items
-    if remap:
-        data = _apply_id_remap(data, remap)
-
-    # Validate the resulting array against the section's own schema (catches minItems)
-    sub = extract_subschema(load_schema(), section)
-    if sub:
-        array_validator = Draft202012Validator(sub)
-        array_errs = list(array_validator.iter_errors(new_items))
-        if array_errs:
-            for e in array_errs:
-                print(f"❌ remove: would violate {section} schema: {e.message}", file=sys.stderr)
-            return 1
-
-    save_slice(path, data)
-    print(f"remove {section} {target_id}: renumbered {len(new_items)} item(s)")
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def main() -> int:
-    parser = argparse.ArgumentParser(prog="slice.py", description="Grill-me slice driver")
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    p_init = sub.add_parser("init", help="Write a minimal skeleton slice file")
-    p_init.add_argument("slice_type", choices=["command", "query", "process", "integration"])
-    p_init.add_argument("--out", default="slice.json")
-    p_init.add_argument("--force", action="store_true")
-
-    p_plan = sub.add_parser("plan", help="Print fill-order checklist")
-    p_plan.add_argument("slice_json")
-
-    p_set = sub.add_parser("set", help="Merge a section fragment into the slice")
-    p_set.add_argument("slice_json")
-    p_set.add_argument("section")
-    p_set.add_argument("json_fragment")
-    p_set.add_argument("--append", action="store_true", help="Append to array instead of replacing")
-
-    p_set_scalar = sub.add_parser("set-scalar", help="Set a scalar section with a bare string (no JSON quoting)")
-    p_set_scalar.add_argument("slice_json")
-    p_set_scalar.add_argument("section")
-    p_set_scalar.add_argument("value")
-
-    p_remove = sub.add_parser("remove", help="Remove an array item by ID and renumber remaining")
-    p_remove.add_argument("slice_json")
-    p_remove.add_argument("section")
-    p_remove.add_argument("item_id")
-
-    p_status = sub.add_parser("status", help="Show fill status and cross-reference gaps")
-    p_status.add_argument("slice_json")
-
-    p_finalize = sub.add_parser("finalize", help="Normalize, enforce readiness, validate")
-    p_finalize.add_argument("slice_json")
+    # plan <path> [--verbose]
+    plan_parser = subparsers.add_parser("plan", help="Show fill order and hints")
+    plan_parser.add_argument("path", nargs="?", help="Path (optional, not used)")
+    plan_parser.add_argument("--verbose", action="store_true", help="Show sub-schemas")
+    plan_parser.set_defaults(func=cmd_plan)
 
     args = parser.parse_args()
-
-    dispatch = {
-        "init": cmd_init,
-        "plan": cmd_plan,
-        "set": cmd_set,
-        "set-scalar": cmd_set_scalar,
-        "status": cmd_status,
-        "finalize": cmd_finalize,
-        "remove": cmd_remove,
-    }
-    return dispatch[args.cmd](args)
+    if hasattr(args, "func"):
+        args.func(args)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

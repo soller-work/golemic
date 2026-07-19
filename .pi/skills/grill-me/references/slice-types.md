@@ -1,69 +1,45 @@
-# Slice type rules
+# Slice Types v2
 
-Choose exactly one primary `slice_type`. The type defines the minimum contract required for autonomous implementation. Secondary concerns may still be present; for example, a command may return a read model or call an external integration.
+Choose exactly one primary `slice_type`. This determines the focus of the `behavior` Markdown field.
 
 ## `command`
 
-Use for stakeholder actions whose primary outcome changes domain or persistent application state.
+Stakeholder actions whose primary outcome is a state mutation (create, update, delete, or state transition).
 
-Required:
+**behavior focus**: Describe the state mutations, preconditions, invariants, idempotency rules, and observable results.
 
-- at least one `state_changes` entry;
-- mutation rules, authorization, idempotency, concurrency, and observable result;
-- acceptance coverage for every state change and material failure.
-
-Examples: cancel an order, approve a request, change an address.
+Examples: approve a request, cancel an order, update a user profile.
 
 ## `query`
 
-Use for stakeholder actions whose primary outcome reads or derives information without changing domain state.
+Stakeholder actions whose primary outcome is information retrieval without domain state changes.
 
-Required:
+**behavior focus**: Describe the read model shape, source-to-field mapping, filtering/sorting/pagination, freshness guarantees, empty-result handling, and authorization rules.
 
-- at least one `read_models` entry;
-- zero `state_changes` entries;
-- explicit source-to-field mapping, freshness, filtering, sorting, pagination, empty-result behavior, and authorization filtering;
-- interface outputs that expose the complete result contract.
-
-Cache population, telemetry, and audit may be represented as `side_effects`; they must not alter domain behavior.
-
-Examples: show a dashboard, search orders, export a report.
+Examples: fetch a dashboard, search records, export a report.
 
 ## `process`
 
-Use for multi-step behavior whose primary concern is progression through an ordered workflow, including asynchronous or long-running work.
+Multi-step workflows whose primary concern is progression through ordered stages, including async or long-running work.
 
-Required:
+**behavior focus**: Describe each ordered step, state transitions, terminal conditions, failure handling per step, and compensation/cancellation/timeout logic.
 
-- at least two `process_steps` entries;
-- unique step order values;
-- explicit state before and after each step;
-- failure behavior for each step;
-- at least one terminal step;
-- recovery, cancellation, timeout, and compensation decisions where applicable.
-
-Examples: onboarding workflow, document review, fulfillment pipeline.
+Examples: onboarding workflow, document review pipeline, fulfillment.
 
 ## `integration`
 
-Use when the primary deliverable is a boundary with an external system or independently deployed service.
+Boundary behavior with external systems or independently deployed services.
 
-Required:
+**behavior focus**: Describe the external contract (direction, transport, request/response shape), idempotency, timeout/retry, failure mappings, and version compatibility.
 
-- at least one `integration_contracts` entry;
-- direction, transport, request and response contracts;
-- idempotency, timeout, retry, failure mapping, and compatibility/versioning rules;
-- acceptance coverage for success and material remote failures.
+Examples: consume a webhook, sync inventory, send invoices to accounting.
 
-Examples: consume a partner webhook, send invoices to an accounting provider, synchronize inventory.
+## Classification Rule
 
-## Classification rule
+Classify by the stakeholder-visible primary outcome:
+1. State mutation → `command`
+2. Information retrieval → `query`
+3. Ordered progression → `process`
+4. External boundary → `integration`
 
-Classify by the stakeholder-visible primary outcome, not by implementation technology:
-
-1. State mutation is primary -> `command`.
-2. Information retrieval is primary -> `query`.
-3. Ordered progression is primary -> `process`.
-4. External boundary behavior is primary -> `integration`.
-
-When two outcomes are independently deployable or independently valuable, model two slices instead of combining types.
+When outcomes are independently valuable, model separate slices.

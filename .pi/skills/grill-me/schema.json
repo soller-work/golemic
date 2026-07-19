@@ -1,42 +1,28 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.invalid/grill-me/schema.json",
-  "title": "Autonomously Implementable Vertical Slice",
+  "title": "Autonomously Implementable Vertical Slice v2",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version",
     "slice_type",
-    "risk",
     "title",
-    "summary",
-    "readiness",
-    "stakeholder_intent",
+    "stakeholder",
+    "trigger",
+    "success_outcome",
+    "tldr",
     "scope",
-    "preconditions",
+    "behavior",
     "business_rules",
-    "decision_tables",
-    "interfaces",
-    "read_models",
-    "process_steps",
-    "integration_contracts",
-    "state_changes",
-    "side_effects",
-    "security",
-    "implementation_context",
     "acceptance_scenarios",
-    "quality",
-    "decision_log",
-    "codebase_evidence",
-    "open_questions",
-    "assumptions_requiring_confirmation",
-    "blockers"
+    "inputs_outputs_errors",
+    "verify_commands",
+    "definition_of_done",
+    "readiness"
   ],
   "properties": {
-    "schema_version": {
-      "const": "1.1.0"
-    },
     "slice_type": {
+      "type": "string",
       "enum": [
         "command",
         "query",
@@ -44,706 +30,89 @@
         "integration"
       ]
     },
-    "depends_on": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/nonEmptyString"
-      },
-      "description": "Informational prose describing hard dependencies (e.g. issue numbers or titles). Not machine-readable; native GitHub blocked_by relations are the authoritative dependency graph."
-    },
     "title": {
-      "$ref": "#/$defs/nonEmptyString"
+      "type": "string",
+      "minLength": 1
     },
-    "summary": {
-      "$ref": "#/$defs/nonEmptyString"
+    "stakeholder": {
+      "type": "string",
+      "minLength": 1
     },
-    "readiness": {
-      "enum": [
-        "ready",
-        "blocked"
-      ]
+    "trigger": {
+      "type": "string",
+      "minLength": 1
     },
-    "risk": {
-      "enum": [
-        "low",
-        "medium",
-        "high"
-      ]
+    "success_outcome": {
+      "type": "string",
+      "minLength": 1
     },
-    "stakeholder_intent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "actor",
-        "goal",
-        "business_value",
-        "trigger",
-        "success_outcome"
-      ],
-      "properties": {
-        "actor": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "goal": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "business_value": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "trigger": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "success_outcome": {
-          "$ref": "#/$defs/nonEmptyString"
-        }
-      }
+    "tldr": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 140
     },
     "scope": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "in_scope",
-        "out_of_scope"
+        "in",
+        "out"
       ],
       "properties": {
-        "in_scope": {
-          "$ref": "#/$defs/nonEmptyStringArray"
+        "in": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "out_of_scope": {
-          "$ref": "#/$defs/stringArray"
+        "out": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       }
     },
-    "preconditions": {
-      "$ref": "#/$defs/nonEmptyStringArray"
+    "behavior": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Free-form Markdown: for command→state mutations, query→read model, process→ordered steps, integration→external contract."
     },
     "business_rules": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "rule",
-          "applies_when",
-          "outcome"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/businessRuleId"
-          },
-          "rule": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "applies_when": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "outcome": {
-            "$ref": "#/$defs/nonEmptyString"
-          }
-        }
-      }
-    },
-    "decision_tables": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "name",
-          "inputs",
-          "rows",
-          "default_outcome"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/decisionTableId"
-          },
-          "name": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "inputs": {
-            "$ref": "#/$defs/nonEmptyStringArray"
-          },
-          "rows": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "when",
-                "then",
-                "rule_ids"
-              ],
-              "properties": {
-                "when": {
-                  "$ref": "#/$defs/stringMap"
-                },
-                "then": {
-                  "$ref": "#/$defs/stringMap"
-                },
-                "rule_ids": {
-                  "type": "array",
-                  "minItems": 1,
-                  "items": {
-                    "$ref": "#/$defs/businessRuleId"
-                  },
-                  "uniqueItems": true
-                }
-              }
-            }
-          },
-          "default_outcome": {
-            "$ref": "#/$defs/nonEmptyString"
-          }
-        }
-      }
-    },
-    "interfaces": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "kind",
-          "name",
-          "operation",
-          "inputs",
-          "outputs",
-          "errors"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/interfaceId"
-          },
-          "kind": {
-            "enum": [
-              "ui",
-              "http_api",
-              "internal_api",
-              "cli",
-              "event",
-              "scheduled_job",
-              "other"
-            ]
-          },
-          "name": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "operation": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "inputs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/fieldContract"
-            }
-          },
-          "outputs": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "#/$defs/resultContract"
-            }
-          },
-          "errors": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/errorContract"
-            }
-          }
-        }
-      }
-    },
-    "read_models": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "name",
-          "purpose",
-          "sources",
-          "fields",
-          "freshness",
-          "filtering_sorting_pagination",
-          "empty_result",
-          "authorization_filtering"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/readModelId"
-          },
-          "name": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "purpose": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "sources": {
-            "$ref": "#/$defs/nonEmptyStringArray"
-          },
-          "fields": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "name",
-                "type",
-                "source",
-                "nullable",
-                "meaning"
-              ],
-              "properties": {
-                "name": {
-                  "$ref": "#/$defs/nonEmptyString"
-                },
-                "type": {
-                  "$ref": "#/$defs/nonEmptyString"
-                },
-                "source": {
-                  "$ref": "#/$defs/nonEmptyString"
-                },
-                "nullable": {
-                  "type": "boolean"
-                },
-                "meaning": {
-                  "$ref": "#/$defs/nonEmptyString"
-                }
-              }
-            }
-          },
-          "freshness": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "filtering_sorting_pagination": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "empty_result": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "authorization_filtering": {
-            "$ref": "#/$defs/nonEmptyString"
-          }
-        }
-      }
-    },
-    "process_steps": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "order",
-          "name",
-          "trigger",
-          "action",
-          "state_before",
-          "state_after",
-          "outcome",
-          "failure_behavior",
-          "terminal"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/processStepId"
-          },
-          "order": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "name": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "trigger": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "action": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "state_before": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "state_after": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "outcome": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "failure_behavior": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "terminal": {
-            "type": "boolean"
-          }
-        }
-      }
-    },
-    "integration_contracts": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "external_system",
-          "direction",
-          "transport",
-          "operation",
-          "request_contract",
-          "response_contract",
-          "idempotency",
-          "timeout",
-          "retry_policy",
-          "failure_mapping",
-          "compatibility"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/integrationContractId"
-          },
-          "external_system": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "direction": {
-            "enum": [
-              "inbound",
-              "outbound",
-              "bidirectional"
-            ]
-          },
-          "transport": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "operation": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "request_contract": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "response_contract": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "idempotency": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "timeout": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "retry_policy": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "failure_mapping": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "compatibility": {
-            "$ref": "#/$defs/nonEmptyString"
-          }
-        }
-      }
-    },
-    "state_changes": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "target",
-          "precondition",
-          "changes"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/stateChangeId"
-          },
-          "target": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "precondition": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "changes": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "field",
-                "operation",
-                "value_source"
-              ],
-              "properties": {
-                "field": {
-                  "$ref": "#/$defs/nonEmptyString"
-                },
-                "operation": {
-                  "enum": [
-                    "set",
-                    "clear",
-                    "increment",
-                    "decrement",
-                    "append",
-                    "remove",
-                    "create",
-                    "delete"
-                  ]
-                },
-                "value_source": {
-                  "$ref": "#/$defs/nonEmptyString"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "side_effects": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "type",
-          "description",
-          "delivery",
-          "idempotency",
-          "failure_policy"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/sideEffectId"
-          },
-          "type": {
-            "enum": [
-              "domain_event",
-              "integration_event",
-              "notification",
-              "external_call",
-              "payment",
-              "audit",
-              "cache",
-              "other"
-            ]
-          },
-          "description": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "delivery": {
-            "enum": [
-              "synchronous",
-              "asynchronous"
-            ]
-          },
-          "idempotency": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "failure_policy": {
-            "$ref": "#/$defs/nonEmptyString"
-          }
-        }
-      }
-    },
-    "security": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "authentication",
-        "authorization_rules",
-        "data_classification",
-        "audit_requirements"
-      ],
-      "properties": {
-        "authentication": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "authorization_rules": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        },
-        "data_classification": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "audit_requirements": {
-          "$ref": "#/$defs/stringArray"
-        }
-      }
-    },
-    "implementation_context": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "target_modules",
-        "integration_points",
-        "architecture_constraints",
-        "allowed_changes",
-        "forbidden_changes",
-        "dependencies",
-        "migration_strategy",
-        "consistency_and_concurrency"
-      ],
-      "properties": {
-        "target_modules": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        },
-        "integration_points": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        },
-        "architecture_constraints": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        },
-        "allowed_changes": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        },
-        "forbidden_changes": {
-          "$ref": "#/$defs/stringArray"
-        },
-        "dependencies": {
-          "$ref": "#/$defs/stringArray"
-        },
-        "migration_strategy": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "consistency_and_concurrency": {
-          "$ref": "#/$defs/nonEmptyString"
-        }
-      }
+      "type": "string",
+      "minLength": 0,
+      "description": "Free-form Markdown with business rules and decision logic."
     },
     "acceptance_scenarios": {
       "type": "array",
-      "minItems": 1,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "title",
-          "given",
-          "when",
-          "then",
-          "traces_to"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/acceptanceId"
-          },
-          "title": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "given": {
-            "$ref": "#/$defs/nonEmptyStringArray"
-          },
-          "when": {
-            "$ref": "#/$defs/nonEmptyStringArray"
-          },
-          "then": {
-            "$ref": "#/$defs/nonEmptyStringArray"
-          },
-          "traces_to": {
-            "type": "array",
-            "minItems": 1,
-            "items": {
-              "$ref": "#/$defs/traceId"
-            },
-            "uniqueItems": true
-          }
-        }
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Each item is a free-form 'Given ... When ... Then ...' string."
     },
-    "quality": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "required_test_levels",
-        "test_cases",
-        "quality_commands",
-        "non_functional_requirements",
-        "definition_of_done"
-      ],
-      "properties": {
-        "required_test_levels": {
-          "type": "array",
-          "minItems": 1,
-          "items": {
-            "enum": [
-              "unit",
-              "component",
-              "integration",
-              "contract",
-              "end_to_end",
-              "migration",
-              "security"
-            ]
-          },
-          "uniqueItems": true
-        },
-        "test_cases": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        },
-        "quality_commands": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        },
-        "non_functional_requirements": {
-          "$ref": "#/$defs/stringArray"
-        },
-        "definition_of_done": {
-          "$ref": "#/$defs/nonEmptyStringArray"
-        }
-      }
+    "inputs_outputs_errors": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Free-form Markdown: contract, validation, error handling."
     },
-    "decision_log": {
+    "verify_commands": {
       "type": "array",
-      "minItems": 1,
       "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "id",
-          "topic",
-          "decision",
-          "source",
-          "evidence_ids",
-          "rationale"
-        ],
-        "properties": {
-          "id": {
-            "$ref": "#/$defs/decisionId"
-          },
-          "topic": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "decision": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "source": {
-            "enum": [
-              "user",
-              "codebase",
-              "confirmed_recommendation"
-            ]
-          },
-          "evidence_ids": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/evidenceId"
-            },
-            "uniqueItems": true
-          },
-          "rationale": {
-            "$ref": "#/$defs/nonEmptyString"
-          }
-        }
-      }
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Commands to verify implementation (tests, linting, etc.)."
+    },
+    "definition_of_done": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Completion criteria; e.g., 'All tests pass', 'Code reviewed'."
     },
     "codebase_evidence": {
       "type": "array",
@@ -751,318 +120,77 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "id",
-          "path",
-          "symbol",
           "location",
-          "finding",
-          "verified"
+          "note"
         ],
         "properties": {
-          "id": {
-            "$ref": "#/$defs/evidenceId"
-          },
-          "path": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "symbol": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "location": {
-            "$ref": "#/$defs/nonEmptyString"
+            "type": "string",
+            "minLength": 1
           },
-          "finding": {
-            "$ref": "#/$defs/nonEmptyString"
-          },
-          "verified": {
-            "type": "boolean"
+          "note": {
+            "type": "string",
+            "minLength": 1
           }
         }
-      }
-    },
-    "open_questions": {
-      "$ref": "#/$defs/stringArray"
-    },
-    "assumptions_requiring_confirmation": {
-      "$ref": "#/$defs/stringArray"
+      },
+      "description": "Evidence from codebase: {location: 'path:line', note: 'finding'}."
     },
     "blockers": {
-      "$ref": "#/$defs/stringArray"
-    }
-  },
-  "allOf": [
-    {
-      "if": {
-        "properties": {
-          "readiness": {
-            "const": "ready"
-          }
-        },
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
         "required": [
-          "readiness"
-        ]
-      },
-      "then": {
+          "kind",
+          "text"
+        ],
         "properties": {
-          "open_questions": {
-            "maxItems": 0
+          "kind": {
+            "type": "string",
+            "enum": [
+              "question",
+              "assumption",
+              "blocker"
+            ]
           },
-          "assumptions_requiring_confirmation": {
-            "maxItems": 0
-          },
-          "blockers": {
-            "maxItems": 0
-          },
-          "codebase_evidence": {
-            "minItems": 1,
-            "items": {
-              "properties": {
-                "verified": {
-                  "const": true
-                }
-              },
-              "required": [
-                "verified"
-              ]
-            }
+          "text": {
+            "type": "string",
+            "minLength": 1
           }
         }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "slice_type": {
-            "const": "command"
-          }
-        },
-        "required": [
-          "slice_type"
-        ]
       },
-      "then": {
-        "properties": {
-          "state_changes": {
-            "minItems": 1
-          }
-        }
-      }
+      "description": "Unified blocker list: {kind: 'question'|'assumption'|'blocker', text: '...'}"
     },
-    {
-      "if": {
-        "properties": {
-          "slice_type": {
-            "const": "query"
-          }
-        },
-        "required": [
-          "slice_type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "read_models": {
-            "minItems": 1
-          },
-          "state_changes": {
-            "maxItems": 0
-          }
-        }
-      }
+    "security_relevant": {
+      "type": "boolean",
+      "default": false,
+      "description": "Set true if slice has security implications."
     },
-    {
-      "if": {
-        "properties": {
-          "slice_type": {
-            "const": "process"
-          }
-        },
-        "required": [
-          "slice_type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "process_steps": {
-            "minItems": 2
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "slice_type": {
-            "const": "integration"
-          }
-        },
-        "required": [
-          "slice_type"
-        ]
-      },
-      "then": {
-        "properties": {
-          "integration_contracts": {
-            "minItems": 1
-          }
-        }
-      }
-    }
-  ],
-  "$defs": {
-    "nonEmptyString": {
+    "security": {
       "type": "string",
       "minLength": 1,
-      "pattern": ".*\\S.*"
+      "description": "Free-form Markdown on security considerations; only required if security_relevant=true."
     },
-    "kebabId": {
+    "readiness": {
       "type": "string",
-      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
-    },
-    "stringArray": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/nonEmptyString"
-      },
-      "uniqueItems": true
-    },
-    "nonEmptyStringArray": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "$ref": "#/$defs/nonEmptyString"
-      },
-      "uniqueItems": true
-    },
-    "stringMap": {
-      "type": "object",
-      "minProperties": 1,
-      "additionalProperties": {
-        "$ref": "#/$defs/nonEmptyString"
-      }
-    },
-    "businessRuleId": {
-      "type": "string",
-      "pattern": "^BR-[0-9]{3}$"
-    },
-    "decisionTableId": {
-      "type": "string",
-      "pattern": "^DT-[0-9]{3}$"
-    },
-    "interfaceId": {
-      "type": "string",
-      "pattern": "^IF-[0-9]{3}$"
-    },
-    "stateChangeId": {
-      "type": "string",
-      "pattern": "^SC-[0-9]{3}$"
-    },
-    "sideEffectId": {
-      "type": "string",
-      "pattern": "^SE-[0-9]{3}$"
-    },
-    "acceptanceId": {
-      "type": "string",
-      "pattern": "^AC-[0-9]{3}$"
-    },
-    "evidenceId": {
-      "type": "string",
-      "pattern": "^EV-[0-9]{3}$"
-    },
-    "decisionId": {
-      "type": "string",
-      "pattern": "^D-[0-9]{3}$"
-    },
-    "traceId": {
-      "type": "string",
-      "pattern": "^(BR|DT|IF|RM|PS|IC|SC|SE)-[0-9]{3}$"
-    },
-    "fieldContract": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "name",
-        "type",
-        "required",
-        "constraints",
-        "source"
+      "enum": [
+        "ready",
+        "blocked"
       ],
-      "properties": {
-        "name": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "type": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "required": {
-          "type": "boolean"
-        },
-        "constraints": {
-          "$ref": "#/$defs/stringArray"
-        },
-        "source": {
-          "$ref": "#/$defs/nonEmptyString"
-        }
-      }
-    },
-    "resultContract": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "condition",
-        "status",
-        "body"
-      ],
-      "properties": {
-        "condition": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "status": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "body": {
-          "$ref": "#/$defs/nonEmptyString"
-        }
-      }
-    },
-    "errorContract": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "condition",
-        "code",
-        "status",
-        "message"
-      ],
-      "properties": {
-        "condition": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "code": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "status": {
-          "$ref": "#/$defs/nonEmptyString"
-        },
-        "message": {
-          "$ref": "#/$defs/nonEmptyString"
-        }
-      }
-    },
-    "readModelId": {
-      "type": "string",
-      "pattern": "^RM-[0-9]{3}$"
-    },
-    "processStepId": {
-      "type": "string",
-      "pattern": "^PS-[0-9]{3}$"
-    },
-    "integrationContractId": {
-      "type": "string",
-      "pattern": "^IC-[0-9]{3}$"
+      "description": "Set by finalize command; ready iff blockers empty and validation passes."
     }
+  },
+  "if": {
+    "properties": {
+      "security_relevant": {
+        "const": true
+      }
+    }
+  },
+  "then": {
+    "required": [
+      "security"
+    ]
   }
 }
