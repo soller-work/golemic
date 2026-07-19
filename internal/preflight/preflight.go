@@ -122,9 +122,9 @@ func (p *Preflight) Check() Results {
 	return p.runChecks()
 }
 
-// runChecks executes the 6 checks in fixed order, prints per-check lines and
+// runChecks executes the 7 checks in fixed order, prints per-check lines and
 // the final ok/failed summary to p.stdout, and returns the results.
-func (p *Preflight) runChecks() Results {
+func (p *Preflight) runChecks() Results { //nolint:errcheck // writes to user-controlled stdout; ignoring error is intentional
 	// Reset cached state so repeated calls on the same instance are independent.
 	p.cachedCfg = nil
 	p.configDone = false
@@ -136,20 +136,21 @@ func (p *Preflight) runChecks() Results {
 		p.checkScaffolding(),
 		p.checkConfig(),
 		p.checkCredentials(),
+		p.checkLabels(),
 	}
 
 	for _, r := range results {
 		if r.Ok {
-			fmt.Fprintf(p.stdout, "OK: %s\n", r.Name)
+			_, _ = fmt.Fprintf(p.stdout, "OK: %s\n", r.Name)
 		} else {
-			fmt.Fprintf(p.stdout, "FAILED: %s - %s\n", r.Name, r.Details)
+			_, _ = fmt.Fprintf(p.stdout, "FAILED: %s - %s\n", r.Name, r.Details)
 		}
 	}
 
 	if results.AllOK() {
-		fmt.Fprintln(p.stdout, "ok")
+		_, _ = fmt.Fprintln(p.stdout, "ok")
 	} else {
-		fmt.Fprintln(p.stdout, "failed")
+		_, _ = fmt.Fprintln(p.stdout, "failed")
 	}
 
 	return results
@@ -389,7 +390,7 @@ func (p *Preflight) checkConfig() Result {
 // checkCredentials validates GitHub tokens.
 // Setup mode: scaffolds credentials.json if missing, then validates via gh api user.
 // Check mode: loads credentials without scaffolding, compares token values locally.
-func (p *Preflight) checkCredentials() Result {
+func (p *Preflight) checkCredentials() Result { //nolint:cyclop // linear sequence of independent guard clauses; extracting sub-functions would obscure the validation flow
 	// Use cached config from checkConfig if available, otherwise load fresh
 	var cfg *config.Config
 	var err error
@@ -484,6 +485,88 @@ func (p *Preflight) ghWhoami(token string) (string, error) {
 	}
 
 	return user.Login, nil
+}
+
+// ghLabelEntry holds the name field from `gh label list --json name`.
+type ghLabelEntry struct {
+	Name string `json:"name"`
+}
+
+// requiredLabels lists the labels that must exist in the repository.
+var requiredLabels = []struct {
+	name        string
+	color       string
+	description string
+}{
+	{"in-progress", "fbca04", "Issue is currently claimed by an autonomous runner"},
+	{"needs-human", "d93f0b", "Autonomous runner failed; requires human triage"},
+}
+
+// checkLabels verifies that the required GitHub labels exist.
+// Setup mode: creates missing labels via gh label create.
+// Check mode: reports missing labels as failures without any mutation.
+func (p *Preflight) checkLabels() Result { //nolint:cyclop // linear sequence of independent guard clauses; extracting sub-functions would obscure the validation flow
+	var cfg *config.Config
+	var err error
+	if p.configDone && p.cachedCfg != nil {
+		cfg = p.cachedCfg
+	} else {
+		cfg, err = config.Load(p.repoRoot)
+	}
+	if err != nil {
+		return Result{Name: "labels", Ok: false, Details: "cannot load config: " + err.Error()}
+	}
+
+	loader := credentials.NewLoader(p.homeDir)
+	loader.LookupEnv = p.lookupEnv
+	creds, err := loader.Load(cfg.Project)
+	if err != nil {
+		return Result{Name: "labels", Ok: false, Details: "cannot load credentials: " + err.Error()}
+	}
+
+	env := map[string]string{"GH_TOKEN": creds.DevToken()}
+
+	out, err := p.executor.RunWithEnv(env, "gh", "label", "list", "--json", "name")
+	if err != nil {
+		return Result{Name: "labels", Ok: false, Details: "gh label list failed: " + sanitizeErr(err)}
+	}
+
+	var entries []ghLabelEntry
+	if jsonErr := json.Unmarshal([]byte(out), &entries); jsonErr != nil {
+		return Result{Name: "labels", Ok: false, Details: "gh label list: invalid response"}
+	}
+
+	existing := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		existing[e.Name] = true
+	}
+
+	var missing []string
+	for _, req := range requiredLabels {
+		if !existing[req.name] {
+			missing = append(missing, req.name)
+		}
+	}
+
+	if p.checkMode {
+		if len(missing) > 0 {
+			return Result{Name: "labels", Ok: false, Details: "missing labels: " + strings.Join(missing, ", ")}
+		}
+		return Result{Name: "labels", Ok: true}
+	}
+
+	for _, req := range requiredLabels {
+		if existing[req.name] {
+			continue
+		}
+		if _, createErr := p.executor.RunWithEnv(env, "gh", "label", "create", req.name,
+			"--color", req.color, "--description", req.description); createErr != nil {
+			return Result{Name: "labels", Ok: false,
+				Details: "gh label create " + req.name + " failed: " + sanitizeErr(createErr)}
+		}
+	}
+
+	return Result{Name: "labels", Ok: true}
 }
 
 // sanitizeErr returns a safe, prefix-only error message — never raw stderr payload.

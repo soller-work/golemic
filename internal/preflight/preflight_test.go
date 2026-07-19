@@ -48,7 +48,7 @@ func (f *fakeExecutor) RunWithEnvInDir(env map[string]string, _ string, name str
 }
 
 // fakeExecutorOK returns an executor that always succeeds.
-func fakeExecutorOK() *fakeExecutor {
+func fakeExecutorOK() *fakeExecutor { //nolint:cyclop,gocognit // exhaustive switch over all supported commands; structure mirrors the system under test
 	return &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			switch name {
@@ -72,7 +72,7 @@ func fakeExecutorOK() *fakeExecutor {
 			return "", fmt.Errorf("unknown command: %s", name)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 1 && args[0] == "api" && args[1] == "user" {
+			if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "user" {
 				token := env["GH_TOKEN"]
 				if strings.Contains(token, "dev") {
 					return `{"login":"dev-bot"}`, nil
@@ -81,6 +81,9 @@ func fakeExecutorOK() *fakeExecutor {
 					return `{"login":"reviewer-bot"}`, nil
 				}
 				return `{"login":"unknown"}`, nil
+			}
+			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "list" {
+				return `[{"name":"in-progress"},{"name":"needs-human"}]`, nil
 			}
 			return "", fmt.Errorf("not mocked: %s %v", name, args)
 		},
@@ -102,7 +105,7 @@ func setupPreflight(t *testing.T, exec *fakeExecutor) (*Preflight, string, strin
 	return p, homeDir, repoRoot
 }
 
-func TestRunAllAllChecksPass(t *testing.T) {
+func TestRunAllAllChecksPass(t *testing.T) { //nolint:cyclop // linear assertions; complexity grows with check count, extracting helpers would obscure what is being verified
 	exec := fakeExecutorOK()
 	p, homeDir, repoRoot := setupPreflight(t, exec)
 	p.SetLookupEnv(emptyLookup) // file has ghp_dev_token / ghp_rev_token which satisfy the mock
@@ -149,7 +152,7 @@ func TestRunAllAllChecksPass(t *testing.T) {
 	}
 
 	output := buf.String()
-	// Check output format — 6 checks (credentials scaffolding is transparent, not a separate check)
+	// Check output format — 7 checks (credentials scaffolding is transparent, not a separate check)
 	for _, expected := range []string{
 		"OK: gh installiert",
 		"OK: pi installiert",
@@ -157,6 +160,7 @@ func TestRunAllAllChecksPass(t *testing.T) {
 		"OK: .golemic/ Scaffolding",
 		"OK: config.json valide",
 		"OK: Credentials",
+		"OK: labels",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output missing %q, got: %s", expected, output)
@@ -185,9 +189,9 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 
 	results := p.RunAll()
 
-	// Should have exactly 6 results (gh, pi, git, scaffolding, config, credentials)
-	if len(results) != 6 {
-		t.Errorf("RunAll() returned %d results, want 6", len(results))
+	// Should have exactly 7 results (gh, pi, git, scaffolding, config, credentials, labels)
+	if len(results) != 7 {
+		t.Errorf("RunAll() returned %d results, want 7", len(results))
 	}
 
 	// All should fail
@@ -196,7 +200,7 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 	}
 
 	output := buf.String()
-	// All 6 checks should appear in output
+	// All 7 checks should appear in output
 	for _, expected := range []string{
 		"FAILED: gh installiert",
 		"FAILED: pi installiert",
@@ -204,6 +208,7 @@ func TestRunAllRunsAllChecksEvenOnFailure(t *testing.T) {
 		"FAILED: .golemic/ Scaffolding",
 		"FAILED: config.json valide",
 		"FAILED: Credentials",
+		"FAILED: labels",
 	} {
 		if !strings.Contains(output, expected) {
 			t.Errorf("output missing %q, got: %s", expected, output)
@@ -332,7 +337,7 @@ func TestErrExit(t *testing.T) {
 	}
 }
 
-func TestPreflightCheckOrder(t *testing.T) {
+func TestPreflightCheckOrder(t *testing.T) { //nolint:cyclop // linear assertions; complexity grows with check count, extracting helpers would obscure what is being verified
 	// AC-005: checkCredentialsScaffolding runs before checkCredentials
 	exec := fakeExecutorOK()
 	p, homeDir, repoRoot := setupPreflight(t, exec)
@@ -367,8 +372,8 @@ func TestPreflightCheckOrder(t *testing.T) {
 	p.SetStdout(&buf)
 	results := p.RunAll()
 
-	if len(results) != 6 {
-		t.Fatalf("expected 6 results, got %d", len(results))
+	if len(results) != 7 {
+		t.Fatalf("expected 7 results, got %d", len(results))
 	}
 
 	// Verify exact order (credentials scaffolding is transparent, not a separate check)
@@ -379,6 +384,7 @@ func TestPreflightCheckOrder(t *testing.T) {
 		".golemic/ Scaffolding",
 		"config.json valide",
 		"Credentials",
+		"labels",
 	}
 
 	for i, expected := range expectedNames {
