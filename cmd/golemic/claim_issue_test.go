@@ -378,7 +378,7 @@ func TestClaimIssue_AC005_MissingEnvVar(t *testing.T) {
 }
 
 // DT-001 / BR-005: gh pre-read failure must exit 1, no event written.
-func TestClaimIssue_GHError_PreRead(t *testing.T) {
+func TestClaimIssue_GHError_PreRead(t *testing.T) { //nolint:cyclop
 	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
 
 	code, stdout, stderr, eventLogPath := claimIssueRun(t, homeDir, repoRoot, nil,
@@ -409,7 +409,7 @@ func TestClaimIssue_GHError_PreRead(t *testing.T) {
 }
 
 // DT-001 / BR-005: gh edit failure must exit 1, no event written.
-func TestClaimIssue_GHError_Edit(t *testing.T) {
+func TestClaimIssue_GHError_Edit(t *testing.T) { //nolint:cyclop
 	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
 
 	preView := claimIssueViewJSON([]string{"ready-for-agent"}, nil)
@@ -444,7 +444,7 @@ func TestClaimIssue_GHError_Edit(t *testing.T) {
 }
 
 // DT-001 / BR-005: gh post-verify failure must exit 1, no event written.
-func TestClaimIssue_GHError_PostVerify(t *testing.T) {
+func TestClaimIssue_GHError_PostVerify(t *testing.T) { //nolint:cyclop
 	homeDir, repoRoot := claimIssueFixture(t, testProject, testToken)
 
 	preView := claimIssueViewJSON([]string{"ready-for-agent"}, nil)
