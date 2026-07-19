@@ -23,6 +23,16 @@ const (
 	ResultError                     // gh/parse failure; error carries details
 )
 
+// ReleaseResult is the outcome of a Release call.
+type ReleaseResult int
+
+const (
+	ReleaseResultOK           ReleaseResult = iota // edit succeeded; caller must write issue_released event
+	ReleaseResultIdempotent                        // issue already released; no edit, no event needed
+	ReleaseResultForeignClaim                      // in-progress owned by a different assignee
+	ReleaseResultError                             // gh/parse failure
+)
+
 type issueView struct {
 	Labels []struct {
 		Name string `json:"name"`
@@ -43,6 +53,15 @@ func (v *issueView) hasLabel(name string) bool {
 
 func (v *issueView) isSoleAssignee(login string) bool {
 	return len(v.Assignees) == 1 && v.Assignees[0].Login == login
+}
+
+func (v *issueView) hasAssignee(login string) bool {
+	for _, a := range v.Assignees {
+		if a.Login == login {
+			return true
+		}
+	}
+	return false
 }
 
 func (v *issueView) assigneeLogins() []string {
@@ -66,6 +85,50 @@ func viewIssue(executor preflight.Executor, devToken string, number int) (*issue
 		return nil, fmt.Errorf("parse issue view %d: %w", number, err)
 	}
 	return &v, nil
+}
+
+// Release removes the exclusive lock on GitHub issue number.
+//
+// Idempotent if in-progress label is absent (BR-002). Exits with
+// ReleaseResultForeignClaim if in-progress is present but the dev-bot is not
+// an assignee (BR-003). On success: removes in-progress, clears assignees, and
+// applies reason-specific labels per DT-001 (done=none, failed=needs-human,
+// abandoned=ready-for-agent).
+func Release(executor preflight.Executor, number int, devLogin, devToken, reason string) (ReleaseResult, error) {
+	ghEnv := map[string]string{"GH_TOKEN": devToken}
+	num := strconv.Itoa(number)
+
+	pre, err := viewIssue(executor, devToken, number)
+	if err != nil {
+		return ReleaseResultError, err
+	}
+
+	// BR-002: idempotent — in-progress absent means already released.
+	if !pre.hasLabel("in-progress") {
+		return ReleaseResultIdempotent, nil
+	}
+
+	// BR-003: foreign ownership — in-progress present but dev-bot not an assignee.
+	if !pre.hasAssignee(devLogin) {
+		return ReleaseResultForeignClaim, fmt.Errorf("issue #%d is claimed by %v, not %s",
+			number, pre.assigneeLogins(), devLogin)
+	}
+
+	editArgs := []string{"issue", "edit", num,
+		"--remove-label", "in-progress",
+		"--remove-assignee", "@me",
+	}
+	switch reason {
+	case "failed":
+		editArgs = append(editArgs, "--add-label", "needs-human")
+	case "abandoned":
+		editArgs = append(editArgs, "--add-label", "ready-for-agent")
+	}
+
+	if _, err := executor.RunWithEnv(ghEnv, "gh", editArgs...); err != nil {
+		return ReleaseResultError, fmt.Errorf("gh issue edit %d: %w", number, err)
+	}
+	return ReleaseResultOK, nil
 }
 
 // Claim acquires an exclusive lock on GitHub issue number.

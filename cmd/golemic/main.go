@@ -66,6 +66,7 @@ var knownCommands = []struct {
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
 	{"slice", "Print the authoritative task spec for an issue (golemic slice --issue N)"},
 	{"claim-issue", "Claim an issue as in-progress for the dev-bot (golemic claim-issue --number N)"},
+	{"release-issue", "Release a claimed issue lock with reason-driven label handoff (golemic release-issue --number N --reason done|failed|abandoned)"},
 	{"run-loop", "Run the autonomous 60-second polling loop for takeable issues"},
 }
 
@@ -79,7 +80,7 @@ func usage(w io.Writer) {
 
 // run dispatches subcommands. All error and usage output goes to stderr.
 // stdout is left untouched for error states. Returns the process exit code.
-func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit
+func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit,funlen
 	if len(args) < 2 {
 		usage(stderr)
 		return 1
@@ -148,6 +149,10 @@ func run(args []string, stdout, stderr io.Writer) int { //nolint:cyclop,gocognit
 
 	if command == "claim-issue" {
 		return runClaimIssue(args, stdout, stderr, os.Getenv, osExecutor{})
+	}
+
+	if command == "release-issue" {
+		return runReleaseIssue(args, stdout, stderr, os.Getenv, osExecutor{})
 	}
 
 	if command == "run-loop" {
