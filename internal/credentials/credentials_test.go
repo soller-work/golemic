@@ -22,19 +22,6 @@ func setEnv(t *testing.T, key, value string) func() {
 	}
 }
 
-// unsetEnv ensures an env var is not set for the duration of the test.
-// It saves and restores the previous value if one existed.
-func unsetEnv(t *testing.T, key string) func() {
-	t.Helper()
-	old, had := os.LookupEnv(key)
-	os.Unsetenv(key)
-	return func() {
-		if had {
-			os.Setenv(key, old)
-		}
-	}
-}
-
 // envLookup returns a lookup function backed by the given map.
 func envLookup(env map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {

@@ -304,7 +304,5 @@ func TestMissingEnvVarError(t *testing.T) {
 // TestResolverInterface verifies that EnvResolver satisfies the Resolver interface.
 func TestResolverInterface(t *testing.T) {
 	var r Resolver = NewEnvResolver()
-	if r == nil {
-		t.Fatal("NewEnvResolver() returned nil")
-	}
+	_ = r
 }

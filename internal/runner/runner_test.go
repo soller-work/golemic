@@ -271,16 +271,6 @@ func TestRun_WorktreeCollision_AC002(t *testing.T) {
 		t.Errorf("stderr should contain worktree path, got: %q", errMsg)
 	}
 
-	// Verify run_started was written (even on collision)
-	runID := strings.TrimSpace(stdout.String())
-	if runID == "" {
-		// Find runID from event log directory
-		runsDir := filepath.Join(homeDir, ".golemic", project, "runs")
-		entries, err := os.ReadDir(runsDir)
-		if err == nil && len(entries) > 0 {
-			runID = entries[0].Name()
-		}
-	}
 	assertRunFinishedAborted(t, homeDir, project)
 }
 
