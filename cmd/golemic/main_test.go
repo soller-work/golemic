@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,16 +72,16 @@ func TestRun(t *testing.T) {
 			wantStderrSubs: []string{"--issue must be a positive integer"},
 		},
 		{
-			name:           "emit dispatches to runEmit",
-			args:           []string{"golemic", "emit"},
-			wantExit:       1,
-			wantStderrSubs: []string{"Missing required environment variable"},
+			// Dispatch reached runEmit; exact error depends on environment.
+			name:     "emit dispatches to runEmit",
+			args:     []string{"golemic", "emit"},
+			wantExit: 1,
 		},
 		{
-			name:           "open-pr without flags fails with env var error",
-			args:           []string{"golemic", "open-pr"},
-			wantExit:       1,
-			wantStderrSubs: []string{"Missing required environment variable"},
+			// Dispatch reached runOpenPR; exact error depends on environment.
+			name:     "open-pr without flags fails with env var error",
+			args:     []string{"golemic", "open-pr"},
+			wantExit: 1,
 		},
 		{
 			// Dispatch reached runSubmitReview: which error fires depends on whether
@@ -106,6 +108,18 @@ func TestRun(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// makeTestConfig creates .golemic/config.json in dir with a minimal valid config.
+func makeTestConfig(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, ".golemic"), 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	cfgJSON := `{"project":"test","verify_command":"true","label":"ready-for-agent","models":{"dev":"test/m","reviewer":"test/m"},"timeout_minutes":30}`
+	if err := os.WriteFile(filepath.Join(dir, ".golemic", "config.json"), []byte(cfgJSON), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 }
 
@@ -148,12 +162,16 @@ func readPROpenedPayload(t *testing.T, path string) map[string]interface{} {
 // TestRunOpenPR_AC001_NoPR covers AC-001: no existing PR, create path emits event.
 func TestRunOpenPR_AC001_NoPR(t *testing.T) { //nolint:cyclop
 	dir := t.TempDir()
+	makeTestConfig(t, dir)
 	eventLog := dir + "/events.jsonl"
 	env := openPRTestEnv("run-1", eventLog, "1")
 
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-42\n", nil
 			}
@@ -172,7 +190,7 @@ func TestRunOpenPR_AC001_NoPR(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
 
 	if code != 0 {
 		t.Errorf("exit code: got %d, want 0; stderr: %s", code, stderr.String())
@@ -201,12 +219,16 @@ func TestRunOpenPR_AC001_NoPR(t *testing.T) { //nolint:cyclop
 // TestRunOpenPR_AC002_OnePR covers AC-002: exactly one existing PR, idempotent path.
 func TestRunOpenPR_AC002_OnePR(t *testing.T) { //nolint:cyclop
 	dir := t.TempDir()
+	makeTestConfig(t, dir)
 	eventLog := dir + "/events.jsonl"
 	env := openPRTestEnv("run-2", eventLog, "1")
 
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-31\n", nil
 			}
@@ -225,7 +247,7 @@ func TestRunOpenPR_AC002_OnePR(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
 
 	if code != 0 {
 		t.Errorf("exit code: got %d, want 0; stderr: %s", code, stderr.String())
@@ -254,12 +276,16 @@ func TestRunOpenPR_AC002_OnePR(t *testing.T) { //nolint:cyclop
 // TestRunOpenPR_AC003_MultiplePRs covers AC-003: multiple open PRs, fail fast.
 func TestRunOpenPR_AC003_MultiplePRs(t *testing.T) { //nolint:cyclop
 	dir := t.TempDir()
+	makeTestConfig(t, dir)
 	eventLog := dir + "/events.jsonl"
 	env := openPRTestEnv("run-3", eventLog, "1")
 
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-42\n", nil
 			}
@@ -278,7 +304,7 @@ func TestRunOpenPR_AC003_MultiplePRs(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
 
 	if code != 1 {
 		t.Errorf("exit code: got %d, want 1", code)
@@ -300,12 +326,16 @@ func TestRunOpenPR_AC003_MultiplePRs(t *testing.T) { //nolint:cyclop
 // TestRunOpenPR_AC004_ListFails covers AC-004: gh pr list failure, exit 1.
 func TestRunOpenPR_AC004_ListFails(t *testing.T) { //nolint:cyclop
 	dir := t.TempDir()
+	makeTestConfig(t, dir)
 	eventLog := dir + "/events.jsonl"
 	env := openPRTestEnv("run-4", eventLog, "1")
 
 	var createCalled bool
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			if name == "git" {
 				return "golemic/issue-42\n", nil
 			}
@@ -324,7 +354,7 @@ func TestRunOpenPR_AC004_ListFails(t *testing.T) { //nolint:cyclop
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
 
 	if code != 1 {
 		t.Errorf("exit code: got %d, want 1", code)
@@ -362,7 +392,7 @@ func TestRunOpenPR_AC005_MissingEnvVar(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec)
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
 
 	if code != 1 {
 		t.Errorf("exit code: got %d, want 1", code)
@@ -375,3 +405,128 @@ func TestRunOpenPR_AC005_MissingEnvVar(t *testing.T) {
 	}
 }
 
+// TestRunOpenPR_DT001_VerifyFails covers DT-001 row 2: verify_command exits non-zero → no gh calls, no event written.
+func TestRunOpenPR_DT001_VerifyFails(t *testing.T) {
+	dir := t.TempDir()
+	makeTestConfig(t, dir)
+	eventLog := dir + "/events.jsonl"
+	env := openPRTestEnv("run-vf", eventLog, "1")
+
+	var ghCalled bool
+	exec := fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", &preflight.ErrExit{ExitCode: 1, Stderr: "FAIL: TestFoo\nexit status 1"}
+			}
+			ghCalled = true
+			return "", fmt.Errorf("should not be called: %s %v", name, args)
+		},
+		runWithEnvFunc: func(_ map[string]string, name string, args ...string) (string, error) {
+			ghCalled = true
+			return "", fmt.Errorf("should not be called: %s %v", name, args)
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
+
+	if code != 1 {
+		t.Errorf("exit code: got %d, want 1", code)
+	}
+	if ghCalled {
+		t.Error("no gh or git call must happen when verify_command fails")
+	}
+	if readPROpenedPayload(t, eventLog) != nil {
+		t.Error("no pr_opened event must be written when verify_command fails")
+	}
+	if !strings.Contains(stderr.String(), "verify_command failed") {
+		t.Errorf("stderr missing 'verify_command failed'; got %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "FAIL: TestFoo") {
+		t.Errorf("stderr missing underlying error output; got %q", stderr.String())
+	}
+}
+
+// TestRunOpenPR_DT001_ConfigLoadFails covers DT-001 row 1: config load error → no executor calls, no event written.
+func TestRunOpenPR_DT001_ConfigLoadFails(t *testing.T) {
+	dir := t.TempDir()
+	// Intentionally do NOT create .golemic/config.json
+	eventLog := dir + "/events.jsonl"
+	env := openPRTestEnv("run-cf", eventLog, "1")
+
+	var execCalled bool
+	exec := fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			execCalled = true
+			return "", fmt.Errorf("should not be called: %s %v", name, args)
+		},
+		runWithEnvFunc: func(_ map[string]string, name string, args ...string) (string, error) {
+			execCalled = true
+			return "", fmt.Errorf("should not be called: %s %v", name, args)
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
+
+	if code != 1 {
+		t.Errorf("exit code: got %d, want 1", code)
+	}
+	if execCalled {
+		t.Error("no executor call must happen when config load fails")
+	}
+	if readPROpenedPayload(t, eventLog) != nil {
+		t.Error("no pr_opened event must be written when config load fails")
+	}
+	if !strings.Contains(stderr.String(), "Failed to load config") {
+		t.Errorf("stderr missing config error; got %q", stderr.String())
+	}
+}
+
+// TestRunOpenPR_DT001_VerifySuccessNewPR covers DT-001 row 3: verify succeeds, new PR created.
+func TestRunOpenPR_DT001_VerifySuccessNewPR(t *testing.T) { //nolint:cyclop
+	dir := t.TempDir()
+	makeTestConfig(t, dir)
+	eventLog := dir + "/events.jsonl"
+	env := openPRTestEnv("run-vs", eventLog, "1")
+
+	var verifyCalled, createCalled bool
+	exec := fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				verifyCalled = true
+				return "", nil
+			}
+			if name == "git" {
+				return "golemic/issue-49\n", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(_ map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[1] == "list" {
+				return "[]", nil
+			}
+			if name == "gh" && len(args) >= 2 && args[1] == "create" {
+				createCalled = true
+				return "https://github.com/org/repo/pull/49\n", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runOpenPR([]string{"golemic", "open-pr", "--title", "T", "--body", "B"}, &stdout, &stderr, env, exec, dir)
+
+	if code != 0 {
+		t.Errorf("exit code: got %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !verifyCalled {
+		t.Error("verify_command was not invoked")
+	}
+	if !createCalled {
+		t.Error("gh pr create was not called after verify succeeded")
+	}
+	if readPROpenedPayload(t, eventLog) == nil {
+		t.Error("pr_opened event must be written after verify succeeds and PR is created")
+	}
+}

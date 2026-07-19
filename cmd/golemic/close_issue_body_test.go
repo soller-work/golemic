@@ -74,6 +74,7 @@ func TestEnsureBodyClosesIssue(t *testing.T) {
 
 func TestRunOpenPR_AppendsClosesToGhBody(t *testing.T) {
 	dir := t.TempDir()
+	makeTestConfig(t, dir)
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-close",
 		"GOLEMIC_EVENT_LOG": filepath.Join(dir, "events.jsonl"),
@@ -83,6 +84,9 @@ func TestRunOpenPR_AppendsClosesToGhBody(t *testing.T) {
 	var sentBody string
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			return "golemic/issue-6\n", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
@@ -100,7 +104,7 @@ func TestRunOpenPR_AppendsClosesToGhBody(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "open-pr", "--title", "My PR", "--body", "Implements issue #6"}
-	if got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec); got != 0 {
+	if got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec, dir); got != 0 {
 		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
 	}
 	if !strings.Contains(sentBody, "Closes #6") {

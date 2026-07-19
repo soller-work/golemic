@@ -233,7 +233,7 @@ func TestOpenPR_MissingTurnID_FailsClosed_AC003(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "open-pr", "--title", "T", "--body", "B"}
-	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec, dir)
 
 	if got == 0 {
 		t.Fatalf("exit code: got 0, want non-zero")
@@ -293,6 +293,7 @@ func TestEmit_DuplicateTurnTypeIsNoOp_AC004(t *testing.T) {
 
 func TestOpenPR_DuplicateTurnIsNoOp_AC005(t *testing.T) { //nolint:cyclop
 	dir := t.TempDir()
+	makeTestConfig(t, dir)
 	logPath := filepath.Join(dir, "events.jsonl")
 
 	// Pre-populate: pr_opened with turnId 1 already written.
@@ -311,6 +312,9 @@ func TestOpenPR_DuplicateTurnIsNoOp_AC005(t *testing.T) { //nolint:cyclop
 	ghCalled := 0
 	exec := fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", nil
+			}
 			return "golemic/issue-42\n", nil
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
@@ -324,7 +328,7 @@ func TestOpenPR_DuplicateTurnIsNoOp_AC005(t *testing.T) { //nolint:cyclop
 
 	var stdout, stderr bytes.Buffer
 	args := []string{"golemic", "open-pr", "--title", "T", "--body", "B"}
-	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
+	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec, dir)
 
 	if got != 0 {
 		t.Fatalf("exit code: got %d, want 0 (no-op); stderr: %s", got, stderr.String())
