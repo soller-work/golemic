@@ -17,7 +17,7 @@ Do not implement production code. The validated JSON file is the handoff artifac
 - Read `references/slice-types.md` when classifying the primary slice type or resolving type-specific requirements.
 - Use `references/example-slice.json` only as a command-slice structural example. Never copy its domain content.
 - Use `references/example-query-slice.json`, `references/example-process-slice.json`, and `references/example-integration-slice.json` as structural examples for those respective slice types. Never copy their domain content.
-- Run `scripts/validate_slice.py` before presenting the final artifact.
+- Run `scripts/validate_slice.py` before presenting the final artifact (via `slice.py finalize`).
 
 ## Workflow
 
@@ -62,18 +62,18 @@ Walk dependencies in this order unless the feature requires a different dependen
 1. stakeholder, goal, value, and trigger;
 2. issue dependencies: which existing GitHub issues (by number) must be resolved before this one is takeable — these become `--blocked-by` arguments to `create_issue.py` and are recorded as native GitHub blocked_by relations;
 3. in-scope outcome and explicit non-goals;
-3. actors, authorization, and ownership;
-4. preconditions and relevant existing state;
-5. happy-path behavior;
-6. alternate, error, retry, and cancellation behavior;
-7. business rules and decision tables;
-8. **risk classification**: propose `low`, `medium`, or `high` with rationale using the DT-001 guidance below; record the confirmed value in the decision log with source `user` or `confirmed_recommendation`;
-9. inputs, outputs, validation, and error contracts;
-10. type-specific contract: state mutation, read model, ordered process, or external integration;
-11. state changes, events, and external side effects where relevant;
-12. idempotency, concurrency, freshness, consistency, retry, timeout, compensation, and failure handling where relevant;
-13. codebase integration points and change boundaries;
-14. acceptance scenarios, required tests, and quality commands.
+4. actors, authorization, and ownership;
+5. preconditions and relevant existing state;
+6. happy-path behavior;
+7. alternate, error, retry, and cancellation behavior;
+8. business rules and decision tables;
+9. **risk classification**: propose `low`, `medium`, or `high` with rationale using the DT-001 guidance below; record the confirmed value in the decision log with source `user` or `confirmed_recommendation`;
+10. inputs, outputs, validation, and error contracts;
+11. type-specific contract: state mutation, read model, ordered process, or external integration;
+12. state changes, events, and external side effects where relevant;
+13. idempotency, concurrency, freshness, consistency, retry, timeout, compensation, and failure handling where relevant;
+14. codebase integration points and change boundaries;
+15. acceptance scenarios, required tests, and quality commands.
 
 #### DT-001 — Risk value guidance
 
@@ -115,118 +115,25 @@ Do not use `ready` merely because the user wants to stop. If required informatio
 
 ### 5. Produce the artifact
 
-Create exactly one JSON document as a local temporary file (e.g. `slice.json`). Follow `schema.json` exactly. Use JSON values, not Markdown, Gherkin text blocks, comments, or prose outside defined fields. There is no `slice_id` field and no local backlog directory — the GitHub issue number assigned at creation time is the only identifier.
-
-Requirements:
-
-- Keep identifiers stable and unique.
-- `depends_on` is informational prose only (e.g. `["Requires issue #5 to be closed first"]`). Hard dependencies are expressed as `--blocked-by N` arguments to `create_issue.py` (step 8) and become native GitHub blocked_by relations — not a field in the JSON.
-- Use `BR-*` for business rules, `DT-*` for decision tables, `IF-*` for interfaces, `RM-*` for read models, `PS-*` for process steps, `IC-*` for integration contracts, `SC-*` for state changes, `SE-*` for side effects, `AC-*` for acceptance scenarios, `EV-*` for codebase evidence, and `D-*` for decisions.
-- Trace acceptance scenarios to every relevant rule, interface, read model, process step, integration contract, state change, and side effect.
-- Use empty arrays instead of omitting required collections.
-- Do not use placeholders such as `TBD`, `TODO`, `unknown`, `later`, or equivalent unresolved language in a `ready` artifact.
-- Do not include implementation choices that conflict with verified architecture constraints.
-
-### 6. Validate and repair
-
 Run from the skill directory or use equivalent absolute paths:
 
 ```bash
-python scripts/validate_slice.py schema.json <slice.json>
+slice.py init <type>                                          # writes skeleton to slice.json
+slice.py plan slice.json                                      # read once; shows fill order and sub-schemas
+slice.py set slice.json <section> '<json_fragment>'           # repeat per section
+slice.py finalize slice.json                                  # normalizes and delegates to validate_slice.py
 ```
 
-If validation fails, repair the JSON and rerun the validator. Do not present an invalid artifact as complete.
+The driver assigns IDs (`BR-001`, `IF-001`, etc.) deterministically — do not include `id` fields in fragments. It validates each fragment locally against the section's sub-schema and checks cross-references (`traces_to`, `rule_ids`, `evidence_ids`) before writing. `finalize` enforces readiness conditionals and rejects incomplete or inconsistent slices.
 
-The validator performs:
+Agent responsibilities: provide semantic content per section. No ID bookkeeping, no full-document rewrites.
 
-- JSON Schema Draft 2020-12 validation;
-- identifier uniqueness checks;
-- trace-reference integrity checks;
-- readiness invariants;
-- unresolved-placeholder detection;
-- codebase evidence checks;
-- type-specific command, query, process, and integration invariants.
+Other conventions:
+- `depends_on` is informational prose only (e.g. `["Requires issue #5 to be closed first"]`). Hard dependencies are expressed as `--blocked-by N` arguments to `create_issue.py` and become native GitHub blocked_by relations.
+- Use empty arrays instead of omitting required collections.
+- Do not use placeholders such as `TBD`, `TODO`, `unknown`, `later`, or equivalent unresolved language in a `ready` artifact.
 
-### 7. Autonomous Agent Guardrails: Mandatory Tools and Workflow
-
-**For autonomous agents (including AI): You must follow this workflow to avoid repeated mistakes and wasted tokens.**
-
-#### Phase 1: Schema Understanding (BEFORE writing JSON)
-
-Do not guess field names, types, or enum values. Query the schema:
-
-```bash
-# Understand enum values for any field
-python3 scripts/schema-query.py schema.json "interfaces[].kind"
-python3 scripts/schema-query.py schema.json "slice_type"
-
-# Understand complex types
-python3 scripts/schema-query.py schema.json "business_rules[]"
-python3 scripts/schema-query.py schema.json "decision_tables[].rows[]"
-```
-
-Read `references/slice-types.md` completely to understand your slice type's specific requirements.
-
-#### Phase 2: Generate Skeleton (Mandatory)
-
-Never write JSON from scratch. Use the scaffold tool:
-
-```bash
-python3 scripts/schema-scaffold.py schema.json --slice-type command --output slice.json
-```
-
-This creates valid-but-incomplete JSON with all required fields, correct types, and placeholder values (FILL_IN). This prevents structure errors before they happen.
-
-#### Phase 3: Fill In & Validate Incrementally
-
-Do not write 600 lines of JSON and then validate. Instead, fill one section, then validate:
-
-```bash
-# Fill stakeholder_intent section, then validate it
-python3 scripts/validate-slice-partial.py slice.json --stage stakeholder_intent
-
-# Fill scope + preconditions, then validate
-python3 scripts/validate-slice-partial.py slice.json --stage preconditions
-
-# Fill business_rules, then validate
-python3 scripts/validate-slice-partial.py slice.json --stage business_rules
-
-# Fill all critical sections (~50% done), then validate
-python3 scripts/validate-slice-partial.py slice.json --stage 50_percent
-
-# Fill remaining sections
-python3 scripts/validate-slice-partial.py slice.json --stage full_draft
-```
-
-Sequence for all stages (use in order):
-1. `stakeholder_intent` — Are intent fields filled?
-2. `scope` — Intent + scope?
-3. `preconditions` — Intent + scope + preconditions?
-4. `business_rules` — Intent + scope + business rules?
-5. `50_percent` — Critical fields only (faster checkpoint)
-6. `full_draft` — All major sections have content?
-7. `100_percent` — Full schema validation (strictest)
-
-#### Phase 4: Final Validation
-
-Only when partial stages pass, run full validation:
-
-```bash
-python3 scripts/validate-slice-partial.py slice.json --stage 100_percent
-```
-
-Must pass with zero errors.
-
-#### Why This Matters
-
-Agents that skip these steps waste tokens:
-- Guessing field names → 30+ validation errors
-- Writing JSON from scratch → structural errors
-- Validating at the end → huge iteration loops
-
-Using the tools enforces correctness **before** expensive JSON manipulation. Token cost: ~40% reduction. Quality: 100% validation pass rate on first full validation.
-
-### 8. Create the GitHub issue
+### 6. Create the GitHub issue
 
 Once validation passes, create the issue from the host repository root:
 
@@ -235,7 +142,7 @@ python3 .pi/skills/grill-me/scripts/create_issue.py slice.json [--blocked-by N[,
 ```
 
 - `--blocked-by` accepts a comma-separated list of existing GitHub issue numbers that this issue is blocked by. These become native GitHub blocked_by relations. Omit the flag when there are no hard dependencies.
-- The script re-validates the slice, deterministically renders the Markdown body, creates the issue, sets blocked_by relations, and attaches the `ready-for-agent` label as the final write step (so a partially created issue is never visible as takeable).
+- The script re-validates the slice, deterministically renders the Markdown body, creates the issue, sets blocked_by relations, and attaches the `ready-for-agent` label as the final write step.
 - On success it prints the new issue number and URL. The local `slice.json` is now a throwaway file; the GitHub issue is the sole artifact.
 - Use `--dry-run` to preview the rendered body and planned `gh` commands without executing any write.
 
