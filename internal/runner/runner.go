@@ -228,6 +228,27 @@ func (r *Runner) Run() int {
 		r.writeRunHeader(r.stderr)
 	}
 
+	// ---- PS-004b: Skip guard — abort if issue is not OPEN ----
+	if issue.State != "OPEN" {
+		fmt.Fprintf(r.stderr, "skipped: issue #%d has state=%q (expected OPEN)\n", r.issueNum, issue.State)
+		for _, lbl := range issue.Labels {
+			if lbl.Name == "ready-for-agent" {
+				fmt.Fprintf(r.stderr, "warning: issue #%d is not OPEN but still carries label \"ready-for-agent\" — please remove it manually\n", r.issueNum)
+				break
+			}
+		}
+		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeSkipped})
+		_ = writer.Write(eventlog.Event{
+			Type:    eventlog.EventRunFinished,
+			Ts:      time.Now().Format(time.RFC3339),
+			RunID:   r.runID,
+			TurnID:  r.turnCounter,
+			Payload: finishedPayload,
+		})
+		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID) //nolint:errcheck
+		return 0
+	}
+
 	// ---- Pre-collision cleanup (--clean) ----
 	if r.clean {
 		if err := r.cleanArtifacts(); err != nil {

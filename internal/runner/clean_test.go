@@ -296,7 +296,7 @@ func TestRun_CleanFailure_AbortsBeforeDevPhase_AC005(t *testing.T) { //nolint:go
 			if name == "gh" {
 				switch args[0] {
 				case "issue":
-					return `{"title":"Test","body":"Body"}`, nil
+					return `{"title":"Test","body":"Body","state":"OPEN","labels":[]}`, nil
 				case "pr":
 					if args[1] == "list" {
 						return fmt.Sprintf(`[{"url":%q,"state":"OPEN"}]`, prURL), nil
