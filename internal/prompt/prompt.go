@@ -316,6 +316,87 @@ func RenderDevCIRetry(failedCheckInfo string, issue Issue, branch string, verify
 	return sb.String(), nil
 }
 
+// devRebaseConflictResolveTemplateData holds the template variables for the rebase conflict
+// resolution prompt.
+type devRebaseConflictResolveTemplateData struct {
+	PRNumber        int
+	Branch          string
+	Base            string
+	ConflictedFiles []string
+	VerifyCommand   string
+	Guidelines      string
+}
+
+const devRebaseConflictResolveUserTemplate = `# Rebase Conflict Resolution: PR #{{.PRNumber}}
+
+**Branch:** {{.Branch}}
+
+**Base:** {{.Base}}
+
+**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
+
+**Conflicted Files:**
+{{range .ConflictedFiles}}- {{.}}
+{{end}}
+---
+
+## Guidelines
+
+{{.Guidelines}}
+
+---
+
+## Instructions
+
+Resolve all rebase conflicts and complete the rebase. **Do NOT run ` + "`" + `golemic open-pr` + "`" + `, ` + "`" + `golemic submit-review` + "`" + `, or ` + "`" + `golemic emit` + "`" + ` during this turn.**
+
+1. For each conflicted file listed above, open the file and resolve all conflict markers (` + "`" + `<<<<<<<` + "`" + `, ` + "`" + `=======` + "`" + `, ` + "`" + `>>>>>>>` + "`" + `).
+2. Stage the resolved files: ` + "`" + `git add <file>` + "`" + ` for each resolved file.
+3. Continue the rebase: ` + "`" + `git rebase --continue` + "`" + `. If further conflicts appear in subsequent commits, repeat steps 1–3.
+4. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
+5. If verification passes, you are done. Do not open a PR, submit a review, or emit any events.
+`
+
+// RenderDevRebaseConflictResolve renders a user prompt for resolving rebase conflicts.
+//
+// The rendered prompt instructs the dev agent to resolve conflict markers, run
+// git add and git rebase --continue, and verify the result — without opening a PR,
+// submitting a review, or emitting events.
+//
+// Returns an error if conflictedFiles is empty, the guidelines file cannot be read,
+// or template execution fails.
+func RenderDevRebaseConflictResolve(prNumber int, branch, base string, conflictedFiles []string, verifyCommand string, guidelinesPath string) (string, error) {
+	if len(conflictedFiles) == 0 {
+		return "", fmt.Errorf("EMPTY_CONFLICTED_FILES: conflictedFiles must not be empty")
+	}
+
+	guidelines, err := readGuidelines(guidelinesPath)
+	if err != nil {
+		return "", err
+	}
+
+	data := devRebaseConflictResolveTemplateData{
+		PRNumber:        prNumber,
+		Branch:          branch,
+		Base:            base,
+		ConflictedFiles: conflictedFiles,
+		VerifyCommand:   verifyCommand,
+		Guidelines:      guidelines,
+	}
+
+	tmpl, err := template.New("devRebaseConflictResolve").Parse(devRebaseConflictResolveUserTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse dev rebase conflict resolve prompt template: %w", err)
+	}
+
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return "", fmt.Errorf("failed to render dev rebase conflict resolve prompt template: %w", err)
+	}
+
+	return sb.String(), nil
+}
+
 // readGuidelines reads the guidelines file at the given path.
 // Returns an error if the file does not exist or cannot be read.
 func readGuidelines(path string) (string, error) {

@@ -400,8 +400,8 @@ When the gate passes:
 
 1. `git fetch origin` in the dev worktree.
 2. `git merge-base --is-ancestor origin/main HEAD`: if true, the branch is already up to date → skip to merge.
-3. Otherwise: `git rebase origin/main`. On conflict: `git rebase --abort`, post PR comment, write `automerge_failed`, outcome `merge_failed`, exit 1. Worktrees left in place (BR-005).
-4. After a successful rebase:
+3. Otherwise: `git rebase origin/main`. On conflict (unmerged paths detected in `git status --porcelain`): the runner does NOT abort immediately. Instead it invokes the dev agent once in the existing dev worktree with a `RenderDevRebaseConflictResolve` prompt containing the conflicted file list, `verify_command`, and guidelines. The agent resolves all conflict markers, runs `git add` and `git rebase --continue`, and verifies the result. If all four post-agent conditions pass (agent exit 0, rebase no longer in progress, tree clean, `origin/main` is an ancestor of `HEAD`), a single `automerge_conflict_retry` event with `result=resolved` is written and the run continues to verification and push. If the agent fails or any condition is unmet, `git rebase --abort` is called, an `automerge_conflict_retry` event with `result=unresolved` is written, and the run falls through to `automerge_failed`, outcome `merge_failed`, exit 1. Only one retry attempt is made per merge phase. A non-conflict rebase failure (no unmerged paths) takes the abort-and-fail path immediately without invoking the agent.
+4. After a successful rebase (clean or agent-resolved):
    - If the PR has configured CI checks: push with `--force-with-lease`, then poll `gh pr checks` every 10 seconds until all pass or `ci_timeout_minutes` expires.
    - If no CI checks are configured: run `verify_command` in the dev worktree, then push with `--force-with-lease`.
    - Any failure (red/timeout checks, rejected push, failed verify): post PR comment, write `automerge_failed`, outcome `merge_failed`, exit 1 (BR-006).
@@ -415,6 +415,7 @@ When the gate passes:
 | Event | When |
 |---|---|
 | `automerge_skipped` | Gate not met; payload: `reason` |
+| `automerge_conflict_retry` | Rebase conflict resolution attempted; payload: `conflictedFiles`, `result` (`resolved`\|`unresolved`), `turnId` |
 | `automerge_failed` | Merge attempt failed; payload: `reason` |
 | `pr_merged` | Merge succeeded; payload: `prNumber`, `mergedSHA` |
 

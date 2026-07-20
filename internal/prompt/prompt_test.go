@@ -397,3 +397,100 @@ func TestRenderDevCIRetry_InjectedIssueContext(t *testing.T) {
 	}
 	mustContain(t, p, []string{"99", "Test CI retry", "make test", "golemic slice --issue 99"})
 }
+
+// ---------------------------------------------------------------------------
+// RenderDevRebaseConflictResolve — AC-006
+// ---------------------------------------------------------------------------
+
+func TestRenderDevRebaseConflictResolve_ContainsAllFacts(t *testing.T) {
+	dir := t.TempDir()
+	guidelinesPath := writeTestGuidelines(t, dir, "dev.md", "# Dev Guidelines")
+
+	out, err := RenderDevRebaseConflictResolve(
+		42,
+		"golemic/issue-42",
+		"origin/main",
+		[]string{"foo.go", "bar.go"},
+		"go build ./... && go test ./...",
+		guidelinesPath,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mustContain(t, out, []string{
+		"42",
+		"golemic/issue-42",
+		"origin/main",
+		"foo.go",
+		"bar.go",
+		"go build ./... && go test ./...",
+		"# Dev Guidelines",
+	})
+}
+
+func TestRenderDevRebaseConflictResolve_ProhibitsAgentSubcommands(t *testing.T) {
+	dir := t.TempDir()
+	guidelinesPath := writeTestGuidelines(t, dir, "dev.md", "# Guidelines")
+
+	out, err := RenderDevRebaseConflictResolve(
+		42,
+		"golemic/issue-42",
+		"origin/main",
+		[]string{"foo.go"},
+		"go test ./...",
+		guidelinesPath,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mustContain(t, out, []string{
+		"golemic open-pr",
+		"golemic submit-review",
+		"golemic emit",
+	})
+}
+
+func TestRenderDevRebaseConflictResolve_StepListOrder(t *testing.T) {
+	dir := t.TempDir()
+	guidelinesPath := writeTestGuidelines(t, dir, "dev.md", "# Guidelines")
+
+	out, err := RenderDevRebaseConflictResolve(
+		42,
+		"golemic/issue-42",
+		"origin/main",
+		[]string{"foo.go"},
+		"go test ./...",
+		guidelinesPath,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// git add must appear before git rebase --continue in the step list
+	assertBefore(t, out, "git add", "git rebase --continue")
+	// The step instructing to run verify_command must appear after git rebase --continue.
+	// We check the step number prefix to avoid matching the header occurrence.
+	assertBefore(t, out, "git rebase --continue", "4. Run the verification command")
+}
+
+func TestRenderDevRebaseConflictResolve_EmptyFilesError(t *testing.T) {
+	dir := t.TempDir()
+	guidelinesPath := writeTestGuidelines(t, dir, "dev.md", "# Guidelines")
+
+	_, err := RenderDevRebaseConflictResolve(42, "golemic/issue-42", "origin/main", []string{}, "go test", guidelinesPath)
+	if err == nil {
+		t.Error("expected error for empty conflictedFiles, got nil")
+	}
+	if !strings.Contains(err.Error(), "EMPTY_CONFLICTED_FILES") {
+		t.Errorf("error should contain EMPTY_CONFLICTED_FILES, got: %v", err)
+	}
+}
+
+func TestRenderDevRebaseConflictResolve_MissingGuidelinesError(t *testing.T) {
+	_, err := RenderDevRebaseConflictResolve(42, "branch", "origin/main", []string{"foo.go"}, "go test", "/nonexistent/dev.md")
+	if err == nil {
+		t.Error("expected error for missing guidelines file, got nil")
+	}
+}
