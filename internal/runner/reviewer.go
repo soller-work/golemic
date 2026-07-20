@@ -170,7 +170,7 @@ func (r *Runner) loadInlineComments(prNumber int, reviewID string) ([]findingEnt
 }
 
 // runReviewerAgent runs the reviewer agent and returns the outcome.
-func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int) string {
+func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int, cbmEnabled bool) string { //nolint:funlen
 	golemicBinaryPath, _ := os.Executable()
 	binaryDir := filepath.Dir(golemicBinaryPath)
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
@@ -192,6 +192,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		},
 		r.cfg.VerifyCommand,
 		filepath.Join(r.repoRoot, ".golemic", "guidelines", "reviewer.md"),
+		cbmEnabled,
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to render reviewer prompt: %v\n", err) //nolint:errcheck
@@ -206,6 +207,10 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
+	revToolAllowlist := []string{"read", "bash"}
+	if cbmEnabled {
+		revToolAllowlist = append(revToolAllowlist, cbmReviewerTools...)
+	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "reviewer",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "reviewer.md"),
@@ -218,8 +223,9 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Reviewer,
 		Timeout:           timeout,
-		ToolAllowlist:     []string{"read", "bash"},
+		ToolAllowlist:     revToolAllowlist,
 		RunsDir:           runsDir,
+		Approve:           cbmEnabled,
 	})
 
 	if err != nil {

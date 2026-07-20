@@ -27,18 +27,20 @@ type Issue struct {
 
 // devTemplateData holds the template variables for the dev user prompt.
 type devTemplateData struct {
-	Issue         Issue
-	Branch        string
-	VerifyCommand string
-	Guidelines    string
+	Issue          Issue
+	Branch         string
+	VerifyCommand  string
+	Guidelines     string
+	CodebaseMemory bool
 }
 
 // reviewerTemplateData holds the template variables for the reviewer user prompt.
 type reviewerTemplateData struct {
-	PRNumber      int
-	Issue         Issue
-	VerifyCommand string
-	Guidelines    string
+	PRNumber       int
+	Issue          Issue
+	VerifyCommand  string
+	Guidelines     string
+	CodebaseMemory bool
 }
 
 const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
@@ -70,6 +72,17 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
    The body **must** include a closing keyword so merging auto-closes the issue, e.g. ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `.
 
 > **Important:** Do not run ` + "`" + `gh pr create` + "`" + ` — the runner requires the ` + "`" + `pr_opened` + "`" + ` event that only ` + "`" + `golemic open-pr` + "`" + ` writes. ` + "`" + `golemic open-pr` + "`" + ` is the **sole** permitted method to open a PR.
+{{if .CodebaseMemory}}
+## Code Intelligence
+
+A codebase knowledge graph is available via the ` + "`" + `codebase-memory` + "`" + ` MCP server. Use these read-only tools to navigate the repository:
+
+- ` + "`" + `search_code` + "`" + ` — semantic code search across the indexed codebase
+- ` + "`" + `find_symbol` + "`" + ` — look up a symbol definition by name
+- ` + "`" + `get_related` + "`" + ` — find files and symbols related to a given path or symbol
+
+Do not call ` + "`" + `index_repository` + "`" + `, ` + "`" + `delete_project` + "`" + `, ` + "`" + `manage_adr` + "`" + `, or ` + "`" + `ingest_traces` + "`" + `.
+{{end}}
 `
 
 const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
@@ -100,6 +113,18 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 6. After posting all inline comments, call **exactly one**:
    ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}} --merge-confidence high|low` + "`" + `
    The ` + "`" + `--body` + "`" + ` must summarise all findings, including any that could not be anchored as inline comments.
+{{if .CodebaseMemory}}
+## Code Intelligence
+
+A codebase knowledge graph is available via the ` + "`" + `codebase-memory` + "`" + ` MCP server. Use these read-only tools to navigate the repository:
+
+- ` + "`" + `search_code` + "`" + ` — semantic code search across the indexed codebase
+- ` + "`" + `find_symbol` + "`" + ` — look up a symbol definition by name
+- ` + "`" + `get_related` + "`" + ` — find files and symbols related to a given path or symbol
+- ` + "`" + `detect_changes` + "`" + ` — analyse the git-diff blast radius for a set of changed files
+
+Do not call ` + "`" + `index_repository` + "`" + `, ` + "`" + `delete_project` + "`" + `, ` + "`" + `manage_adr` + "`" + `, or ` + "`" + `ingest_traces` + "`" + `.
+{{end}}
 `
 
 // RenderDev renders a dev user prompt with all run-specific facts injected.
@@ -111,17 +136,18 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 //
 // Returns an error if the guidelines file does not exist or cannot be read,
 // or if template execution fails.
-func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath string, codebaseMemory bool) (userPrompt string, err error) {
 	guidelines, err := readGuidelines(guidelinesPath)
 	if err != nil {
 		return "", err
 	}
 
 	data := devTemplateData{
-		Issue:         issue,
-		Branch:        branch,
-		VerifyCommand: verifyCommand,
-		Guidelines:    guidelines,
+		Issue:          issue,
+		Branch:         branch,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+		CodebaseMemory: codebaseMemory,
 	}
 
 	tmpl, err := template.New("dev").Parse(devUserTemplate)
@@ -146,17 +172,18 @@ func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath 
 //
 // Returns an error if the guidelines file does not exist or cannot be read,
 // or if template execution fails.
-func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string, codebaseMemory bool) (userPrompt string, err error) {
 	guidelines, err := readGuidelines(guidelinesPath)
 	if err != nil {
 		return "", err
 	}
 
 	data := reviewerTemplateData{
-		PRNumber:      prNumber,
-		Issue:         issue,
-		VerifyCommand: verifyCommand,
-		Guidelines:    guidelines,
+		PRNumber:       prNumber,
+		Issue:          issue,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+		CodebaseMemory: codebaseMemory,
 	}
 
 	tmpl, err := template.New("reviewer").Parse(reviewerUserTemplate)
@@ -174,12 +201,13 @@ func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesP
 
 // devRetryTemplateData holds the template variables for the dev retry user prompt.
 type devRetryTemplateData struct {
-	Issue         Issue
-	Branch        string
-	Findings      string
-	FindingsJSON  string
-	VerifyCommand string
-	Guidelines    string
+	Issue          Issue
+	Branch         string
+	Findings       string
+	FindingsJSON   string
+	VerifyCommand  string
+	Guidelines     string
+	CodebaseMemory bool
 }
 
 const devRetryUserTemplate = `# Dev Retry: Address Review Findings for Issue #{{.Issue.Number}}
@@ -221,13 +249,24 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
 5. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
+{{if .CodebaseMemory}}
+## Code Intelligence
+
+A codebase knowledge graph is available via the ` + "`" + `codebase-memory` + "`" + ` MCP server. Use these read-only tools to navigate the repository:
+
+- ` + "`" + `search_code` + "`" + ` — semantic code search across the indexed codebase
+- ` + "`" + `find_symbol` + "`" + ` — look up a symbol definition by name
+- ` + "`" + `get_related` + "`" + ` — find files and symbols related to a given path or symbol
+
+Do not call ` + "`" + `index_repository` + "`" + `, ` + "`" + `delete_project` + "`" + `, ` + "`" + `manage_adr` + "`" + `, or ` + "`" + `ingest_traces` + "`" + `.
+{{end}}
 `
 
 // RenderDevRetry renders a dev retry user prompt injecting the verbatim reviewer findings
 // and optional structured FindingsJSON from inline review comments.
 //
 // Returns EMPTY_FINDINGS error if findings is empty (BR-002, IF-001).
-func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, verifyCommand string, guidelinesPath string, codebaseMemory bool) (userPrompt string, err error) {
 	if findings == "" {
 		return "", fmt.Errorf("EMPTY_FINDINGS: changes_requested review has an empty body")
 	}
@@ -238,12 +277,13 @@ func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, v
 	}
 
 	data := devRetryTemplateData{
-		Issue:         issue,
-		Branch:        branch,
-		Findings:      findings,
-		FindingsJSON:  findingsJSON,
-		VerifyCommand: verifyCommand,
-		Guidelines:    guidelines,
+		Issue:          issue,
+		Branch:         branch,
+		Findings:       findings,
+		FindingsJSON:   findingsJSON,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+		CodebaseMemory: codebaseMemory,
 	}
 
 	tmpl, err := template.New("devRetry").Parse(devRetryUserTemplate)

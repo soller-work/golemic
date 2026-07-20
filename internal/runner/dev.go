@@ -31,6 +31,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		r.branchName,
 		r.cfg.VerifyCommand,
 		filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
+		r.cbmDevSetup,
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
@@ -44,6 +45,10 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
+	devToolAllowlist := []string{"read", "bash", "write", "edit"}
+	if r.cbmDevSetup {
+		devToolAllowlist = append(devToolAllowlist, cbmDevTools...)
+	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
@@ -56,8 +61,9 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Dev,
 		Timeout:           timeout,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		ToolAllowlist:     devToolAllowlist,
 		RunsDir:           runsDir,
+		Approve:           r.cbmDevSetup,
 	})
 
 	if err != nil {
@@ -104,6 +110,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		r.branchName,
 		r.cfg.VerifyCommand,
 		filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
+		r.cbmDevSetup,
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to render dev prompt: %v\n", err) //nolint:errcheck
@@ -118,6 +125,10 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
+	devToolAllowlist := []string{"read", "bash", "write", "edit"}
+	if r.cbmDevSetup {
+		devToolAllowlist = append(devToolAllowlist, cbmDevTools...)
+	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
@@ -130,8 +141,9 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Dev,
 		Timeout:           timeout,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		ToolAllowlist:     devToolAllowlist,
 		RunsDir:           runsDir,
+		Approve:           r.cbmDevSetup,
 	})
 
 	if err != nil {

@@ -72,6 +72,9 @@ type Runner struct {
 	sink         telemetry.Sink
 	traceID      string
 	sinkOverride bool // when true, Run() does not overwrite r.sink from config
+
+	// Codebase-memory state
+	cbmDevSetup bool // true if .mcp.json was successfully written for the dev worktree
 }
 
 // New creates a new Runner. executor is used for all gh/git commands, homeDir is
@@ -343,6 +346,11 @@ func (r *Runner) Run() int {
 		} else {
 			endCleanRev(telemetry.StatusOK, nil)
 		}
+
+		// CBM cache cleanup (fail-soft)
+		if r.cfg.CodebaseMemory.Enabled {
+			r.cbmCleanup()
+		}
 	}
 
 	// Close run span
@@ -462,6 +470,15 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 	}
 	endCreateDevWT(telemetry.StatusOK, nil)
 
+	// CBM hook point 1: setup + index dev worktree (fail-soft, gated on flag)
+	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
+	if r.cfg.CodebaseMemory.Enabled {
+		r.cbmDevSetup = r.cbmSetup(devWorktreePath, "dev")
+		if r.cbmDevSetup {
+			r.cbmIndex(devWorktreePath)
+		}
+	}
+
 	// Round 1 dev
 	devOutcome := r.runDevAgent(golemicDir, eventLogPath, timeoutDuration, runSpanID, 1)
 	if devOutcome != outcomeSuccess {
@@ -515,17 +532,26 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 		}
 		endCreateRevWT(telemetry.StatusOK, nil)
 
+		// CBM hook point 3: setup + index reviewer worktree each round (fail-soft, gated on flag)
+		reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+		cbmRevSetup := false
+		if r.cfg.CodebaseMemory.Enabled {
+			cbmRevSetup = r.cbmSetup(reviewerWorktreePath, "reviewer")
+			if cbmRevSetup {
+				r.cbmIndex(reviewerWorktreePath)
+			}
+		}
+
 		// BR-001: sweep any orphaned pending review before invoking reviewer agent
 		if err := r.sweepPendingReviews(prNumber); err != nil {
 			fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
 			return outcomeReviewFailed
 		}
 
-		if outcome := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round); outcome != outcomeSuccess {
+		if outcome := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, cbmRevSetup); outcome != outcomeSuccess {
 			return outcome
 		}
 
-		reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
 		isDirty, err := worktree.IsDirty(reviewerWorktreePath, r.executor)
 		if err != nil {
 			fmt.Fprintf(r.stderr, "review_failed: failed to check dirty status: %v\n", err) //nolint:errcheck
@@ -578,6 +604,11 @@ func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeo
 		}
 		*round++
 		r.turnCounter++ // each dev-retry round gets its own turn
+		// CBM hook point 2: re-index dev worktree before retry (fail-soft)
+		if r.cbmDevSetup {
+			devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
+			r.cbmIndex(devWorktreePath)
+		}
 		if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, findingsJSON, runSpanID, *round); o != outcomeSuccess {
 			return false, o
 		}

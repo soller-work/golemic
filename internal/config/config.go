@@ -19,11 +19,17 @@ type Config struct {
 	TimeoutSeconds   int             `json:"timeout_seconds,omitempty"`
 	CITimeoutMinutes int             `json:"ci_timeout_minutes,omitempty"`
 	RequireCIChecks  bool            `json:"require_ci_checks,omitempty"`
-	Telemetry        TelemetryConfig `json:"telemetry"`
+	Telemetry        TelemetryConfig        `json:"telemetry"`
+	CodebaseMemory   CodebaseMemoryConfig   `json:"codebase_memory"`
 }
 
 // TelemetryConfig controls span telemetry emission.
 type TelemetryConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// CodebaseMemoryConfig controls codebase-memory code-intelligence indexing.
+type CodebaseMemoryConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
@@ -37,11 +43,17 @@ type configRaw struct {
 	TimeoutSeconds   *int           `json:"timeout_seconds"`
 	CITimeoutMinutes *int           `json:"ci_timeout_minutes"`
 	RequireCIChecks  *bool          `json:"require_ci_checks"`
-	Telemetry        *telemetryRaw  `json:"telemetry"`
+	Telemetry        *telemetryRaw        `json:"telemetry"`
+	CodebaseMemory   *codebaseMemoryRaw   `json:"codebase_memory"`
 }
 
 // telemetryRaw is used for parsing the telemetry config block.
 type telemetryRaw struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// codebaseMemoryRaw is used for parsing the codebase_memory config block.
+type codebaseMemoryRaw struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -190,6 +202,11 @@ func Load(repoRoot string) (*Config, error) {
 		config.Telemetry.Enabled = *raw.Telemetry.Enabled
 	} else {
 		config.Telemetry.Enabled = true
+	}
+
+	// Extract codebase_memory.enabled (optional; default false)
+	if raw.CodebaseMemory != nil && raw.CodebaseMemory.Enabled != nil {
+		config.CodebaseMemory.Enabled = *raw.CodebaseMemory.Enabled
 	}
 
 	// Extract require_ci_checks (optional; default false)
