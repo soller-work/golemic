@@ -27,7 +27,8 @@ var ErrTimeout = errors.New("agent execution timed out")
 
 // ErrStalled is returned when the agent process produces no output for the idle
 // threshold over the max number of retries and the entire process group has been
-// killed after each stall. Stalls are transient; wall-clock timeouts are terminal.
+// killed after each stall. Each stall triggers a retry with the same session-id,
+// allowing pi to resume the session; terminal after maxStallRetries.
 var ErrStalled = errors.New("agent execution stalled")
 
 // ---------------------------------------------------------------------------
@@ -52,11 +53,22 @@ var pollInterval = 30 * time.Second
 var stallLogWriter io.Writer = os.Stderr
 
 const (
-	// defaultIdleTimeout is the default idle timeout (90s).
-	defaultIdleTimeout = 90 * time.Second
+	// defaultIdleTimeout is the default idle timeout (300s).
+	defaultIdleTimeout = 300 * time.Second
 	// defaultMaxStallRetries is the default max number of retries on stall (2).
 	defaultMaxStallRetries = 2
 )
+
+// sanitizeSessionID replaces any character not in [A-Za-z0-9._-] with '-',
+// making the string safe for use as a command-line flag value and file path.
+func sanitizeSessionID(s string) string {
+	return strings.Map(func(r rune) rune {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			return r
+		}
+		return '-'
+	}, s)
+}
 
 // parseIdleTimeout reads GOLEMIC_AGENT_IDLE_TIMEOUT_SEC from environment.
 // Returns the timeout duration, or defaultIdleTimeout if absent or invalid.
@@ -112,7 +124,7 @@ type RoleConfig struct {
 
 // TranscriptPaths holds the absolute paths of the captured output files.
 type TranscriptPaths struct {
-	Stdout string // path to <RunsDir>/<RunID>/<role>.stdout.log
+	Stdout string // path to <RunsDir>/<RunID>/<role>.activity.jsonl
 	Stderr string // path to <RunsDir>/<RunID>/<role>.stderr.log
 }
 
@@ -154,7 +166,7 @@ func transcriptByteSize(stdoutFile, stderrFile *os.File) (int64, time.Time) {
 //   - Process group set (Setpgid) so the entire group can be killed on timeout
 //
 // stdout and stderr are captured to:
-//   - <RunsDir>/<RunID>/<role>.stdout.log
+//   - <RunsDir>/<RunID>/<role>.activity.jsonl
 //   - <RunsDir>/<RunID>/<role>.stderr.log
 //
 // If the process exceeds cfg.Timeout, the entire process group is killed
@@ -162,7 +174,7 @@ func transcriptByteSize(stdoutFile, stderrFile *os.File) (int64, time.Time) {
 // up to the kill point is preserved in the transcript files.
 //
 // Stall detection: if the combined transcript byte size doesn't grow for the
-// idle threshold (default 90s, configurable via GOLEMIC_AGENT_IDLE_TIMEOUT_SEC),
+// idle threshold (default 300s, configurable via GOLEMIC_AGENT_IDLE_TIMEOUT_SEC),
 // the process group is killed and the attempt is retried (up to maxStallRetries
 // times, default 2, configurable via GOLEMIC_AGENT_MAX_STALL_RETRIES). Fresh
 // transcript files are truncated per attempt. If all attempts stall, returns
@@ -222,15 +234,18 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 	}
 
 	// ---- Prepare static values ----
+	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role + "-" + strconv.Itoa(cfg.TurnID))
 	args := []string{
 		"-p",
+		"--mode", "json",
+		"--session-id", sessionID,
 		"--append-system-prompt", "@" + cfg.SystemPromptFile,
 		"--tools", strings.Join(cfg.ToolAllowlist, ","),
 		"--model", cfg.Model,
 		cfg.UserPrompt,
 	}
 
-	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stdout.log")
+	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".activity.jsonl")
 	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stderr.log")
 	golemicDir := filepath.Dir(cfg.GolemicBinaryPath)
 

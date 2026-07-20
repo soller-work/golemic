@@ -32,10 +32,12 @@ func (r *Runner) writeRunHeader(w io.Writer) {
 	fmt.Fprintf(w, "Branch:         %s\n", r.branchName)                                                         //nolint:errcheck
 	fmt.Fprintf(w, "Timeout:        %s\n", timeout)                                                              //nolint:errcheck
 	fmt.Fprintf(w, "Event log:      %s\n", eventLogPath)                                                         //nolint:errcheck
-	fmt.Fprintf(w, "Dev logs:       %s\n", filepath.Join(runsDir, "dev.stdout.log"))                             //nolint:errcheck
+	fmt.Fprintf(w, "Dev logs:       %s\n", filepath.Join(runsDir, "dev.activity.jsonl"))                         //nolint:errcheck
 	fmt.Fprintf(w, "                %s\n", filepath.Join(runsDir, "dev.stderr.log"))                             //nolint:errcheck
-	fmt.Fprintf(w, "Reviewer logs:  %s\n", filepath.Join(runsDir, "reviewer.stdout.log"))                        //nolint:errcheck
+	fmt.Fprintf(w, "Reviewer logs:  %s\n", filepath.Join(runsDir, "reviewer.activity.jsonl"))                     //nolint:errcheck
 	fmt.Fprintf(w, "                %s\n", filepath.Join(runsDir, "reviewer.stderr.log"))                        //nolint:errcheck
+	fmt.Fprintf(w, "\nTip: tail -f %s\n", filepath.Join(runsDir, "dev.activity.jsonl"))                           //nolint:errcheck
+	fmt.Fprintf(w, "     tail -f %s\n", filepath.Join(runsDir, "reviewer.activity.jsonl"))                       //nolint:errcheck
 	fmt.Fprintf(w, "Dev worktree:   %s\n", devWorktree)                                                          //nolint:errcheck
 	fmt.Fprintf(w, "Rev worktree:   %s\n", reviewerWorktree)                                                     //nolint:errcheck
 	fmt.Fprintf(w, "\nTip: tail -f %s\n", eventLogPath)                                                          //nolint:errcheck

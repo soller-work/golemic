@@ -93,7 +93,7 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 
 func fakeTranscriptPaths(dir, role string) agent.TranscriptPaths {
 	return agent.TranscriptPaths{
-		Stdout: filepath.Join(dir, role+".stdout.log"),
+		Stdout: filepath.Join(dir, role+".activity.jsonl"),
 		Stderr: filepath.Join(dir, role+".stderr.log"),
 	}
 }
