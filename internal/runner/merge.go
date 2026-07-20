@@ -97,7 +97,7 @@ func (r *Runner) setConfidenceLowLabel(prNumber int) {
 		"gh", "pr", "edit", fmt.Sprintf("%d", prNumber), "--add-label", "confidence:low",
 	)
 	if err != nil {
-		fmt.Fprintf(r.stderr, "Warning: failed to set confidence:low label: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "Warning: failed to set confidence:low label: %v\n", err)
 	}
 }
 
@@ -114,7 +114,7 @@ func (r *Runner) postMergeFailureComment(prNumber int, reason string) {
 		"gh", "pr", "comment", fmt.Sprintf("%d", prNumber), "--body", body,
 	)
 	if err != nil {
-		fmt.Fprintf(r.stderr, "Warning: failed to post merge failure comment: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "Warning: failed to post merge failure comment: %v\n", err)
 	}
 }
 
@@ -192,7 +192,7 @@ func (r *Runner) rebaseBranch(devWT string) error {
 func (r *Runner) writeAutomergeConflictRetry(writer worktree.EventWriter, conflictedFiles []string, result string, turnID int) {
 	payload, err := eventlog.MarshalAutomergeConflictRetryPayload(conflictedFiles, result, turnID)
 	if err != nil {
-		fmt.Fprintf(r.stderr, "Warning: automerge_conflict_retry marshal failed: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "Warning: automerge_conflict_retry marshal failed: %v\n", err)
 		return
 	}
 	if err := writer.Write(eventlog.Event{
@@ -202,7 +202,7 @@ func (r *Runner) writeAutomergeConflictRetry(writer worktree.EventWriter, confli
 		TurnID:  turnID,
 		Payload: payload,
 	}); err != nil {
-		fmt.Fprintf(r.stderr, "Warning: automerge_conflict_retry event write failed: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "Warning: automerge_conflict_retry event write failed: %v\n", err)
 	}
 }
 
@@ -220,16 +220,12 @@ func (r *Runner) agentTimeout() time.Duration {
 // Returns nil when the rebase was fully resolved and the worktree is clean;
 // the caller continues into verifyAndPush. Returns non-nil on any failure;
 // the caller should invoke failMerge with the returned error message.
-func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, devWT string, prNumber int, eventLogPath string) error { //nolint:cyclop,funlen
-	// PS-002: collect conflicted files.
-	conflictOut, err := r.executor.RunInDir(devWT, "git", "diff", "--name-only", "--diff-filter=U")
+func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, devWT string, prNumber int, eventLogPath string) error {
+	conflictedFiles, err := r.collectConflictedFilesForRebase(devWT)
 	if err != nil {
-		_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
-		return fmt.Errorf("failed to enumerate conflicted files: %w", err)
+		return err
 	}
-	conflictedFiles := parseConflictedFiles(conflictOut)
 
-	// PS-003: render prompt and invoke agent.
 	guidelinesPath := filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md")
 	userPrompt, err := prompt.RenderDevRebaseConflictResolve(
 		prNumber,
@@ -253,42 +249,14 @@ func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, dev
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
-	exitCode, _, agentErr := runFn(context.Background(), agent.RoleConfig{
-		Role:              "dev",
-		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
-		UserPrompt:        userPrompt,
-		WorktreeDir:       devWT,
-		RunID:             r.runID,
-		EventLogPath:      eventLogPath,
-		TurnID:            r.turnCounter,
-		GHToken:           r.creds.DevToken(),
-		GolemicBinaryPath: golemicBinaryPath,
-		Model:             r.cfg.Models.Dev,
-		Timeout:           r.agentTimeout(),
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
-		RunsDir:           runsDir,
-	})
 
-	// PS-004: verify agent outcome (BR-003, DT-001).
-	result := "unresolved"
-	failReason := "rebase conflict: dev retry did not resolve"
+	cfg := r.buildRebaseConflictAgentConfig(binaryDir, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir)
+	exitCode, _, agentErr := runFn(context.Background(), cfg)
 
-	if agentErr != nil {
-		if errors.Is(agentErr, agent.ErrTimeout) {
-			failReason = "rebase conflict: agent timeout during conflict resolution"
-		}
-	} else if exitCode == 0 {
-		if ok, reason := r.verifyRebaseComplete(devWT); ok {
-			result = "resolved"
-		} else {
-			failReason = reason
-		}
-	}
+	result, failReason := r.determineConflictResolutionResult(devWT, agentErr, exitCode)
 
-	// PS-005: emit event (BR-005, SE-001).
 	r.writeAutomergeConflictRetry(writer, conflictedFiles, result, r.turnCounter)
 
-	// PS-006: branch on result.
 	if result == "resolved" {
 		return nil
 	}
@@ -383,7 +351,7 @@ func (r *Runner) squashMerge(prNumber int) (string, error) {
 func (r *Runner) deleteRemoteBranch(branchName string) {
 	out, err := r.executor.RunInDir(r.repoRoot, "git", "ls-remote", "--heads", "origin", branchName)
 	if err != nil {
-		fmt.Fprintf(r.stderr, "Warning: remote branch delete failed: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "Warning: remote branch delete failed: %v\n", err)
 		return
 	}
 	if strings.TrimSpace(out) == "" {
@@ -398,17 +366,32 @@ func (r *Runner) deleteRemoteBranch(branchName string) {
 		if strings.Contains(strings.ToLower(err.Error()), "remote ref does not exist") {
 			return // branch already gone (TOCTOU race with GitHub auto-delete-head-branches)
 		}
-		fmt.Fprintf(r.stderr, "Warning: remote branch delete failed: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "Warning: remote branch delete failed: %v\n", err)
 	}
+}
+
+// rebaseAndResolve rebases the dev worktree onto origin/main. On conflict it
+// invokes the dev agent once; returns nil only when the worktree is clean and
+// the rebase is complete.
+func (r *Runner) rebaseAndResolve(writer worktree.EventWriter, devWT string, prNumber int, eventLogPath string) error {
+	if err := r.rebaseBranch(devWT); err != nil {
+		if !errors.Is(err, errMergeConflict) {
+			return err
+		}
+		if resolveErr := r.resolveRebaseConflictWithAgent(writer, devWT, prNumber, eventLogPath); resolveErr != nil {
+			return resolveErr
+		}
+	}
+	return nil
 }
 
 // runMergePhase implements PS-001 through PS-006 (gate → fetch → freshness → CI gate / rebase → merge).
 // It is called by orchestrate() after the verdict is confirmed as "approved".
 // Returns outcomeSuccess (merged or skipped) or outcomeMergeFailed.
-func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string) string { //nolint:cyclop
+func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string) string {
 	prNumber, err := r.getPRNumber(eventLogPath)
 	if err != nil {
-		fmt.Fprintf(r.stderr, "merge_failed: failed to get PR number: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "merge_failed: failed to get PR number: %v\n", err)
 		r.writeAutomergeFailed(writer, "PR number unavailable")
 		return outcomeMergeFailed
 	}
@@ -439,18 +422,11 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 		// PS-004: CI gate on up-to-date branch (BR-002, BR-003)
 		return r.mergeIfCIGreen(writer, prNumber)
 	}
-	if err := r.rebaseBranch(devWT); err != nil {
-		if !errors.Is(err, errMergeConflict) {
-			return r.failMerge(writer, prNumber, err.Error())
-		}
-		// BR-001: merge conflict — invoke dev agent to resolve before aborting.
-		if resolveErr := r.resolveRebaseConflictWithAgent(writer, devWT, prNumber, eventLogPath); resolveErr != nil {
-			return r.failMerge(writer, prNumber, resolveErr.Error())
-		}
-		// resolved: fall through to verifyAndPush
-	}
 
-	// PS-006: Post-rebase verification and push (BR-005)
+	// PS-005: Rebase (and resolve conflicts if needed) then push (BR-005)
+	if err := r.rebaseAndResolve(writer, devWT, prNumber, eventLogPath); err != nil {
+		return r.failMerge(writer, prNumber, err.Error())
+	}
 	return r.verifyAndPush(writer, prNumber, devWT)
 }
 
@@ -476,7 +452,7 @@ func (r *Runner) mergeIfCIGreen(writer worktree.EventWriter, prNumber int) strin
 }
 
 // verifyAndPush handles PS-003: verify the rebased branch and push.
-func (r *Runner) verifyAndPush(writer worktree.EventWriter, prNumber int, devWT string) string { //nolint:cyclop
+func (r *Runner) verifyAndPush(writer worktree.EventWriter, prNumber int, devWT string) string {
 	ciTimeout := r.ciTimeout()
 	result, _, err := r.queryCIChecks(prNumber)
 	if err != nil {
@@ -522,7 +498,7 @@ func (r *Runner) ciFailReason(result string, failedChecks []ghCheckItem) string 
 
 // failMerge records an automerge_failed event, posts a PR comment, and returns outcomeMergeFailed.
 func (r *Runner) failMerge(writer worktree.EventWriter, prNumber int, reason string) string {
-	fmt.Fprintf(r.stderr, "merge_failed: %s\n", reason) //nolint:errcheck
+	fmt.Fprintf(r.stderr, "merge_failed: %s\n", reason)
 	r.postMergeFailureComment(prNumber, reason)
 	r.writeAutomergeFailed(writer, reason)
 	return outcomeMergeFailed
@@ -533,7 +509,7 @@ func (r *Runner) doSquashMerge(writer worktree.EventWriter, prNumber int) string
 	mergedSHA, err := r.squashMerge(prNumber)
 	if err != nil {
 		reason := err.Error()
-		fmt.Fprintf(r.stderr, "merge_failed: %s\n", reason) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "merge_failed: %s\n", reason)
 		r.postMergeFailureComment(prNumber, reason)
 		r.writeAutomergeFailed(writer, reason)
 		return outcomeMergeFailed // BR-006
@@ -553,4 +529,52 @@ func (r *Runner) doSquashMerge(writer worktree.EventWriter, prNumber int) string
 	r.deleteRemoteBranch(r.branchName) // BR-002, BR-005: after pr_merged, before worktree cleanup
 
 	return outcomeSuccess
+}
+
+// collectConflictedFilesForRebase retrieves the list of conflicted files from git.
+func (r *Runner) collectConflictedFilesForRebase(devWT string) ([]string, error) {
+	conflictOut, err := r.executor.RunInDir(devWT, "git", "diff", "--name-only", "--diff-filter=U")
+	if err != nil {
+		_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
+		return nil, fmt.Errorf("failed to enumerate conflicted files: %w", err)
+	}
+	return parseConflictedFiles(conflictOut), nil
+}
+
+// buildRebaseConflictAgentConfig creates the agent.RoleConfig for rebase conflict resolution.
+func (r *Runner) buildRebaseConflictAgentConfig(binaryDir, devWT, eventLogPath, userPrompt, golemicBinaryPath string, runsDir string) agent.RoleConfig {
+	return agent.RoleConfig{
+		Role:              "dev",
+		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
+		UserPrompt:        userPrompt,
+		WorktreeDir:       devWT,
+		RunID:             r.runID,
+		EventLogPath:      eventLogPath,
+		TurnID:            r.turnCounter,
+		GHToken:           r.creds.DevToken(),
+		GolemicBinaryPath: golemicBinaryPath,
+		Model:             r.cfg.Models.Dev,
+		Timeout:           r.agentTimeout(),
+		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		RunsDir:           runsDir,
+	}
+}
+
+// determineConflictResolutionResult evaluates agent outcome and returns result status and reason.
+func (r *Runner) determineConflictResolutionResult(devWT string, agentErr error, exitCode int) (string, string) {
+	result := "unresolved"
+	failReason := "rebase conflict: dev retry did not resolve"
+
+	if agentErr != nil {
+		if errors.Is(agentErr, agent.ErrTimeout) {
+			failReason = "rebase conflict: agent timeout during conflict resolution"
+		}
+	} else if exitCode == 0 {
+		if ok, reason := r.verifyRebaseComplete(devWT); ok {
+			result = "resolved"
+		} else {
+			failReason = reason
+		}
+	}
+	return result, failReason
 }

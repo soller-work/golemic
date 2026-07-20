@@ -387,52 +387,67 @@ func (p *Preflight) checkConfig() Result {
 	return Result{Name: "config.json valide", Ok: true}
 }
 
+// loadCachedConfig returns the cached config when checkConfig has already run,
+// or loads a fresh copy from disk otherwise.
+func (p *Preflight) loadCachedConfig() (*config.Config, error) {
+	if p.configDone && p.cachedCfg != nil {
+		return p.cachedCfg, nil
+	}
+	return config.Load(p.repoRoot)
+}
+
+// checkCredentialsCheckMode validates credentials in read-only mode: loads from disk
+// and compares token values locally without any gh API call.
+func (p *Preflight) checkCredentialsCheckMode(cfg *config.Config) Result {
+	loader := credentials.NewLoader(p.homeDir)
+	loader.LookupEnv = p.lookupEnv
+	creds, loadErr := loader.Load(cfg.Project)
+	if loadErr != nil {
+		return Result{Name: "Credentials", Ok: false, Details: loadErr.Error()}
+	}
+	if creds.DevToken() == creds.ReviewerToken() {
+		return Result{Name: "Credentials", Ok: false, Details: "tokens identical"}
+	}
+	return Result{Name: "Credentials", Ok: true}
+}
+
+// scaffoldCredentialsIfNeeded writes a credentials.json skeleton when the file is
+// absent. Errors are silently ignored: the subsequent Load call will surface the
+// missing-file error with a clearer message.
+func (p *Preflight) scaffoldCredentialsIfNeeded(credPath, project string) {
+	if _, statErr := os.Stat(credPath); !os.IsNotExist(statErr) {
+		return
+	}
+	if credentials.ValidateProjectName(project) != nil {
+		return
+	}
+	skeleton := credentialsSkeleton{
+		DevToken:      "${GOLEMIC_DEV_TOKEN}",
+		ReviewerToken: "${GOLEMIC_REVIEWER_TOKEN}",
+	}
+	data, marshalErr := json.MarshalIndent(skeleton, "", "    ")
+	if marshalErr == nil {
+		_ = writeFileAtomic(credPath, data, 0600)
+	}
+}
+
 // checkCredentials validates GitHub tokens.
 // Setup mode: scaffolds credentials.json if missing, then validates via gh api user.
 // Check mode: loads credentials without scaffolding, compares token values locally.
-func (p *Preflight) checkCredentials() Result { //nolint:cyclop // linear sequence of independent guard clauses; extracting sub-functions would obscure the validation flow
-	// Use cached config from checkConfig if available, otherwise load fresh
-	var cfg *config.Config
-	var err error
-	if p.configDone && p.cachedCfg != nil {
-		cfg = p.cachedCfg
-	} else {
-		cfg, err = config.Load(p.repoRoot)
-	}
+func (p *Preflight) checkCredentials() Result {
+	cfg, err := p.loadCachedConfig()
 	if err != nil {
 		return Result{Name: "Credentials", Ok: false, Details: "cannot load config: " + err.Error()}
 	}
 
 	if p.checkMode {
-		// Check mode: no scaffolding, local token-value comparison only (no gh api call)
-		loader := credentials.NewLoader(p.homeDir)
-		loader.LookupEnv = p.lookupEnv
-		creds, loadErr := loader.Load(cfg.Project)
-		if loadErr != nil {
-			return Result{Name: "Credentials", Ok: false, Details: loadErr.Error()}
-		}
-		if creds.DevToken() == creds.ReviewerToken() {
-			return Result{Name: "Credentials", Ok: false, Details: "tokens identical"}
-		}
-		return Result{Name: "Credentials", Ok: true}
+		return p.checkCredentialsCheckMode(cfg)
 	}
 
 	// Setup mode: scaffold credentials.json if missing (transparent side effect, §2.9).
 	credPath := filepath.Join(p.homeDir, ".golemic", cfg.Project, "credentials.json")
-	if _, statErr := os.Stat(credPath); os.IsNotExist(statErr) {
-		if valErr := credentials.ValidateProjectName(cfg.Project); valErr == nil {
-			skeleton := credentialsSkeleton{
-				DevToken:      "${GOLEMIC_DEV_TOKEN}",
-				ReviewerToken: "${GOLEMIC_REVIEWER_TOKEN}",
-			}
-			data, marshalErr := json.MarshalIndent(skeleton, "", "    ")
-			if marshalErr == nil {
-				_ = writeFileAtomic(credPath, data, 0600)
-			}
-		}
-	}
+	p.scaffoldCredentialsIfNeeded(credPath, cfg.Project)
 
-	// Load credentials
 	loader := credentials.NewLoader(p.homeDir)
 	loader.LookupEnv = p.lookupEnv
 	creds, err := loader.Load(cfg.Project)
@@ -440,19 +455,16 @@ func (p *Preflight) checkCredentials() Result { //nolint:cyclop // linear sequen
 		return Result{Name: "Credentials", Ok: false, Details: err.Error()}
 	}
 
-	// Validate dev token
 	devLogin, err := p.ghWhoami(creds.DevToken())
 	if err != nil {
 		return Result{Name: "Credentials", Ok: false, Details: "dev token invalid: " + sanitizeErr(err)}
 	}
 
-	// Validate reviewer token
 	revLogin, err := p.ghWhoami(creds.ReviewerToken())
 	if err != nil {
 		return Result{Name: "Credentials", Ok: false, Details: "reviewer token invalid: " + sanitizeErr(err)}
 	}
 
-	// Check that logins are different (§2.8)
 	if devLogin == revLogin {
 		return Result{Name: "Credentials", Ok: false,
 			Details: fmt.Sprintf("dev and reviewer token use the same account (%s); they must be different", devLogin)}
@@ -502,17 +514,53 @@ var requiredLabels = []struct {
 	{"needs-human", "d93f0b", "Autonomous runner failed; requires human triage"},
 }
 
+// fetchExistingLabels runs gh label list and returns a set of existing label names.
+func (p *Preflight) fetchExistingLabels(env map[string]string) (map[string]bool, error) {
+	out, err := p.executor.RunWithEnv(env, "gh", "label", "list", "--json", "name")
+	if err != nil {
+		return nil, fmt.Errorf("gh label list failed: %s", sanitizeErr(err))
+	}
+	var entries []ghLabelEntry
+	if jsonErr := json.Unmarshal([]byte(out), &entries); jsonErr != nil {
+		return nil, fmt.Errorf("gh label list: invalid response")
+	}
+	existing := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		existing[e.Name] = true
+	}
+	return existing, nil
+}
+
+// findMissingLabels returns the names of required labels absent from existing.
+func findMissingLabels(existing map[string]bool) []string {
+	var missing []string
+	for _, req := range requiredLabels {
+		if !existing[req.name] {
+			missing = append(missing, req.name)
+		}
+	}
+	return missing
+}
+
+// createMissingLabels creates each required label that is not already in existing.
+func (p *Preflight) createMissingLabels(env map[string]string, existing map[string]bool) error {
+	for _, req := range requiredLabels {
+		if existing[req.name] {
+			continue
+		}
+		if _, createErr := p.executor.RunWithEnv(env, "gh", "label", "create", req.name,
+			"--color", req.color, "--description", req.description); createErr != nil {
+			return fmt.Errorf("gh label create %s failed: %s", req.name, sanitizeErr(createErr))
+		}
+	}
+	return nil
+}
+
 // checkLabels verifies that the required GitHub labels exist.
 // Setup mode: creates missing labels via gh label create.
 // Check mode: reports missing labels as failures without any mutation.
-func (p *Preflight) checkLabels() Result { //nolint:cyclop // linear sequence of independent guard clauses; extracting sub-functions would obscure the validation flow
-	var cfg *config.Config
-	var err error
-	if p.configDone && p.cachedCfg != nil {
-		cfg = p.cachedCfg
-	} else {
-		cfg, err = config.Load(p.repoRoot)
-	}
+func (p *Preflight) checkLabels() Result {
+	cfg, err := p.loadCachedConfig()
 	if err != nil {
 		return Result{Name: "labels", Ok: false, Details: "cannot load config: " + err.Error()}
 	}
@@ -526,27 +574,12 @@ func (p *Preflight) checkLabels() Result { //nolint:cyclop // linear sequence of
 
 	env := map[string]string{"GH_TOKEN": creds.DevToken()}
 
-	out, err := p.executor.RunWithEnv(env, "gh", "label", "list", "--json", "name")
+	existing, err := p.fetchExistingLabels(env)
 	if err != nil {
-		return Result{Name: "labels", Ok: false, Details: "gh label list failed: " + sanitizeErr(err)}
+		return Result{Name: "labels", Ok: false, Details: err.Error()}
 	}
 
-	var entries []ghLabelEntry
-	if jsonErr := json.Unmarshal([]byte(out), &entries); jsonErr != nil {
-		return Result{Name: "labels", Ok: false, Details: "gh label list: invalid response"}
-	}
-
-	existing := make(map[string]bool, len(entries))
-	for _, e := range entries {
-		existing[e.Name] = true
-	}
-
-	var missing []string
-	for _, req := range requiredLabels {
-		if !existing[req.name] {
-			missing = append(missing, req.name)
-		}
-	}
+	missing := findMissingLabels(existing)
 
 	if p.checkMode {
 		if len(missing) > 0 {
@@ -555,17 +588,9 @@ func (p *Preflight) checkLabels() Result { //nolint:cyclop // linear sequence of
 		return Result{Name: "labels", Ok: true}
 	}
 
-	for _, req := range requiredLabels {
-		if existing[req.name] {
-			continue
-		}
-		if _, createErr := p.executor.RunWithEnv(env, "gh", "label", "create", req.name,
-			"--color", req.color, "--description", req.description); createErr != nil {
-			return Result{Name: "labels", Ok: false,
-				Details: "gh label create " + req.name + " failed: " + sanitizeErr(createErr)}
-		}
+	if err := p.createMissingLabels(env, existing); err != nil {
+		return Result{Name: "labels", Ok: false, Details: err.Error()}
 	}
-
 	return Result{Name: "labels", Ok: true}
 }
 

@@ -36,6 +36,22 @@ func branchName(issueNumber int) string {
 	return fmt.Sprintf("golemic/issue-%d", issueNumber)
 }
 
+// configureWorktreeGit sets credential.helper, user.name, and user.email in the
+// worktree at wtPath via git -C <wtPath> config.
+func configureWorktreeGit(executor preflight.Executor, wtPath, login string) error {
+	credHelper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
+	if _, err := executor.Run("git", "-C", wtPath, "config", "credential.helper", credHelper); err != nil {
+		return fmt.Errorf("GIT_CONFIG_FAILED: credential.helper: %w", err)
+	}
+	if _, err := executor.Run("git", "-C", wtPath, "config", "user.name", login); err != nil {
+		return fmt.Errorf("GIT_CONFIG_FAILED: user.name: %w", err)
+	}
+	if _, err := executor.Run("git", "-C", wtPath, "config", "user.email", login); err != nil {
+		return fmt.Errorf("GIT_CONFIG_FAILED: user.email: %w", err)
+	}
+	return nil
+}
+
 // Create sets up a dev worktree for the given issue.
 //
 // Steps:
@@ -72,16 +88,8 @@ func Create(repoRoot, golemicDir, runID string, issueNumber int, botLogin string
 	}
 
 	// 5. Set worktree-local git config (env-based credential helper, bot identity)
-	//    Uses git -C <wtPath> to target the worktree directory (not <repoRoot>).
-	credHelper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
-	if _, err := executor.Run("git", "-C", wtPath, "config", "credential.helper", credHelper); err != nil {
-		return fmt.Errorf("GIT_CONFIG_FAILED: credential.helper: %w", err)
-	}
-	if _, err := executor.Run("git", "-C", wtPath, "config", "user.name", botLogin); err != nil {
-		return fmt.Errorf("GIT_CONFIG_FAILED: user.name: %w", err)
-	}
-	if _, err := executor.Run("git", "-C", wtPath, "config", "user.email", botLogin); err != nil {
-		return fmt.Errorf("GIT_CONFIG_FAILED: user.email: %w", err)
+	if err := configureWorktreeGit(executor, wtPath, botLogin); err != nil {
+		return err
 	}
 
 	// 6. Write worktree_created event
@@ -123,7 +131,7 @@ func Create(repoRoot, golemicDir, runID string, issueNumber int, botLogin string
 //
 // Returns REMOTE_BRANCH_NOT_FOUND if origin/<branchName> doesn't exist.
 // If any other step fails, the partial worktree is left in place for debugging.
-func CreateForReviewer(repoRoot, golemicDir, runID string, issueNumber int, branchName, reviewerBotLogin string, executor preflight.Executor, eventWriter EventWriter, turnID int) error { //nolint:cyclop
+func CreateForReviewer(repoRoot, golemicDir, runID string, issueNumber int, branchName, reviewerBotLogin string, executor preflight.Executor, eventWriter EventWriter, turnID int) error {
 	if issueNumber <= 0 {
 		return fmt.Errorf("INVALID_ISSUE_NUMBER: %d", issueNumber)
 	}
@@ -152,15 +160,8 @@ func CreateForReviewer(repoRoot, golemicDir, runID string, issueNumber int, bran
 	}
 
 	// 6. Set worktree-local git config (env-based credential helper, reviewer bot identity)
-	credHelper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
-	if _, err := executor.Run("git", "-C", wtPath, "config", "credential.helper", credHelper); err != nil {
-		return fmt.Errorf("GIT_CONFIG_FAILED: credential.helper: %w", err)
-	}
-	if _, err := executor.Run("git", "-C", wtPath, "config", "user.name", reviewerBotLogin); err != nil {
-		return fmt.Errorf("GIT_CONFIG_FAILED: user.name: %w", err)
-	}
-	if _, err := executor.Run("git", "-C", wtPath, "config", "user.email", reviewerBotLogin); err != nil {
-		return fmt.Errorf("GIT_CONFIG_FAILED: user.email: %w", err)
+	if err := configureWorktreeGit(executor, wtPath, reviewerBotLogin); err != nil {
+		return err
 	}
 
 	// 7. Write worktree_created event

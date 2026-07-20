@@ -21,20 +21,20 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	EventRunStarted              = "run_started"
-	EventWorktreeCreated         = "worktree_created"
-	EventDevStarted              = "dev_started"
-	EventPROpened                = "pr_opened"
-	EventReviewSubmitted         = "review_submitted"
-	EventRunFinished             = "run_finished"
-	EventAgentCompleted          = "agent_completed"
-	EventCIWaitFinished          = "ci_wait_finished"
-	EventPRMerged                = "pr_merged"
-	EventAutomergeSkipped        = "automerge_skipped"
-	EventAutomergeFailed         = "automerge_failed"
-	EventAutomergeConflictRetry  = "automerge_conflict_retry"
-	EventIssueClaimed            = "issue_claimed"
-	EventIssueReleased           = "issue_released"
+	EventRunStarted             = "run_started"
+	EventWorktreeCreated        = "worktree_created"
+	EventDevStarted             = "dev_started"
+	EventPROpened               = "pr_opened"
+	EventReviewSubmitted        = "review_submitted"
+	EventRunFinished            = "run_finished"
+	EventAgentCompleted         = "agent_completed"
+	EventCIWaitFinished         = "ci_wait_finished"
+	EventPRMerged               = "pr_merged"
+	EventAutomergeSkipped       = "automerge_skipped"
+	EventAutomergeFailed        = "automerge_failed"
+	EventAutomergeConflictRetry = "automerge_conflict_retry"
+	EventIssueClaimed           = "issue_claimed"
+	EventIssueReleased          = "issue_released"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -294,44 +294,31 @@ func NewWriter(path string) (*Writer, error) {
 	return &Writer{filePath: path, file: f}, nil
 }
 
+// validateEventPayload dispatches to the type-specific validator for events that
+// carry payload constraints. Returns nil for event types with no constraints.
+func validateEventPayload(event Event) error {
+	switch event.Type {
+	case EventPROpened:
+		return ValidatePROpenedPayload(event.Payload)
+	case EventReviewSubmitted:
+		return ValidateReviewSubmittedPayload(event.Payload)
+	case EventCIWaitFinished:
+		return ValidateCIWaitFinishedPayload(event.Payload)
+	case EventIssueClaimed:
+		return ValidateIssueClaimedPayload(event.Payload)
+	case EventIssueReleased:
+		return ValidateIssueReleasedPayload(event.Payload)
+	case EventAutomergeConflictRetry:
+		return ValidateAutomergeConflictRetryPayload(event.Payload)
+	}
+	return nil
+}
+
 // Write appends one event to the log. It validates event payload constraints
 // (e.g. review_submitted verdict) before writing.
-func (w *Writer) Write(event Event) error { //nolint:cyclop
-	// Validate payload for pr_opened.
-	if event.Type == EventPROpened {
-		if err := ValidatePROpenedPayload(event.Payload); err != nil {
-			return err
-		}
-	}
-	// Validate payload for review_submitted.
-	if event.Type == EventReviewSubmitted {
-		if err := ValidateReviewSubmittedPayload(event.Payload); err != nil {
-			return err
-		}
-	}
-	// Validate payload for ci_wait_finished.
-	if event.Type == EventCIWaitFinished {
-		if err := ValidateCIWaitFinishedPayload(event.Payload); err != nil {
-			return err
-		}
-	}
-	// Validate payload for issue_claimed.
-	if event.Type == EventIssueClaimed {
-		if err := ValidateIssueClaimedPayload(event.Payload); err != nil {
-			return err
-		}
-	}
-	// Validate payload for issue_released.
-	if event.Type == EventIssueReleased {
-		if err := ValidateIssueReleasedPayload(event.Payload); err != nil {
-			return err
-		}
-	}
-	// Validate payload for automerge_conflict_retry.
-	if event.Type == EventAutomergeConflictRetry {
-		if err := ValidateAutomergeConflictRetryPayload(event.Payload); err != nil {
-			return err
-		}
+func (w *Writer) Write(event Event) error {
+	if err := validateEventPayload(event); err != nil {
+		return err
 	}
 
 	line, err := json.Marshal(event)

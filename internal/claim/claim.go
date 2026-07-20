@@ -55,6 +55,10 @@ func (v *issueView) isSoleAssignee(login string) bool {
 	return len(v.Assignees) == 1 && v.Assignees[0].Login == login
 }
 
+func (v *issueView) isClaimedBy(login string) bool {
+	return v.hasLabel("in-progress") && !v.hasLabel("ready-for-agent") && v.isSoleAssignee(login)
+}
+
 func (v *issueView) hasAssignee(login string) bool {
 	for _, a := range v.Assignees {
 		if a.Login == login {
@@ -137,7 +141,7 @@ func Release(executor preflight.Executor, number int, devLogin, devToken, reason
 // On takeable: removes ready-for-agent, adds in-progress, sets sole assignee to
 // devLogin via @me (GH_TOKEN = devToken). Post-verify confirms own-and-only
 // ownership; on mismatch, rollback is attempted and ResultRaceLost is returned.
-func Claim(executor preflight.Executor, number int, devLogin, devToken string) (Result, error) { //nolint:cyclop
+func Claim(executor preflight.Executor, number int, devLogin, devToken string) (Result, error) {
 	ghEnv := map[string]string{"GH_TOKEN": devToken}
 	num := strconv.Itoa(number)
 
@@ -147,7 +151,7 @@ func Claim(executor preflight.Executor, number int, devLogin, devToken string) (
 	}
 
 	// BR-002: idempotent — issue already in claimed state for this bot.
-	if pre.hasLabel("in-progress") && !pre.hasLabel("ready-for-agent") && pre.isSoleAssignee(devLogin) {
+	if pre.isClaimedBy(devLogin) {
 		return ResultIdempotent, nil
 	}
 
@@ -170,7 +174,7 @@ func Claim(executor preflight.Executor, number int, devLogin, devToken string) (
 		return ResultError, fmt.Errorf("post-verify: %w", err)
 	}
 
-	if post.hasLabel("in-progress") && !post.hasLabel("ready-for-agent") && post.isSoleAssignee(devLogin) {
+	if post.isClaimedBy(devLogin) {
 		return ResultOK, nil
 	}
 

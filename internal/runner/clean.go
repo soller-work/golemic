@@ -13,52 +13,72 @@ import (
 // Any removal failure aborts and returns a named error (BR-005).
 //
 // Order: dev worktree, reviewer worktree, local branch, remote branch, open PR.
-func (r *Runner) cleanArtifacts() error { //nolint:gocognit,cyclop // five sequential removal steps each with presence check and error branch; extracting helpers adds no clarity
+func (r *Runner) cleanArtifacts() error {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 
-	// Dev worktree
 	devWtPath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
-	if _, err := os.Stat(devWtPath); err == nil {
-		if _, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "remove", "--force", devWtPath); err != nil {
-			return fmt.Errorf("clean failed: could not remove dev worktree for issue %d: %w", r.issueNum, err)
-		}
-		fmt.Fprintf(r.stderr, "clean: removed dev worktree %s\n", devWtPath) //nolint:errcheck
+	if err := r.removeWorktreeIfExists(devWtPath, "dev"); err != nil {
+		return err
 	}
 
-	// Reviewer worktree
 	reviewerWtPath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
-	if _, err := os.Stat(reviewerWtPath); err == nil {
-		if _, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "remove", "--force", reviewerWtPath); err != nil {
-			return fmt.Errorf("clean failed: could not remove reviewer worktree for issue %d: %w", r.issueNum, err)
-		}
-		fmt.Fprintf(r.stderr, "clean: removed reviewer worktree %s\n", reviewerWtPath) //nolint:errcheck
+	if err := r.removeWorktreeIfExists(reviewerWtPath, "reviewer"); err != nil {
+		return err
 	}
 
-	// Local branch
+	if err := r.removeLocalBranchIfExists(); err != nil {
+		return err
+	}
+
+	if err := r.removeRemoteBranchIfExists(); err != nil {
+		return err
+	}
+
+	return r.closeOpenPRs()
+}
+
+func (r *Runner) removeWorktreeIfExists(path, kind string) error {
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	if _, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "remove", "--force", path); err != nil {
+		return fmt.Errorf("clean failed: could not remove %s worktree %s for issue %d: %w", kind, path, r.issueNum, err)
+	}
+	fmt.Fprintf(r.stderr, "clean: removed %s worktree %s\n", kind, path)
+	return nil
+}
+
+func (r *Runner) removeLocalBranchIfExists() error {
 	localOut, err := r.executor.RunInDir(r.repoRoot, "git", "branch", "--list", r.branchName)
 	if err != nil {
 		return fmt.Errorf("clean failed: could not check local branch for issue %d: %w", r.issueNum, err)
 	}
-	if strings.TrimSpace(localOut) != "" {
-		if _, err := r.executor.RunInDir(r.repoRoot, "git", "branch", "-D", r.branchName); err != nil {
-			return fmt.Errorf("clean failed: could not remove local branch %s for issue %d: %w", r.branchName, r.issueNum, err)
-		}
-		fmt.Fprintf(r.stderr, "clean: deleted local branch %s\n", r.branchName) //nolint:errcheck
+	if strings.TrimSpace(localOut) == "" {
+		return nil
 	}
+	if _, err := r.executor.RunInDir(r.repoRoot, "git", "branch", "-D", r.branchName); err != nil {
+		return fmt.Errorf("clean failed: could not remove local branch %s for issue %d: %w", r.branchName, r.issueNum, err)
+	}
+	fmt.Fprintf(r.stderr, "clean: deleted local branch %s\n", r.branchName)
+	return nil
+}
 
-	// Remote branch
+func (r *Runner) removeRemoteBranchIfExists() error {
 	remoteOut, err := r.executor.RunInDir(r.repoRoot, "git", "ls-remote", "--heads", "origin", r.branchName)
 	if err != nil {
 		return fmt.Errorf("clean failed: could not check remote branch for issue %d: %w", r.issueNum, err)
 	}
-	if strings.TrimSpace(remoteOut) != "" {
-		if _, err := r.executor.RunInDir(r.repoRoot, "git", "push", "origin", "--delete", r.branchName); err != nil {
-			return fmt.Errorf("clean failed: could not remove remote branch %s for issue %d: %w", r.branchName, r.issueNum, err)
-		}
-		fmt.Fprintf(r.stderr, "clean: deleted remote branch %s\n", r.branchName) //nolint:errcheck
+	if strings.TrimSpace(remoteOut) == "" {
+		return nil
 	}
+	if _, err := r.executor.RunInDir(r.repoRoot, "git", "push", "origin", "--delete", r.branchName); err != nil {
+		return fmt.Errorf("clean failed: could not remove remote branch %s for issue %d: %w", r.branchName, r.issueNum, err)
+	}
+	fmt.Fprintf(r.stderr, "clean: deleted remote branch %s\n", r.branchName)
+	return nil
+}
 
-	// Open PR
+func (r *Runner) closeOpenPRs() error {
 	prOut, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.DevToken()},
 		r.repoRoot,
@@ -87,7 +107,7 @@ func (r *Runner) cleanArtifacts() error { //nolint:gocognit,cyclop // five seque
 		); err != nil {
 			return fmt.Errorf("clean failed: could not remove PR %s for issue %d: %w", pr.URL, r.issueNum, err)
 		}
-		fmt.Fprintf(r.stderr, "clean: closed PR %s\n", pr.URL) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "clean: closed PR %s\n", pr.URL)
 	}
 
 	return nil
