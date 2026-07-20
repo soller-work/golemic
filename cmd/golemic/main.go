@@ -497,7 +497,7 @@ const graphqlAddReviewThread = `mutation($reviewId:ID!,$path:String!,$line:Int!,
 const graphqlAddReviewThreadWithStart = `mutation($reviewId:ID!,$path:String!,$line:Int!,$startLine:Int!,$side:DiffSide!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$reviewId,path:$path,line:$line,startLine:$startLine,side:$side,body:$body}){thread{id}}}`
 
 // graphqlSubmitReview submits a pending review with verdict and body (IC-004).
-const graphqlSubmitReview = `mutation($reviewId:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$reviewId,event:$event,body:$body}){pullRequestReview{id comments{totalCount}}}}`
+const graphqlSubmitReview = `mutation($reviewId:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$reviewId,event:$event,body:$body}){pullRequestReview{fullDatabaseId comments{totalCount}}}}`
 
 // getRepoContext returns the owner and name of the current repository via gh.
 func getRepoContext(executor preflight.Executor) (owner, name string, err error) {
