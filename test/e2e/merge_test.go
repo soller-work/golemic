@@ -9,7 +9,7 @@
 // AC→test mapping (issue-15 spec):
 //
 //	AC-001 (gate proceeds → rebase → CI green → pr_merged) → TestMergePhase/happy_path
-//	AC-003 (risk:high → automerge_skipped) → TestMergePhase/skip_risk_high
+//	AC-003 (confidence:low → automerge_skipped) → TestMergePhase/skip_risk_high
 //	AC-006 (rebase conflict → automerge_failed) → TestMergePhase/rebase_conflict
 package e2e
 
@@ -56,7 +56,7 @@ func TestMergePhase(t *testing.T) {
 			wantDevWTRemoved: true,
 		},
 		{
-			// AC-003 / BR-001 / BR-008: risk:high label → gate skips auto-merge.
+			// AC-003: mergeConfidence=low → gate skips auto-merge.
 			// Run succeeds (exit 0); automerge_skipped event present; no pr_merged.
 			name:         "skip_risk_high",
 			mergeMode:    "skip_risk_high",
@@ -285,9 +285,9 @@ exec "$REAL_GIT" "$@"
 
 // mpWriteGhShim handles the gh CLI calls made by the runner during the merge phase.
 //
-// MERGE_MODE controls the issue label returned by `gh issue view`:
-//   - "skip_risk_high"  → label risk:high  (gate skips)
-//   - "rebase_conflict" → label risk:low   (gate passes, rebase then fails via git shim)
+// MERGE_MODE controls shim behaviour. The issue label returned by `gh issue view`
+// is always plain (no risk label) because the gate no longer considers risk labels.
+// The skip_risk_high scenario injects mergeConfidence=low via the pi shim instead.
 //
 // All other gh calls (pr list, pr checks, pr review, pr merge, pr comment)
 // are handled with minimal success responses.
@@ -299,15 +299,7 @@ if [ "$1" = "--version" ]; then
   exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
-  # Return a risk label appropriate to the test mode.
-  case "${MERGE_MODE}" in
-    skip_risk_high)
-      printf '{"title":"Merge Phase Test","body":"Test issue.","state":"OPEN","labels":[{"name":"risk:high"}]}'
-      ;;
-    *)
-      printf '{"title":"Merge Phase Test","body":"Test issue.","state":"OPEN","labels":[{"name":"risk:low"}]}'
-      ;;
-  esac
+  printf '{"title":"Merge Phase Test","body":"Test issue.","state":"OPEN","labels":[]}'
   exit 0
 fi
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
@@ -361,10 +353,13 @@ fi
 
 case "$PWD" in
   *-review)
-    # ---- Reviewer role: approve with high confidence ----
-    # Append review_submitted event directly so the runner merge phase fires.
-    printf '{"type":"review_submitted","ts":"2024-01-01T00:00:00Z","runId":"%s","payload":{"verdict":"approved","mergeConfidence":"high","body":"LGTM"}}\n' \
-      "${GOLEMIC_RUN_ID}" >> "${GOLEMIC_EVENT_LOG}"
+    # ---- Reviewer role: approve; confidence=low for skip_risk_high, else high ----
+    CONFIDENCE="high"
+    if [ "${MERGE_MODE}" = "skip_risk_high" ]; then
+      CONFIDENCE="low"
+    fi
+    printf '{"type":"review_submitted","ts":"2024-01-01T00:00:00Z","runId":"%s","payload":{"verdict":"approved","mergeConfidence":"%s","body":"LGTM"}}\n' \
+      "${GOLEMIC_RUN_ID}" "${CONFIDENCE}" >> "${GOLEMIC_EVENT_LOG}"
     exit 0
     ;;
   *)
