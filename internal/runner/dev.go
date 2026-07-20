@@ -65,6 +65,11 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 			fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n") //nolint:errcheck
 			return outcomeTimeout
 		}
+		if errors.Is(err, agent.ErrStalled) {
+			endSpan(telemetry.StatusKilled, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: dev agent stalled\n") //nolint:errcheck
+			return outcomeStalled
+		}
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed
@@ -133,6 +138,11 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 			endSpan(telemetry.StatusKilled, nil)
 			fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n") //nolint:errcheck
 			return outcomeTimeout
+		}
+		if errors.Is(err, agent.ErrStalled) {
+			endSpan(telemetry.StatusKilled, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: dev agent stalled\n") //nolint:errcheck
+			return outcomeStalled
 		}
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err) //nolint:errcheck

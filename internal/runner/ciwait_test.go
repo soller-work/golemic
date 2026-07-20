@@ -696,3 +696,49 @@ func TestRunDevCIRetryAgent_PromptContainsCheckInfo(t *testing.T) {
 		t.Errorf("prompt should instruct not to open a new PR")
 	}
 }
+
+// P2-1b: runDevCIRetryAgent with agent.ErrStalled maps to outcomeStalled
+func TestRunDevCIRetryAgent_ErrStalledMapsToStalledOutcome_P2_1b(t *testing.T) {
+	homeDir, repoRoot, project := setupRunnerTest(t)
+	creds := loadTestCreds(t, homeDir, project)
+
+	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := New(&fakeExecutor{}, homeDir, repoRoot, 42)
+	r.repoRoot = repoRoot
+	r.project = project
+	r.runID = "issue-42-ci-stall"
+	r.branchName = "golemic/issue-42"
+	r.creds = creds
+	r.cfg = &config.Config{VerifyCommand: "go test", Models: config.Models{Dev: "test/dev"}}
+	r.issue = &issueData{Number: 42, Title: "T"}
+
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 0, agent.TranscriptPaths{}, agent.ErrStalled
+	})
+
+	var stderr bytes.Buffer
+	r.SetStderr(&stderr)
+
+	golemicDir := filepath.Join(homeDir, ".golemic", project)
+	logPath := filepath.Join(golemicDir, "runs", "issue-42-ci-stall", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	failedCheckInfo := "test failed: timeout\n"
+	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, failedCheckInfo)
+
+	if outcome != outcomeStalled {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeStalled)
+	}
+	if !strings.Contains(stderr.String(), "CI retry dev agent stalled") {
+		t.Errorf("stderr should contain 'CI retry dev agent stalled', got: %s", stderr.String())
+	}
+}

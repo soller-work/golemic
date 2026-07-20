@@ -13,6 +13,7 @@ const (
 	outcomeReviewFailed = "review_failed"
 	outcomeEscalated    = "escalated"
 	outcomeTimeout      = "timeout"
+	outcomeStalled      = "stalled"
 	outcomeAborted      = "aborted"
 	outcomeMergeFailed  = "merge_failed"
 	outcomeSkipped      = "skipped"
