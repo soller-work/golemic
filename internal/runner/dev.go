@@ -63,7 +63,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	exitCode, paths, err := runFn(context.Background(), cfg)
 
 	if err != nil {
-		return r.handleDevAgentError(err, endSpan)
+		return r.handleDevAgentErrorWithLog(eventLogPath, err, endSpan)
 	}
 
 	r.writeAgentCompleted(eventLogPath, "dev", exitCode)
@@ -149,6 +149,16 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 			fmt.Fprintf(r.stderr, "dev_failed: dev agent stalled\n")
 			return outcomeStalled
 		}
+		var chainErr *agent.ModelChainExhaustedError
+		if errors.As(err, &chainErr) {
+			r.writeAgentCompleted(eventLogPath, "dev", 1)
+			endSpan(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
+			if prNum, prErr := r.getPRNumber(eventLogPath); prErr == nil {
+				r.postModelChainExhaustedComment(prNum, chainErr)
+			}
+			return outcomeDevFailed
+		}
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err)
 		return outcomeDevFailed
@@ -210,8 +220,10 @@ func (r *Runner) indexWorktree(wtPath, cbmCacheDir string) {
 	}
 }
 
-// handleDevAgentError processes agent errors and returns the outcome.
-func (r *Runner) handleDevAgentError(err error, endSpan func(string, map[string]any)) string {
+// handleDevAgentErrorWithLog processes agent errors, writes agent_completed for chain
+// exhaustion, and returns the outcome. eventLogPath may be empty for cases where no
+// pr comment is needed.
+func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endSpan func(string, map[string]any)) string {
 	if errors.Is(err, agent.ErrTimeout) {
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n")
@@ -221,6 +233,18 @@ func (r *Runner) handleDevAgentError(err error, endSpan func(string, map[string]
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent stalled\n")
 		return outcomeStalled
+	}
+	var chainErr *agent.ModelChainExhaustedError
+	if errors.As(err, &chainErr) {
+		if eventLogPath != "" {
+			r.writeAgentCompleted(eventLogPath, "dev", 1)
+			if prNum, prErr := r.getPRNumber(eventLogPath); prErr == nil {
+				r.postModelChainExhaustedComment(prNum, chainErr)
+			}
+		}
+		endSpan(telemetry.StatusError, nil)
+		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
+		return outcomeDevFailed
 	}
 	endSpan(telemetry.StatusError, nil)
 	fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err)
