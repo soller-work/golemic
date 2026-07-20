@@ -1175,6 +1175,66 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 	}
 }
 
+// AC-004b: push --delete fails with 'remote ref does not exist' (TOCTOU race) → silent success, no warning.
+func TestRunMergePhase_SilentSuccessOnRaceDeleteFailure(t *testing.T) { //nolint:cyclop,funlen
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 43)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	stderr := &strings.Builder{}
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "abc123\trefs/heads/golemic/issue-43\n", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-043", nil
+			}
+			if name == "git" && args[0] == "push" && args[1] == "origin" && args[2] == "--delete" {
+				return "", fmt.Errorf("exit code 1: error: unable to delete 'golemic/issue-43': remote ref does not exist")
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := &Runner{
+		executor:               exec,
+		issueNum:               43,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                t.TempDir(),
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: "proj"},
+		creds:                  mustLoadCreds(t),
+		branchName:             "golemic/issue-43",
+		stderr:                 stderr,
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
+	}
+
+	var written []eventlog.Event
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if strings.Contains(stderr.String(), "remote branch delete failed") {
+		t.Errorf("no warning expected on race-lost push --delete, got: %q", stderr.String())
+	}
+}
+
 // AC-004: push --delete fails after successful merge → warning on stderr, outcome still success.
 func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclop,funlen,gocognit
 	logPath := newLogPath(t)

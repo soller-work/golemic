@@ -395,6 +395,9 @@ func (r *Runner) deleteRemoteBranch(branchName string) {
 		"git", "push", "origin", "--delete", branchName,
 	)
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "remote ref does not exist") {
+			return // branch already gone (TOCTOU race with GitHub auto-delete-head-branches)
+		}
 		fmt.Fprintf(r.stderr, "Warning: remote branch delete failed: %v\n", err) //nolint:errcheck
 	}
 }
