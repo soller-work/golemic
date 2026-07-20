@@ -228,6 +228,14 @@ func telemetryGhHandler(args []string) (string, error) {
 			return "", nil
 		}
 		return "[]", nil // pr list → no collision; pr checks → no checks
+	case "repo":
+		return `{"owner":{"login":"testowner"},"name":"testrepo"}`, nil
+	case "api":
+		if len(args) >= 2 && args[1] == "graphql" {
+			return `{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[]}}}}}`, nil
+		}
+		// REST: reviews/{id}/comments → no inline comments
+		return "[]", nil
 	}
 	return "", fmt.Errorf("not mocked: gh %v", args)
 }

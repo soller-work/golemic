@@ -491,6 +491,12 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.EventWriter, timeout time.Duration, runSpanID string) string {
 	const maxRounds = 3
 
+	prNumber, err := r.getPRNumber(eventLogPath)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "review_failed: failed to get PR number for sweep: %v\n", err) //nolint:errcheck
+		return outcomeReviewFailed
+	}
+
 	firstReviewerRound := true
 	round := 1
 	for {
@@ -508,6 +514,12 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 			return outcomeReviewFailed
 		}
 		endCreateRevWT(telemetry.StatusOK, nil)
+
+		// BR-001: sweep any orphaned pending review before invoking reviewer agent
+		if err := r.sweepPendingReviews(prNumber); err != nil {
+			fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
+			return outcomeReviewFailed
+		}
 
 		if outcome := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round); outcome != outcomeSuccess {
 			return outcome
@@ -558,9 +570,15 @@ func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeo
 			fmt.Fprintf(r.stderr, "review_failed: EMPTY_FINDINGS: changes_requested review has an empty body\n") //nolint:errcheck
 			return false, outcomeReviewFailed
 		}
+		// BR-002: load inline comments and build FindingsJSON for dev-retry prompt
+		findingsJSON, findingsErr := r.buildFindingsJSON(eventLogPath)
+		if findingsErr != nil {
+			fmt.Fprintf(r.stderr, "review_failed: %v\n", findingsErr) //nolint:errcheck
+			return false, outcomeReviewFailed
+		}
 		*round++
 		r.turnCounter++ // each dev-retry round gets its own turn
-		if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, runSpanID, *round); o != outcomeSuccess {
+		if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, findingsJSON, runSpanID, *round); o != outcomeSuccess {
 			return false, o
 		}
 		return true, ""

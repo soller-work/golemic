@@ -177,6 +177,7 @@ type devRetryTemplateData struct {
 	Issue         Issue
 	Branch        string
 	Findings      string
+	FindingsJSON  string
 	VerifyCommand string
 	Guidelines    string
 }
@@ -196,7 +197,15 @@ const devRetryUserTemplate = `# Dev Retry: Address Review Findings for Issue #{{
 The reviewer has requested the following changes:
 
 {{.Findings}}
+{{if .FindingsJSON}}
+## Inline Findings (FindingsJSON)
 
+The following JSON array contains the reviewer's inline comments anchored to specific code locations. Each entry has ` + "`" + `path` + "`" + `, ` + "`" + `line` + "`" + `, ` + "`" + `side` + "`" + `, and ` + "`" + `body` + "`" + ` fields. Navigate directly to each location to address the finding.
+
+` + "```" + `json
+{{.FindingsJSON}}
+` + "```" + `
+{{end}}
 ---
 
 ## Guidelines
@@ -207,17 +216,18 @@ The reviewer has requested the following changes:
 
 ## Instructions
 
-1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue’s web UI.
+1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
 2. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
 3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
 5. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
 `
 
-// RenderDevRetry renders a dev retry user prompt injecting the verbatim reviewer findings.
+// RenderDevRetry renders a dev retry user prompt injecting the verbatim reviewer findings
+// and optional structured FindingsJSON from inline review comments.
 //
 // Returns EMPTY_FINDINGS error if findings is empty (BR-002, IF-001).
-func RenderDevRetry(findings string, issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
 	if findings == "" {
 		return "", fmt.Errorf("EMPTY_FINDINGS: changes_requested review has an empty body")
 	}
@@ -231,6 +241,7 @@ func RenderDevRetry(findings string, issue Issue, branch string, verifyCommand s
 		Issue:         issue,
 		Branch:        branch,
 		Findings:      findings,
+		FindingsJSON:  findingsJSON,
 		VerifyCommand: verifyCommand,
 		Guidelines:    guidelines,
 	}

@@ -109,6 +109,18 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 			if len(args) >= 1 && args[0] == "issue" {
 				return `{"title":"T","body":"B","state":"OPEN","labels":[]}`, nil
 			}
+			// gh repo view: return stub owner/name for repoNWO()
+			if len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+				return `{"owner":{"login":"testowner"},"name":"testrepo"}`, nil
+			}
+			// gh api graphql: stub sweep (no pending reviews) and any other graphql
+			if len(args) >= 2 && args[0] == "api" && args[1] == "graphql" {
+				return `{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[]}}}}}`, nil
+			}
+			// gh api repos/.../reviews/.../comments: no inline comments
+			if len(args) >= 2 && args[0] == "api" && strings.HasPrefix(args[1], "repos/") {
+				return "[]", nil
+			}
 			if len(args) < 2 || args[0] != "pr" {
 				return "[]", nil
 			}
@@ -518,7 +530,7 @@ func TestRenderDevRetry_VerbatimFindings(t *testing.T) {
 	}
 
 	findings := "Fix the null pointer dereference in handler.go line 42"
-	p, err := prompt.RenderDevRetry(findings, prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
+	p, err := prompt.RenderDevRetry(findings, "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -539,7 +551,7 @@ func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := prompt.RenderDevRetry("", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
+	_, err := prompt.RenderDevRetry("", "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
 	if err == nil {
 		t.Fatal("expected EMPTY_FINDINGS error, got nil")
 	}
