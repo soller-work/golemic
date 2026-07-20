@@ -1148,6 +1148,7 @@ func TestDevGuidelinesPath_AC001(t *testing.T) {
 		"golemic-dev-1",
 		"go test",
 		devPath,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("RenderDev failed: %v", err)
@@ -1177,6 +1178,7 @@ func TestReviewerGuidelinesPath_AC002(t *testing.T) {
 		prompt.Issue{Number: 1, Title: "t"},
 		"go test",
 		reviewerPath,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("RenderReviewer failed: %v", err)

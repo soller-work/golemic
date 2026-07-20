@@ -14,7 +14,12 @@ import (
 	"golemic/internal/eventlog"
 	"golemic/internal/prompt"
 	"golemic/internal/telemetry"
+	"golemic/internal/worktree"
 )
+
+// cbmReviewerTools are the read-only graph tools granted to the reviewer agent when codebase-memory is enabled.
+// detect_changes (git-diff blast radius) is reviewer-only per BR-4.
+var cbmReviewerTools = append(append([]string{}, cbmDevTools...), "detect_changes")
 
 // graphqlDiscoverPending queries the viewer's PENDING reviews on a PR.
 // states:[PENDING] already scopes to the token's own pending reviews, so no author filter is needed
@@ -176,6 +181,16 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
 
+	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	if cbmEnabled {
+		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
+		r.indexWorktree(reviewerWorktreePath, cbmCacheDir)
+		if err := worktree.WriteMCPFiles(reviewerWorktreePath, cbmCacheDir); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: failed to write CBM MCP files for reviewer worktree: %v\n", err)
+			cbmEnabled = false
+		}
+	}
+
 	// Get PR number from pr_opened event
 	prNumber, err := r.getPRNumber(eventLogPath)
 	if err != nil {
@@ -192,6 +207,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		},
 		r.cfg.VerifyCommand,
 		filepath.Join(r.repoRoot, ".golemic", "guidelines", "reviewer.md"),
+		cbmEnabled,
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to render reviewer prompt: %v\n", err) //nolint:errcheck
@@ -206,6 +222,10 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
+	revTools := []string{"read", "bash"}
+	if cbmEnabled {
+		revTools = append(revTools, cbmReviewerTools...)
+	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "reviewer",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "reviewer.md"),
@@ -218,8 +238,9 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Reviewer,
 		Timeout:           timeout,
-		ToolAllowlist:     []string{"read", "bash"},
+		ToolAllowlist:     revTools,
 		RunsDir:           runsDir,
+		Approve:           cbmEnabled,
 	})
 
 	if err != nil {
