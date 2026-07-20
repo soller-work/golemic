@@ -1,93 +1,108 @@
 ---
 name: dev-loop
-description: Manual dev+review loop for golemic backlog issues. Use when the user says "start dev loop", asks to work on a backlog issue (docs/backlog/*.json, slice IDs like I1.x), or wants the dev/reviewer subagents driven through implement→review→iterate until approved.
+description: Manual local backup for the golemic runner. Use when golemic is down and one GitHub issue must be implemented by hand into a merge-ready PR. The user names the issue by URL or number. Drives the dev/reviewer subagents through implement → review → iterate until approved, then opens the PR.
 ---
 
-# Golemic Dev Loop (manual)
+# Golemic Dev Loop (manual, local backup)
 
 ## Purpose
 
-Interim substitute for the Iteration-1 runner. Drives one backlog issue from
-`docs/backlog/` through implement → review → iterate until the reviewer
-approves. Once golemic self-hosts (post-I1.11), this skill becomes redundant.
+Backup for when the golemic runner is not running and one issue must be
+implemented by hand. Reproduces golemic's dev → reviewer ping-pong locally and
+hands back a **merge-ready PR**. One issue, one session — not built for parallel
+runs, and it does not merge.
 
-## Selecting the issue
+## Input
 
-Open issues are implementation-slice JSON files (grill-me schema) at
-`docs/backlog/NNN_<slug>.json`. The numeric prefix is the processing order.
-Each issue declares `depends_on` (slice_ids that must be completed first); an
-issue is only *takeable* once those dependencies are done. Issue lifecycle:
+The user names the issue by URL or number. Extract the issue number `N`
+(from a URL like `https://github.com/<owner>/<repo>/issues/N`, take the trailing
+integer). If no issue is given, ask for it.
 
-- `docs/backlog/NNN_*.json` — **open**, unclaimed, available
-- `docs/backlog/working/NNN_*.json` — **claimed**, being worked on now
-- deleted — **done** (delete = done)
+## The spec is authoritative
 
-A claimed issue still blocks its dependents (it is not done yet).
-
-Unless the user names a specific issue, claim the next takeable one:
+Fetch the task specification with:
 
 ```bash
-python3 .pi/skills/dev-loop/scripts/next_issue.py --claim
+golemic slice --issue N
 ```
 
-`--claim` atomically moves the file into `docs/backlog/working/` so no other
-agent picks it — this is what makes parallel dev loops safe. Without `--claim`
-the script only previews the next takeable issue (read-only). It prints the
-(new) file path, `slice_id`, `title`, `readiness`, and `depends_on`. If
-`readiness` is not `ready`, move the file back and escalate to the maintainer
-instead of starting the loop. Read the full JSON before briefing the dev — it
-is the authoritative spec (scope, business rules, interfaces, acceptance
-scenarios, quality gates).
-
-The issue file stays in `working/` for the rest of the loop. On abandonment
-(escalation without approval, aborted run), **release** it by moving it back to
-`docs/backlog/` so it becomes takeable again:
-
-```bash
-git mv docs/backlog/working/NNN_<slug>.json docs/backlog/NNN_<slug>.json
-```
+Its output (structured JSON slice or raw issue body) is the source of truth —
+scope, business rules, interfaces, acceptance scenarios, quality gates. Read it
+in full before briefing the dev. **Do not** rely on any summary in the issue's
+web UI. If `golemic slice` fails, fall back to `gh issue view N`.
 
 ## Language
 
 All artifacts produced during the loop MUST be English — code, tests, docs,
-commit messages, task briefings, review findings. See `docs/conventions.md`.
-This applies even when the maintainer converses in German.
+commit messages, PR title/body, task briefings, review findings. See
+`docs/conventions.md`. This applies even when the maintainer converses in German.
 
 ## Agents
 
 Both project-local under `.pi/agents/`:
-- `dev` — implements the item.
+- `dev` — implements the change.
 - `reviewer` — reviews the diff, returns a verdict.
 
 Always invoke with `agentScope: "both"` and `confirmProjectAgents: false`.
 
+## Isolated worktree (mandatory)
+
+Other local agents may be editing files in the main checkout at the same time —
+never run the loop there, or your work and theirs will clobber each other. Before
+briefing the dev, create a dedicated worktree on golemic's branch convention
+(`golemic/issue-N`, so the PR stays consistent with the runner) off an
+up-to-date main:
+
+```bash
+git -C <main-repo> fetch -q origin main
+git -C <main-repo> worktree add /tmp/golemic-issue-N -b golemic/issue-N origin/main
+```
+
+Every step below — dev, reviewer, `git`, verification, PR — runs **inside**
+`/tmp/golemic-issue-N`. Pass that path as the `cwd` for the dev and reviewer
+subagents so they read and edit only the isolated tree.
+
 ## Loop protocol
 
 Hard cap: **3 review rounds**. If not approved by round 3, stop and escalate to
-the maintainer with the reviewer's outstanding findings.
+the maintainer with the reviewer's outstanding findings — do not open a PR.
 
 ### Round 1 — brief the dev
 
 Task must contain, in this order:
-1. **Slice ID + one-line goal** (e.g. `I1.1 — event log: JSONL writer/reader + env-var contract`), taken from `slice_id` and `title`.
-2. **Spec pointers**: the issue file path (`docs/backlog/NNN_<slug>.json`) and the architecture §§ it references (see `implementation_context` / `decision_log`). Instruct the agent to read the full JSON and those §§ before starting.
-3. **What already exists**: previously completed items the new work builds on, with file paths (cross-check `codebase_evidence` in the JSON).
-4. **Scope**: from the JSON — `scope`, `business_rules`, `interfaces`/`process_steps`/`integration_contracts`, `state_changes`, augmented with any concrete decisions already agreed with the maintainer.
-5. **AC→test mapping**: every `AC-*` in `acceptance_scenarios` must be covered by at least one named automated test. The dev's report must include the mapping (AC ID → test function).
-6. **Definition of Done**: everything in `quality.definition_of_done` and `quality.quality_commands`; at minimum `go build ./... && go vet ./... && go test -count=1 ./...` green; external commands only behind injectable interfaces (§2.12); no overwriting of human-edited files.
-7. **Out of scope**: verbatim from `scope.out_of_scope`.
-8. **Report format**: what changed, how verified, AC→test mapping, remaining risks.
+1. **Issue number + one-line goal**, taken from the slice `title`.
+2. **Spec pointer**: instruct the dev to run `golemic slice --issue N` and treat
+   that output as the source of truth, plus the architecture §§ it references.
+3. **What already exists**: relevant existing files the work builds on.
+4. **Scope**: from the slice — scope, business rules, interfaces/process steps,
+   state changes.
+5. **AC→test mapping**: every acceptance scenario must be covered by at least one
+   named automated test. The dev's report must include the mapping (AC → test
+   function).
+6. **Definition of Done**: the slice's quality gates; at minimum
+   `go build ./... && go vet ./... && go test -count=1 ./...` green; external
+   commands (`gh`, `git`, `pi`) only behind injectable interfaces (§2.12).
+7. **Out of scope**: verbatim from the slice.
+8. **Commit, don't push yet**: commit on `golemic/issue-N` with a meaningful
+   message. Do **not** push or open a PR — that happens after approval.
+9. **Report format**: what changed, how verified, AC→test mapping, remaining
+   risks.
 
-Save the returned `sessionId` — you will need it for round 2.
+Save the returned `sessionId` — you need it for round 2.
 
 ### Between rounds — brief the reviewer
 
 Task must contain:
-1. **Slice ID + spec pointers** (same as dev brief, including the issue JSON path).
-2. **File list**: new and modified files (from `git status`).
-3. **Review focus**: the `acceptance_scenarios` from the issue JSON as a checklist, plus explicit edge cases and any claims from the dev's report that deserve scrutiny (e.g. "the claimed bugfix in X — verify it is not scope creep").
-4. **AC coverage check (blocker-level)**: verify the dev's AC→test mapping — every `AC-*` must trace to a real, meaningful automated test. A missing or hollow test for any AC is a P1/P2 finding.
-5. **Verdict contract**: severity-tagged findings (`blocker`/`major`/`minor`/`nit` or `P1`–`P4`) with `file:line` refs and concrete fix suggestions. Final line must be `VERDICT: APPROVED` or `VERDICT: CHANGES_REQUESTED`.
+1. **Issue number + spec pointer** (reviewer also runs `golemic slice --issue N`).
+2. **File list**: new and modified files (from `git status` / `git diff`).
+3. **Review focus**: the slice's acceptance scenarios as a checklist, plus edge
+   cases and any claims from the dev's report that deserve scrutiny.
+4. **AC coverage check (blocker-level)**: verify the dev's AC→test mapping —
+   every acceptance scenario must trace to a real, meaningful automated test. A
+   missing or hollow test is a P1/P2 finding.
+5. **Verdict contract**: severity-tagged findings (`P1`–`P4`) with `file:line`
+   refs and concrete fixes. Final line must be `VERDICT: APPROVED` or
+   `VERDICT: CHANGES_REQUESTED`.
 
 Reviewer sessions can be reused across rounds — save the `sessionId`.
 
@@ -95,37 +110,55 @@ Reviewer sessions can be reused across rounds — save the `sessionId`.
 
 Reuse the dev's `sessionId`. Task must:
 1. State the verdict up front (`changes_requested`).
-2. List **each blocker (P1/P2)** with the reviewer's finding, file:line, and the agreed fix approach. If the reviewer proposed multiple fixes, pick one and state which.
-3. List **each P3** to fix, same structure.
-4. Explicitly enumerate **P4 items to ignore** (wording, style, scope-creep suggestions) so the dev doesn't rathole.
-5. Restate the DoD.
+2. List **each P1/P2** with the reviewer's finding, file:line, and the fix
+   approach. If the reviewer proposed multiple fixes, pick one and say which.
+3. List **each P3** to fix.
+4. Enumerate **P4 items to ignore** so the dev doesn't rathole.
+5. Restate the DoD; still no push.
 
 Then re-run the reviewer in the same session with a short delta brief:
-"Dev has addressed P2-1 by X, P2-2 by Y, all P3 as promised. Verify."
+"Dev addressed P2-1 by X, P2-2 by Y, all P3 as promised. Verify."
 
 ## Handling reviewer findings
 
-- **P1/P2 (blocker/major)**: always fix.
-- **P3 (minor)**: fix unless it introduces scope creep; call that out explicitly to the dev if declining.
-- **P4 (nit)**: default ignore. If a P4 hints at real risk (e.g. leftover artifacts in the repo, hardcoded paths in tests that could collide), promote it to P3 in the dev brief.
-- **Reviewer disagreement with maintainer decisions**: the maintainer's decision wins. Note it in the dev brief so the reviewer doesn't re-raise next round.
+- **P1/P2**: always fix.
+- **P3**: fix unless it introduces scope creep; call that out if declining.
+- **P4**: default ignore. Promote to P3 only if it hints at real risk (leftover
+  artifacts, hardcoded paths that could collide).
+- **Reviewer vs maintainer decisions**: the maintainer's decision wins. Note it
+  in the dev brief so the reviewer doesn't re-raise it.
 
-## Handling artifacts
+## After approval — open the PR
 
-After approval, before reporting done:
-- **Delete the claimed issue file** (`docs/backlog/working/NNN_<slug>.json` —
-  it was moved there at claim time). The deletion goes into the **same commit**
-  as the implementation — issue implemented = issue gone, no in-between state.
-  This also releases the dependency: its dependents become takeable.
-- `git status` — check for stray files (manual test runs, `.golemic/` created during preflight testing, etc.). Remove or `.gitignore` them.
-- Do NOT commit without maintainer approval, and do NOT push without explicit maintainer approval (per global orchestrator rules — pushes are shared-state actions).
+All commands run inside the worktree (`/tmp/golemic-issue-N`). Only once the
+reviewer returns `VERDICT: APPROVED`:
+1. `git status` — check for stray files (manual test runs, `.golemic/` created
+   during testing). Remove or `.gitignore` them.
+2. Confirm with the maintainer before pushing (push is a shared-state action).
+3. Push and open the PR:
+
+```bash
+git push -u origin golemic/issue-N
+gh pr create --title "..." --body "..."
+```
+
+The PR body **must** include a closing keyword so the merge auto-closes the
+issue, e.g. `Closes #N`. Do **not** merge — the maintainer merges.
+
+## Tear down the worktree
+
+After the PR is open (or on abandonment/escalation), remove the worktree so it
+doesn't accumulate. The branch and its pushed commits survive:
+
+```bash
+git -C <main-repo> worktree remove /tmp/golemic-issue-N
+```
 
 ## Report back to the maintainer
 
-Keep the final report short — 3–5 lines max:
+Keep the final report short — 3–5 lines:
 - Round count and final verdict.
 - One-line summary of what was built.
 - Files changed (new/modified/removed), one line.
+- The PR URL.
 - Non-blocking P3/P4 notes, if any (one line each).
-
-Then ask exactly one question: **"Commit?"** Do not ask about granularity, push, or anything else.
