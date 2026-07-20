@@ -263,6 +263,58 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
+		// require_ci_checks config tests
+		{
+			name: "require_ci_checks absent defaults to false",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test"
+			}`,
+			wantErr: false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.RequireCIChecks {
+					t.Error("RequireCIChecks must default to false when absent")
+				}
+			},
+		},
+		{
+			name: "require_ci_checks explicit true",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"require_ci_checks": true
+			}`,
+			wantErr: false,
+			validate: func(t *testing.T, cfg *Config) {
+				if !cfg.RequireCIChecks {
+					t.Error("RequireCIChecks must be true when explicitly set to true")
+				}
+			},
+		},
+		{
+			name: "require_ci_checks explicit false",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"require_ci_checks": false
+			}`,
+			wantErr: false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.RequireCIChecks {
+					t.Error("RequireCIChecks must be false when explicitly set to false")
+				}
+			},
+		},
+		{
+			name: "require_ci_checks non-boolean value rejected",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"require_ci_checks": "yes"
+			}`,
+			wantErr:     true,
+			errContains: "require_ci_checks",
+		},
 		// AC-008: ci_timeout_minutes config tests
 		{
 			name: "ci_timeout_minutes absent defaults to 15",
@@ -361,6 +413,25 @@ func TestLoad(t *testing.T) {
 				tt.validate(t, cfg)
 			}
 		})
+	}
+}
+
+func TestLoadGolemicConfigRequiresCIChecks(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	repoRoot := filepath.Clean(filepath.Join(wd, "..", ".."))
+
+	cfg, err := Load(repoRoot)
+	if err != nil {
+		t.Fatalf("Load(repoRoot): %v", err)
+	}
+	if cfg.Project != "golemic" {
+		t.Fatalf("Project = %q, want golemic", cfg.Project)
+	}
+	if !cfg.RequireCIChecks {
+		t.Error("RequireCIChecks must be true in golemic's self-hosting config")
 	}
 }
 

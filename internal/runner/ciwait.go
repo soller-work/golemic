@@ -47,6 +47,8 @@ func categorizeBucket(bucket string) string {
 
 // queryCIChecks calls gh pr checks and returns a result string and failed items.
 // Result is one of: "green", "red", "no_checks", "pending".
+// When RequireCIChecks is true, no_checks is mapped to pending so the poll loop
+// waits for the workflow to register rather than treating absence as success.
 // Returns error on gh invocation or parse failure (CHECKS_QUERY_FAILED).
 func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
 	out, err := r.executor.RunWithEnvInDir(
@@ -57,14 +59,14 @@ func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
 	if err != nil {
 		var ee *preflight.ErrExit
 		if errors.As(err, &ee) && ee.ExitCode == 1 && noChecksRe.MatchString(strings.TrimSpace(ee.Stderr)) {
-			return "no_checks", nil, nil
+			return r.noChecksResult(), nil, nil
 		}
 		return "", nil, fmt.Errorf("CHECKS_QUERY_FAILED: %w", err)
 	}
 
 	out = strings.TrimSpace(out)
 	if out == "" || out == "null" {
-		return "no_checks", nil, nil
+		return r.noChecksResult(), nil, nil
 	}
 
 	var checks []ghCheckItem
@@ -73,10 +75,20 @@ func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
 	}
 
 	if len(checks) == 0 {
-		return "no_checks", nil, nil
+		return r.noChecksResult(), nil, nil
 	}
 
 	return classifyChecks(checks)
+}
+
+// noChecksResult returns the result string for a PR with no registered checks.
+// Returns "pending" when RequireCIChecks is true (waits for workflow registration),
+// otherwise returns "no_checks" (existing behaviour, treated as success by runCIGate).
+func (r *Runner) noChecksResult() string {
+	if r.cfg != nil && r.cfg.RequireCIChecks {
+		return "pending"
+	}
+	return "no_checks"
 }
 
 // classifyChecks inspects check items and returns the aggregate result.

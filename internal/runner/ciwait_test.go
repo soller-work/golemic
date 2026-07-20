@@ -742,3 +742,136 @@ func TestRunDevCIRetryAgent_ErrStalledMapsToStalledOutcome_P2_1b(t *testing.T) {
 		t.Errorf("stderr should contain 'CI retry dev agent stalled', got: %s", stderr.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// require_ci_checks=true tests (AC-001..AC-005 from issue #72)
+// ---------------------------------------------------------------------------
+
+// buildCIGateRunnerWithRequireCIChecks creates a runner with RequireCIChecks=true.
+func buildCIGateRunnerWithRequireCIChecks(t *testing.T, exec *fakeExecutor) (*Runner, string, *bytes.Buffer) {
+	t.Helper()
+	r, logPath, stderr := buildCIGateRunner(t, exec)
+	r.cfg.RequireCIChecks = true
+	return r, logPath, stderr
+}
+
+// AC-001/AC-002 regression guard: require_ci_checks=false with no_checks returns no_checks immediately.
+func TestQueryCIChecks_RequireCIChecksFalse_NoChecksPassThrough(t *testing.T) {
+	r, _, _ := buildCIGateRunner(t, ciWaitExecutor("[]", nil, nil))
+	// RequireCIChecks defaults to false
+
+	result, _, err := r.queryCIChecks(99)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "no_checks" {
+		t.Errorf("result: got %q, want %q (require_ci_checks=false must pass through no_checks)", result, "no_checks")
+	}
+}
+
+// AC-003: require_ci_checks=true maps no_checks to pending in queryCIChecks.
+func TestQueryCIChecks_RequireCIChecksTrue_NoChecksMappedToPending(t *testing.T) {
+	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor("[]", nil, nil))
+
+	result, _, err := r.queryCIChecks(99)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "pending" {
+		t.Errorf("result: got %q, want %q (require_ci_checks=true must map no_checks to pending)", result, "pending")
+	}
+}
+
+// AC-003: require_ci_checks=true, no_checks then green → pollCIChecks returns green.
+func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenGreen_AC003(t *testing.T) {
+	noChecks := "[]"
+	greenChecks := ghChecksJSON([]ghCheckItem{{Name: "verify", Bucket: "pass"}})
+
+	callIdx := 0
+	responses := []string{noChecks, greenChecks}
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" {
+				return handleGitCmd(args)
+			}
+			return "", fmt.Errorf("not mocked: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name != "gh" {
+				return "", fmt.Errorf("not mocked: %s %v", name, args)
+			}
+			if ghArgsMatch(args, "pr", "checks") {
+				resp := seqResponse(responses, &callIdx)
+				return resp, nil
+			}
+			return "", fmt.Errorf("not mocked: gh %v", args)
+		},
+	}
+
+	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, exec)
+
+	result, _, err := r.pollCIChecks(99, 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "green" {
+		t.Errorf("result: got %q, want %q", result, "green")
+	}
+	if callIdx < 2 {
+		t.Errorf("expected at least 2 gh pr checks calls, got %d", callIdx)
+	}
+}
+
+// AC-004: require_ci_checks=true, no_checks then red → pollCIChecks returns red.
+func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenRed_AC004(t *testing.T) {
+	noChecks := "[]"
+	redChecks := ghChecksJSON([]ghCheckItem{{Name: "verify", Bucket: "fail"}})
+
+	callIdx := 0
+	responses := []string{noChecks, redChecks}
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" {
+				return handleGitCmd(args)
+			}
+			return "", fmt.Errorf("not mocked: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name != "gh" {
+				return "", fmt.Errorf("not mocked: %s %v", name, args)
+			}
+			if ghArgsMatch(args, "pr", "checks") {
+				resp := seqResponse(responses, &callIdx)
+				return resp, nil
+			}
+			return "", fmt.Errorf("not mocked: gh %v", args)
+		},
+	}
+
+	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, exec)
+
+	result, failed, err := r.pollCIChecks(99, 5*time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "red" {
+		t.Errorf("result: got %q, want %q", result, "red")
+	}
+	if len(failed) == 0 {
+		t.Error("expected failed check items, got none")
+	}
+}
+
+// AC-005: require_ci_checks=true, no_checks throughout until ciTimeout → returns timeout.
+func TestPollCIChecks_RequireCIChecksTrue_AlwaysNoChecksTimesOut_AC005(t *testing.T) {
+	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor("[]", nil, nil))
+	r.SetCIPollInterval(1 * time.Millisecond)
+
+	result, _, err := r.pollCIChecks(99, 5*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "timeout" {
+		t.Errorf("result: got %q, want %q (no_checks must timeout when require_ci_checks=true)", result, "timeout")
+	}
+}

@@ -18,6 +18,7 @@ type Config struct {
 	TimeoutMinutes   int             `json:"timeout_minutes"`
 	TimeoutSeconds   int             `json:"timeout_seconds,omitempty"`
 	CITimeoutMinutes int             `json:"ci_timeout_minutes,omitempty"`
+	RequireCIChecks  bool            `json:"require_ci_checks,omitempty"`
 	Telemetry        TelemetryConfig `json:"telemetry"`
 }
 
@@ -35,6 +36,7 @@ type configRaw struct {
 	TimeoutMinutes   *int           `json:"timeout_minutes"`
 	TimeoutSeconds   *int           `json:"timeout_seconds"`
 	CITimeoutMinutes *int           `json:"ci_timeout_minutes"`
+	RequireCIChecks  *bool          `json:"require_ci_checks"`
 	Telemetry        *telemetryRaw  `json:"telemetry"`
 }
 
@@ -188,6 +190,11 @@ func Load(repoRoot string) (*Config, error) {
 		config.Telemetry.Enabled = *raw.Telemetry.Enabled
 	} else {
 		config.Telemetry.Enabled = true
+	}
+
+	// Extract require_ci_checks (optional; default false)
+	if raw.RequireCIChecks != nil {
+		config.RequireCIChecks = *raw.RequireCIChecks
 	}
 
 	// Extract ci_timeout_minutes (optional)
