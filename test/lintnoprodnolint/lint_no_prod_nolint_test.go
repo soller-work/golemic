@@ -158,3 +158,59 @@ func TestMakeLintInvokesLintNoProdNolint(t *testing.T) {
 		t.Errorf("make lint dry-run does not invoke lint-no-prod-nolint; output:\n%s", out)
 	}
 }
+
+// New test: Top-level file in cmd/ is caught.
+func TestTopLevelCmdFileCaught(t *testing.T) {
+	dir := t.TempDir()
+	fixtureRepo(t, dir, map[string]string{
+		"cmd/tool.go": "package main\n\nfunc big() {} //nolint:cyclop\n",
+	})
+
+	out, err := runTarget(t, dir, "lint-no-prod-nolint")
+	if err == nil {
+		t.Fatal("expected exit 1, got exit 0")
+	}
+	if !strings.Contains(out, "cmd/tool.go") {
+		t.Errorf("expected cmd/tool.go in output, got: %s", out)
+	}
+	if !strings.Contains(out, "nolint:cyclop") {
+		t.Errorf("expected nolint:cyclop in output, got: %s", out)
+	}
+}
+
+// New test: Top-level file in internal/ is caught.
+func TestTopLevelInternalFileCaught(t *testing.T) {
+	dir := t.TempDir()
+	fixtureRepo(t, dir, map[string]string{
+		"internal/doc.go": "package internal\n\nfunc big() {} //nolint:gocognit\n",
+	})
+
+	out, err := runTarget(t, dir, "lint-no-prod-nolint")
+	if err == nil {
+		t.Fatal("expected exit 1, got exit 0")
+	}
+	if !strings.Contains(out, "internal/doc.go") {
+		t.Errorf("expected internal/doc.go in output, got: %s", out)
+	}
+	if !strings.Contains(out, "nolint:gocognit") {
+		t.Errorf("expected nolint:gocognit in output, got: %s", out)
+	}
+}
+
+// New test: Violation count line appears on failure.
+func TestViolationCountLine(t *testing.T) {
+	dir := t.TempDir()
+	fixtureRepo(t, dir, map[string]string{
+		"cmd/a.go":        "package main\n\nfunc a() {} //nolint:cyclop\n",
+		"internal/b.go":   "package internal\n\nfunc b() {} //nolint:funlen\n",
+		"cmd/sub/c.go":    "package sub\n\nfunc c() {} //nolint:nestif\n",
+	})
+
+	out, err := runTarget(t, dir, "lint-no-prod-nolint")
+	if err == nil {
+		t.Fatal("expected exit 1, got exit 0")
+	}
+	if !strings.Contains(out, "3 violation(s) found") {
+		t.Errorf("expected '3 violation(s) found' in output, got: %s", out)
+	}
+}

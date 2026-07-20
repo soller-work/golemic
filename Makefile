@@ -16,13 +16,14 @@ test-e2e: build ## Run e2e suite (build-tagged; needs golemic_e2e sandbox + GOLE
 COMPLEXITY_LINTERS := cyclop|gocognit|funlen|nestif|maintidx|interfacebloat
 
 .PHONY: lint-no-prod-nolint
-lint-no-prod-nolint: ## Ban complexity //nolint directives in production Go files (cmd/**/*.go, internal/**/*.go, excl. _test.go)
-	@violations=$$(git ls-files 'cmd/**/*.go' 'internal/**/*.go' \
+lint-no-prod-nolint: ## Ban complexity //nolint directives in production Go files (cmd/*.go, internal/*.go, excl. _test.go)
+	@violations=$$(git ls-files 'cmd/*.go' 'internal/*.go' \
 		| grep -v '_test\.go$$' \
-		| xargs grep -EHn '//nolint:[^/]*\b($(COMPLEXITY_LINTERS))\b' 2>/dev/null || true); \
+		| xargs -r grep -EHn '//nolint:[^/]*\b($(COMPLEXITY_LINTERS))\b' 2>/dev/null || true); \
 	if [ -n "$$violations" ]; then \
+		count=$$(echo "$$violations" | wc -l); \
 		echo "$$violations" >&2; \
-		echo "ERROR: complexity nolint directives are forbidden in production code; split the function instead" >&2; \
+		echo "$${count} violation(s) found: complexity nolint directives are forbidden in production code; split the function instead" >&2; \
 		exit 1; \
 	fi
 
