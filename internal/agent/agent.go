@@ -309,6 +309,11 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 		if attemptErr != nil {
 			return 0, paths, attemptErr
 		}
+		// Semantic failure (stopReason:error|aborted) at exit 0 — not fallback-eligible,
+		// but still a real failure; return non-zero so the runner doesn't treat it as success (BR-4).
+		if tr.SemanticFailed {
+			return 1, paths, nil
+		}
 		return exitCode, paths, nil
 	}
 

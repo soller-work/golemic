@@ -40,6 +40,12 @@ const autoRetryEndFailTranscript = `{"type":"auto_retry_end","success":false,"at
 // The process itself exits 1 via the script; stopReason is "stop" so no semantic failure.
 const taskFailTranscript = `{"type":"message_end","message":{"role":"assistant","stopReason":"stop","errorMessage":""}}` + "\n"
 
+// abortedTranscript simulates a terminal stopReason:aborted at exit 0 (BR-4).
+const abortedTranscript = `{"type":"message_end","message":{"role":"assistant","stopReason":"aborted","errorMessage":""}}` + "\n"
+
+// errorNoLimitTranscript simulates stopReason:error without "limit" at exit 0 (BR-4).
+const errorNoLimitTranscript = `{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"internal server error"}}` + "\n"
+
 // TestRunRole_SingleModel_Success verifies single-model configs are unchanged.
 func TestRunRole_SingleModel_Success(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
@@ -225,6 +231,57 @@ func TestRunRole_ModelChainDeduplication(t *testing.T) {
 	}
 	if len(allArgs) != 1 {
 		t.Fatalf("deduplicated chain: expected 1 invocation, got %d", len(allArgs))
+	}
+}
+
+// TestRunRole_SemanticFailureAbortedAtExitZero verifies that stopReason:aborted at exit 0
+// is reported as a non-zero role result and does not trigger fallback (BR-4).
+func TestRunRole_SemanticFailureAbortedAtExitZero(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Model = "model-a, model-b"
+	cfg.Timeout = 5 * time.Second
+
+	var allArgs [][]string
+	scripts := []string{
+		writeScript(t, `echo '`+abortedTranscript[:len(abortedTranscript)-1]+`'; exit 0`),
+	}
+	captureArgsFactory(t, scripts, &allArgs)
+
+	exitCode, _, err := RunRole(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode == 0 {
+		t.Fatal("expected non-zero exit code for stopReason:aborted at exit 0, got 0")
+	}
+	if len(allArgs) != 1 {
+		t.Fatalf("expected 1 invocation (no fallback on aborted), got %d", len(allArgs))
+	}
+}
+
+// TestRunRole_SemanticFailureErrorNoLimitAtExitZero verifies that stopReason:error without
+// "limit" in errorMessage at exit 0 is reported as a non-zero role result and does not
+// trigger fallback (BR-4).
+func TestRunRole_SemanticFailureErrorNoLimitAtExitZero(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Model = "model-a, model-b"
+	cfg.Timeout = 5 * time.Second
+
+	var allArgs [][]string
+	scripts := []string{
+		writeScript(t, `echo '`+errorNoLimitTranscript[:len(errorNoLimitTranscript)-1]+`'; exit 0`),
+	}
+	captureArgsFactory(t, scripts, &allArgs)
+
+	exitCode, _, err := RunRole(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exitCode == 0 {
+		t.Fatal("expected non-zero exit code for stopReason:error (no limit) at exit 0, got 0")
+	}
+	if len(allArgs) != 1 {
+		t.Fatalf("expected 1 invocation (no fallback on non-limit error), got %d", len(allArgs))
 	}
 }
 
