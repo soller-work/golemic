@@ -1,13 +1,16 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
@@ -448,6 +451,9 @@ func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) { //no
 // Merge phase: rebase conflict → automerge_failed + merge_failed (BR-005, AC-006)
 // ---------------------------------------------------------------------------
 
+// AC-005: rebase failure that is NOT a merge conflict takes the existing failMerge path
+// (git status --porcelain reports no U-status entries). No automerge_conflict_retry event
+// is written; git rebase --abort is called; automerge_failed is written.
 func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 20)
@@ -463,7 +469,10 @@ func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //no
 				return "", nil
 			}
 			if name == "git" && args[0] == "rebase" && len(args) >= 2 && args[1] == "origin/main" {
-				return "", fmt.Errorf("CONFLICT (content): merge conflict in foo.go")
+				return "", fmt.Errorf("fatal: cannot rebase")
+			}
+			if name == "git" && args[0] == "status" && len(args) >= 2 && args[1] == "--porcelain" {
+				return "", nil // no U-status entries → not a merge conflict (AC-005)
 			}
 			if name == "git" && args[0] == "rebase" && len(args) >= 2 && args[1] == "--abort" {
 				abortCalled = true
@@ -503,12 +512,15 @@ func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //no
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
 	}
 	if !abortCalled {
-		t.Error("git rebase --abort should have been called on conflict (BR-005)")
+		t.Error("git rebase --abort should have been called on non-conflict rebase failure (AC-005)")
 	}
 	found := false
 	for _, ev := range written {
 		if ev.Type == eventlog.EventAutomergeFailed {
 			found = true
+		}
+		if ev.Type == eventlog.EventAutomergeConflictRetry {
+			t.Error("automerge_conflict_retry must NOT be written for non-conflict rebase failure (AC-005)")
 		}
 	}
 	if !found {
@@ -1709,5 +1721,429 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 	}
 	if !prMergedFound {
 		t.Error("pr_merged event not written (AC-006)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Conflict-retry test helpers
+// ---------------------------------------------------------------------------
+
+// makeConflictRetryRunner builds a Runner suitable for resolveRebaseConflictWithAgent tests.
+// It creates credentials, a guidelines file, and sets all fields required by the helper.
+func makeConflictRetryRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *[]eventlog.Event) {
+	t.Helper()
+	homeDir := t.TempDir()
+	repoRoot := t.TempDir()
+	project := "proj"
+
+	// credentials
+	credDir := filepath.Join(homeDir, ".golemic", project)
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	credJSON := `{"dev_token": "ghp_dev", "reviewer_token": "ghp_rev"}`
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loader := credentials.NewLoader(homeDir)
+	creds, err := loader.Load(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// guidelines
+	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 65)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	var written []eventlog.Event
+	r := &Runner{
+		executor:   exec,
+		issueNum:   65,
+		runID:      "test-run",
+		repoRoot:   repoRoot,
+		homeDir:    homeDir,
+		project:    project,
+		issue:      &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
+		cfg: &config.Config{
+			Project:        project,
+			VerifyCommand:  "go test ./...",
+			TimeoutMinutes: 30,
+			Models:         config.Models{Dev: "test/dev"},
+		},
+		creds:      creds,
+		branchName: "golemic/issue-65",
+		stderr:     &strings.Builder{},
+	}
+	return r, logPath, &written
+}
+
+// conflictRebaseExec builds a fakeExecutor that simulates the full merge-phase
+// execution path when git rebase origin/main fails with merge conflicts, the dev
+// agent is invoked (stubbed via runAgentFn), and post-agent verification passes or fails.
+//
+// statusAfterRebase is returned by git status --porcelain after the rebase fails.
+// statusAfterAgent is returned by git status --porcelain after the agent runs.
+// isAncestorAfterAgent: true → merge-base check succeeds; false → exits non-zero.
+// rebaseHeadAfterAgent: true → REBASE_HEAD exists (rebase still in progress); false → not found.
+type conflictRebaseExecConfig struct {
+	// porcelain status returned on first call (during rebase conflict detection)
+	statusOnConflict string
+	// conflicted files returned by git diff --name-only --diff-filter=U
+	conflictedFiles string
+	// porcelain status returned by git rev-parse --verify REBASE_HEAD (error = not found)
+	rebaseHeadError error
+	// porcelain status returned after agent runs
+	statusAfterAgent string
+	// whether merge-base --is-ancestor succeeds after agent
+	ancestorAfterAgent bool
+	// extra handler called on any unrecognised call
+	fallback func(name string, args ...string) (string, error)
+}
+
+func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeExecutor { //nolint:funlen,gocognit,cyclop
+	t.Helper()
+	statusCalls := 0
+	return &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			// runVerifyCommand uses RunInDir with "sh -c" (no env).
+			if name == "sh" {
+				if cfg.fallback != nil {
+					return cfg.fallback(name, args...)
+				}
+				return "", nil // verify_command passes by default
+			}
+			if name != "git" {
+				if cfg.fallback != nil {
+					return cfg.fallback(name, args...)
+				}
+				return "", fmt.Errorf("unexpected: %s %v", name, args)
+			}
+			switch args[0] {
+			case "fetch":
+				return "", nil
+			case "merge-base":
+				if len(args) >= 2 && args[1] == "--is-ancestor" {
+					// called twice: once in isBranchUpToDate (not ancestor), once in verifyRebaseComplete
+					if !cfg.ancestorAfterAgent {
+						return "", &preflight.ErrExit{ExitCode: 1}
+					}
+					// first call is isBranchUpToDate — return not-ancestor so we try to rebase
+					// second call is verifyRebaseComplete — return ancestor
+					// We differentiate by whether statusCalls > 0
+					if statusCalls == 0 {
+						return "", &preflight.ErrExit{ExitCode: 1}
+					}
+					return "", nil
+				}
+				return "", &preflight.ErrExit{ExitCode: 1}
+			case "rebase":
+				if len(args) >= 2 && args[1] == "origin/main" {
+					return "", fmt.Errorf("CONFLICT (content): merge conflict in foo.go")
+				}
+				if len(args) >= 2 && args[1] == "--abort" {
+					return "", nil
+				}
+				return "", fmt.Errorf("unexpected rebase args: %v", args)
+			case "status":
+				statusCalls++
+				if statusCalls == 1 {
+					return cfg.statusOnConflict, nil
+				}
+				return cfg.statusAfterAgent, nil
+			case "diff":
+				return cfg.conflictedFiles, nil
+			case "rev-parse":
+				if len(args) >= 3 && args[1] == "--verify" && args[2] == "REBASE_HEAD" {
+					return "", cfg.rebaseHeadError
+				}
+				return "", fmt.Errorf("unexpected rev-parse args: %v", args)
+			case "ls-remote":
+				return "", nil // branch gone, skip delete
+			}
+			if cfg.fallback != nil {
+				return cfg.fallback(name, args...)
+			}
+			return "", fmt.Errorf("unexpected: git %v", args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && args[0] == "pr" && args[1] == "comment" {
+				return "", nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
+				// no_checks → verifyAndPush runs local verify_command
+				return "", noChecksErr()
+			}
+			if name == "sh" && args[0] == "-c" {
+				return "", nil // verify_command passes
+			}
+			if name == "git" && args[0] == "push" {
+				return "", nil // force push succeeds
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-merged", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil
+			}
+			if cfg.fallback != nil {
+				return cfg.fallback(name, args...)
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-001: happy path — conflict, agent resolves, CI absent → verify+push+merge
+// ---------------------------------------------------------------------------
+
+func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nolint:cyclop,gocognit
+	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
+		statusOnConflict:   "UU foo.go\n",
+		conflictedFiles:    "foo.go\n",
+		rebaseHeadError:    fmt.Errorf("not found"), // rebase done
+		statusAfterAgent:   "",                       // tree clean
+		ancestorAfterAgent: true,
+	})
+	r, logPath, eventsPtr := makeConflictRetryRunner(t, exec)
+
+	agentCalled := false
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		agentCalled = true
+		if !strings.Contains(cfg.UserPrompt, "foo.go") {
+			t.Errorf("prompt missing conflicted file 'foo.go'; prompt:\n%s", cfg.UserPrompt)
+		}
+		if !strings.Contains(cfg.UserPrompt, "golemic open-pr") {
+			t.Errorf("prompt should mention open-pr prohibition")
+		}
+		return 0, agent.TranscriptPaths{}, nil
+	})
+
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q (AC-001)", outcome, outcomeSuccess)
+	}
+	if !agentCalled {
+		t.Error("dev agent must be invoked for conflict resolution (AC-001)")
+	}
+
+	var conflictRetryFound, prMergedFound bool
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeConflictRetry {
+			conflictRetryFound = true
+			var p struct {
+				Result          string   `json:"result"`
+				ConflictedFiles []string `json:"conflictedFiles"`
+			}
+			if err := json.Unmarshal(ev.Payload, &p); err != nil {
+				t.Fatalf("unmarshal automerge_conflict_retry payload: %v", err)
+			}
+			if p.Result != "resolved" {
+				t.Errorf("automerge_conflict_retry result: got %q, want %q", p.Result, "resolved")
+			}
+			if len(p.ConflictedFiles) == 0 || p.ConflictedFiles[0] != "foo.go" {
+				t.Errorf("automerge_conflict_retry conflictedFiles: got %v, want [foo.go]", p.ConflictedFiles)
+			}
+		}
+		if ev.Type == eventlog.EventPRMerged {
+			prMergedFound = true
+		}
+	}
+	if !conflictRetryFound {
+		t.Error("automerge_conflict_retry event not written (AC-001)")
+	}
+	if !prMergedFound {
+		t.Error("pr_merged event not written (AC-001)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-002: conflict resolved but verify_command fails → merge_failed
+// ---------------------------------------------------------------------------
+
+func TestRunMergePhase_ConflictResolved_VerifyFails_AC002(t *testing.T) { //nolint:cyclop
+	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
+		statusOnConflict:   "UU bar.go\n",
+		conflictedFiles:    "bar.go\n",
+		rebaseHeadError:    fmt.Errorf("not found"),
+		statusAfterAgent:   "",
+		ancestorAfterAgent: true,
+		fallback: func(name string, args ...string) (string, error) {
+			// override verify_command to fail
+			if name == "sh" && len(args) >= 2 && args[0] == "-c" {
+				return "", fmt.Errorf("verify_command failed")
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	})
+	r, logPath, eventsPtr := makeConflictRetryRunner(t, exec)
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 0, agent.TranscriptPaths{}, nil
+	})
+
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q (AC-002)", outcome, outcomeMergeFailed)
+	}
+
+	var retryFound, failFound bool
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeConflictRetry {
+			retryFound = true
+			var p struct{ Result string `json:"result"` }
+			_ = json.Unmarshal(ev.Payload, &p)
+			if p.Result != "resolved" {
+				t.Errorf("retry result: got %q, want resolved (AC-002)", p.Result)
+			}
+		}
+		if ev.Type == eventlog.EventAutomergeFailed {
+			failFound = true
+		}
+	}
+	if !retryFound {
+		t.Error("automerge_conflict_retry event not written (AC-002)")
+	}
+	if !failFound {
+		t.Error("automerge_failed event not written (AC-002)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-003: agent exits non-zero → unresolved, abort, failMerge
+// ---------------------------------------------------------------------------
+
+func TestRunMergePhase_ConflictAgentNonZeroExit_AC003(t *testing.T) { //nolint:cyclop
+	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
+		statusOnConflict: "UU foo.go\n",
+		conflictedFiles:  "foo.go\n",
+		// no verification checks needed — agent exits non-zero
+		rebaseHeadError:    nil, // doesn't matter; agent exits non-zero so verification skipped
+		statusAfterAgent:   "",
+		ancestorAfterAgent: true,
+	})
+	r, logPath, eventsPtr := makeConflictRetryRunner(t, exec)
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 1, agent.TranscriptPaths{Stderr: "/tmp/err.log"}, nil
+	})
+
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q (AC-003)", outcome, outcomeMergeFailed)
+	}
+
+	var retryFound bool
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeConflictRetry {
+			retryFound = true
+			var p struct{ Result string `json:"result"` }
+			_ = json.Unmarshal(ev.Payload, &p)
+			if p.Result != "unresolved" {
+				t.Errorf("retry result: got %q, want unresolved (AC-003)", p.Result)
+			}
+		}
+		if ev.Type == eventlog.EventPRMerged {
+			t.Error("pr_merged must not be written when agent exits non-zero (AC-003)")
+		}
+	}
+	if !retryFound {
+		t.Error("automerge_conflict_retry event not written (AC-003)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-004: agent exits 0 but post-verification fails (rebase still in progress)
+// ---------------------------------------------------------------------------
+
+func TestRunMergePhase_ConflictPostVerificationFails_RebaseInProgress_AC004(t *testing.T) { //nolint:cyclop
+	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
+		statusOnConflict:   "UU foo.go\n",
+		conflictedFiles:    "foo.go\n",
+		rebaseHeadError:    nil, // REBASE_HEAD exists → rebase still in progress
+		statusAfterAgent:   "",
+		ancestorAfterAgent: true,
+	})
+	r, logPath, eventsPtr := makeConflictRetryRunner(t, exec)
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 0, agent.TranscriptPaths{}, nil
+	})
+
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q (AC-004)", outcome, outcomeMergeFailed)
+	}
+
+	var retryFound bool
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeConflictRetry {
+			retryFound = true
+			var p struct{ Result string `json:"result"` }
+			_ = json.Unmarshal(ev.Payload, &p)
+			if p.Result != "unresolved" {
+				t.Errorf("retry result: got %q, want unresolved (AC-004)", p.Result)
+			}
+		}
+	}
+	if !retryFound {
+		t.Error("automerge_conflict_retry event not written (AC-004)")
+	}
+}
+
+// AC-004 variant: tree dirty after agent
+func TestRunMergePhase_ConflictPostVerificationFails_TreeDirty_AC004b(t *testing.T) { //nolint:cyclop
+	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
+		statusOnConflict:   "UU foo.go\n",
+		conflictedFiles:    "foo.go\n",
+		rebaseHeadError:    fmt.Errorf("not found"), // rebase done
+		statusAfterAgent:   " M foo.go\n",           // dirty tree
+		ancestorAfterAgent: true,
+	})
+	r, logPath, eventsPtr := makeConflictRetryRunner(t, exec)
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 0, agent.TranscriptPaths{}, nil
+	})
+
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q (AC-004b)", outcome, outcomeMergeFailed)
+	}
+
+	for _, ev := range *eventsPtr {
+		if ev.Type == eventlog.EventAutomergeConflictRetry {
+			var p struct{ Result string `json:"result"` }
+			_ = json.Unmarshal(ev.Payload, &p)
+			if p.Result != "unresolved" {
+				t.Errorf("retry result: got %q, want unresolved (AC-004b)", p.Result)
+			}
+		}
+	}
+}
+
+// AC-004 variant: origin/main not ancestor after retry
+func TestRunMergePhase_ConflictPostVerificationFails_NotAncestor_AC004c(t *testing.T) { //nolint:cyclop
+	// ancestorAfterAgent=false makes the second merge-base call return exit 1
+	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
+		statusOnConflict:   "UU foo.go\n",
+		conflictedFiles:    "foo.go\n",
+		rebaseHeadError:    fmt.Errorf("not found"),
+		statusAfterAgent:   "",
+		ancestorAfterAgent: false,
+	})
+	r, logPath, eventsPtr := makeConflictRetryRunner(t, exec)
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 0, agent.TranscriptPaths{}, nil
+	})
+
+	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q (AC-004c)", outcome, outcomeMergeFailed)
 	}
 }

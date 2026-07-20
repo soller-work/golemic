@@ -21,19 +21,20 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	EventRunStarted       = "run_started"
-	EventWorktreeCreated  = "worktree_created"
-	EventDevStarted       = "dev_started"
-	EventPROpened         = "pr_opened"
-	EventReviewSubmitted  = "review_submitted"
-	EventRunFinished      = "run_finished"
-	EventAgentCompleted   = "agent_completed"
-	EventCIWaitFinished   = "ci_wait_finished"
-	EventPRMerged         = "pr_merged"
-	EventAutomergeSkipped = "automerge_skipped"
-	EventAutomergeFailed  = "automerge_failed"
-	EventIssueClaimed     = "issue_claimed"
-	EventIssueReleased    = "issue_released"
+	EventRunStarted              = "run_started"
+	EventWorktreeCreated         = "worktree_created"
+	EventDevStarted              = "dev_started"
+	EventPROpened                = "pr_opened"
+	EventReviewSubmitted         = "review_submitted"
+	EventRunFinished             = "run_finished"
+	EventAgentCompleted          = "agent_completed"
+	EventCIWaitFinished          = "ci_wait_finished"
+	EventPRMerged                = "pr_merged"
+	EventAutomergeSkipped        = "automerge_skipped"
+	EventAutomergeFailed         = "automerge_failed"
+	EventAutomergeConflictRetry  = "automerge_conflict_retry"
+	EventIssueClaimed            = "issue_claimed"
+	EventIssueReleased           = "issue_released"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -50,6 +51,7 @@ func AllEventTypes() []string {
 		EventPRMerged,
 		EventAutomergeSkipped,
 		EventAutomergeFailed,
+		EventAutomergeConflictRetry,
 		EventIssueClaimed,
 		EventIssueReleased,
 	}
@@ -139,6 +141,39 @@ func ValidateIssueReleasedPayload(raw json.RawMessage) error {
 // MarshalIssueReleasedPayload encodes an issue_released payload.
 func MarshalIssueReleasedPayload(issueNumber int, reason string) (json.RawMessage, error) {
 	return json.Marshal(issueReleasedData{IssueNumber: issueNumber, Reason: reason})
+}
+
+// automergeConflictRetryData is the payload shape for automerge_conflict_retry events.
+type automergeConflictRetryData struct {
+	ConflictedFiles []string `json:"conflictedFiles"`
+	Result          string   `json:"result"`
+	TurnID          int      `json:"turnId"`
+}
+
+// ValidateAutomergeConflictRetryPayload checks that the payload has non-empty conflictedFiles
+// and a result in {resolved, unresolved}.
+func ValidateAutomergeConflictRetryPayload(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("automerge_conflict_retry payload is empty")
+	}
+	var d automergeConflictRetryData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return fmt.Errorf("automerge_conflict_retry payload: invalid JSON: %w", err)
+	}
+	if len(d.ConflictedFiles) == 0 {
+		return fmt.Errorf("automerge_conflict_retry payload: conflictedFiles must be non-empty")
+	}
+	switch d.Result {
+	case "resolved", "unresolved":
+		return nil
+	default:
+		return fmt.Errorf("automerge_conflict_retry payload: result must be one of resolved, unresolved, got %q", d.Result)
+	}
+}
+
+// MarshalAutomergeConflictRetryPayload encodes an automerge_conflict_retry payload.
+func MarshalAutomergeConflictRetryPayload(conflictedFiles []string, result string, turnID int) (json.RawMessage, error) {
+	return json.Marshal(automergeConflictRetryData{ConflictedFiles: conflictedFiles, Result: result, TurnID: turnID})
 }
 
 // agentCompletedData is the payload shape for agent_completed events.
@@ -277,6 +312,12 @@ func (w *Writer) Write(event Event) error { //nolint:cyclop
 	// Validate payload for issue_released.
 	if event.Type == EventIssueReleased {
 		if err := ValidateIssueReleasedPayload(event.Payload); err != nil {
+			return err
+		}
+	}
+	// Validate payload for automerge_conflict_retry.
+	if event.Type == EventAutomergeConflictRetry {
+		if err := ValidateAutomergeConflictRetryPayload(event.Payload); err != nil {
 			return err
 		}
 	}
