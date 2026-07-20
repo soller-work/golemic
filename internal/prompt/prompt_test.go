@@ -316,6 +316,56 @@ func TestRenderDev_EmptyTitleBody(t *testing.T) {
 	}
 }
 
+// AS-1/AS-2: Dev prompt prohibits gh pr create and mandates golemic open-pr as sole PR opener
+func TestRenderDev_GhPrCreateProhibition(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	userPrompt, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+	if err != nil {
+		t.Fatalf("RenderDev() unexpected error: %v", err)
+	}
+
+	// AS-1: 'gh pr create' must appear in a sentence with a negative directive
+	lower := strings.ToLower(userPrompt)
+	ghIdx := strings.Index(lower, "gh pr create")
+	if ghIdx < 0 {
+		t.Fatal("dev prompt missing 'gh pr create'")
+	}
+	// Check that 'do not', 'must not', or 'never' appears in the same sentence (within 80 chars before or after)
+	window := lower[max(0, ghIdx-80):min(len(lower), ghIdx+80)]
+	foundNegative := strings.Contains(window, "do not") || strings.Contains(window, "must not") || strings.Contains(window, "never")
+	if !foundNegative {
+		t.Error("'gh pr create' must appear near a negative directive ('do not', 'must not', or 'never')")
+	}
+
+	// AS-2: 'golemic open-pr' must be bound to exclusivity ('only', 'sole', or 'exclusively')
+	openPRIdx := strings.Index(lower, "golemic open-pr")
+	if openPRIdx < 0 {
+		t.Fatal("dev prompt missing 'golemic open-pr'")
+	}
+	// Search around the last occurrence of 'golemic open-pr' for the exclusivity clause
+	lastOpenPRIdx := strings.LastIndex(lower, "golemic open-pr")
+	exclusiveWindow := lower[max(0, lastOpenPRIdx-80):min(len(lower), lastOpenPRIdx+80)]
+	foundExclusive := strings.Contains(exclusiveWindow, "only") || strings.Contains(exclusiveWindow, "sole") || strings.Contains(exclusiveWindow, "exclusively")
+	if !foundExclusive {
+		t.Error("dev prompt must bind 'golemic open-pr' to an exclusivity word ('only', 'sole', or 'exclusively')")
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // AC-001: Adversarial input renders without b64 and includes the title/body in the display section
 func TestRenderDev_AdversarialInput(t *testing.T) {
 	adversarialIssue := Issue{
