@@ -284,7 +284,6 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 		}()
 
 		pollTicker := time.NewTicker(pollInterval)
-		defer pollTicker.Stop()
 
 		lastGrowth := time.Now() // Track from process start
 		var lastByteSize int64 = 0
@@ -295,6 +294,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 			select {
 			case <-timeoutCtx.Done():
 				// Wall-clock timeout (terminal, not retried)
+				pollTicker.Stop()
 				killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				select {
 				case <-done:
@@ -338,6 +338,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 					stdoutFile.Close()  //nolint:errcheck
 					stderrFile.Close()  //nolint:errcheck
 					if killErr != nil {
+						pollTicker.Stop()
 						cancel()
 						return 0, paths, fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, killErr)
 					}
@@ -346,6 +347,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 
 			case waitErr = <-done:
 				// Process finished (either success or non-zero exit)
+				pollTicker.Stop()
 				stdoutFile.Close()  //nolint:errcheck
 				stderrFile.Close()  //nolint:errcheck
 				cancel()
@@ -369,6 +371,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 			}
 		}
 
+		pollTicker.Stop()
 		cancel()
 
 		// If not stalled, break out of retry loop (success or terminal error already returned above)

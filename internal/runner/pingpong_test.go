@@ -459,30 +459,26 @@ func TestPingPong_ReviewerStallDetection_AC006b(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-006 (original): Failed escalation comment still terminates escalated
+// P2-1: Dev-retry stall detection → outcome "stalled" + diagnostic
 // ---------------------------------------------------------------------------
 
-func TestPingPong_CommentFailureStillEscalated_AC006(t *testing.T) {
+func TestPingPong_DevRetryStallDetection_P2_1a(t *testing.T) {
 	var commentCalls []string
-	exec := pingPongExecutor(true, &commentCalls) // comment fails
+	exec := pingPongExecutor(false, &commentCalls)
 
 	r, logPath, stderr := setupPingPongRunner(t, exec)
 	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
 		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix C", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix this", exitCode: 0},
+		{role: "dev", doStalled: true}, // dev-retry stalls
 	}, nil))
 
 	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeEscalated {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeEscalated)
+	if outcome != outcomeStalled {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeStalled)
 	}
-	// Comment was attempted but failed; error should be logged
-	if !strings.Contains(stderr.String(), "Warning") {
-		t.Errorf("stderr should contain warning about comment failure, got: %s", stderr.String())
+	if !strings.Contains(stderr.String(), "dev agent stalled") {
+		t.Errorf("stderr should contain 'dev agent stalled' diagnostic, got: %s", stderr.String())
 	}
 }
 

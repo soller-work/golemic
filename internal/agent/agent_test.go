@@ -1075,15 +1075,15 @@ func TestRunRole_CustomEnvVars_AC7(t *testing.T) {
 	sleepScript := `while true; do sleep 3600; done`
 	scriptPath := writeScript(t, sleepScript)
 
-	// Configure 3 retries: 1 initial + 3 retries = 4 invocations
-	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath, scriptPath, scriptPath})
+	// Spec AC-7: MAX_STALL_RETRIES=1 means exactly 2 total attempts (1 initial + 1 retry)
+	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
 	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "3") // custom retry count
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1") // spec value: exactly 2 total attempts
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1096,9 +1096,9 @@ func TestRunRole_CustomEnvVars_AC7(t *testing.T) {
 	}
 
 	// AC-7: Assert invocation count matches 1 + GOLEMIC_AGENT_MAX_STALL_RETRIES
-	expectedInvocations := 1 + 3 // 1 initial + 3 retries
+	expectedInvocations := 1 + 1 // 1 initial + 1 retry (per spec AC-7)
 	if *invocations != expectedInvocations {
-		t.Errorf("subprocess invocation count: got %d, want %d (1 initial + 3 configured retries)", *invocations, expectedInvocations)
+		t.Errorf("subprocess invocation count: got %d, want %d (1 initial + 1 configured retry)", *invocations, expectedInvocations)
 	}
 }
 
@@ -1161,5 +1161,20 @@ func TestParseMaxStallRetries_Invalid(t *testing.T) {
 				t.Errorf("parseMaxStallRetries(): got %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestParseIdleTimeout_ProductionBoundary validates the production boundary case:
+// with pollInterval=30s and IDLE_TIMEOUT_SEC=30, should accept (not default).
+func TestParseIdleTimeout_ProductionBoundary(t *testing.T) {
+	origPoll := pollInterval
+	t.Cleanup(func() { pollInterval = origPoll })
+	pollInterval = 30 * time.Second
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "30")
+	got := parseIdleTimeout()
+	want := 30 * time.Second
+	if got != want {
+		t.Errorf("parseIdleTimeout with production boundary (30s == 30s poll interval): got %v, want %v", got, want)
 	}
 }
