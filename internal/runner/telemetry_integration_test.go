@@ -211,6 +211,8 @@ func telemetryGitHandler(repoRoot string, args []string) (string, error) {
 		return repoRoot + "\n", nil // for resolveHostRepo
 	case "fetch", "worktree", "config", "branch", "status", "ls-remote":
 		return "", nil
+	case "merge-base":
+		return "", nil // branch is up-to-date
 	}
 	return "", fmt.Errorf("not mocked: git %v", args)
 }
@@ -224,10 +226,18 @@ func telemetryGhHandler(args []string) (string, error) {
 	case "issue":
 		return `{"title":"Test Issue","labels":[],"state":"OPEN"}`, nil
 	case "pr":
-		if len(args) >= 2 && args[1] == "comment" {
-			return "", nil
+		if len(args) < 2 {
+			return "[]", nil
 		}
-		return "[]", nil // pr list → no collision; pr checks → no checks
+		switch args[1] {
+		case "comment", "edit":
+			return "", nil
+		case "checks":
+			return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+		case "merge":
+			return "sha-tel\n", nil
+		}
+		return "[]", nil // pr list → no collision
 	case "repo":
 		return `{"owner":{"login":"testowner"},"name":"testrepo"}`, nil
 	case "api":

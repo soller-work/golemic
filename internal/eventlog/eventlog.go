@@ -250,10 +250,10 @@ func ValidateReviewSubmittedPayload(raw json.RawMessage) error {
 			"approved", "changes_requested", d.Verdict)
 	}
 	switch d.MergeConfidence {
-	case "high", "low":
+	case "high", "medium", "low":
 	default:
-		return fmt.Errorf("review_submitted payload: mergeConfidence must be %q or %q, got %q",
-			"high", "low", d.MergeConfidence)
+		return fmt.Errorf("review_submitted payload: mergeConfidence must be %q, %q, or %q, got %q",
+			"low", "medium", "high", d.MergeConfidence)
 	}
 	if d.ReviewID == "" {
 		return fmt.Errorf("review_submitted payload: reviewId is required")

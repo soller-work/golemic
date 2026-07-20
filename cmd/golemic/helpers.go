@@ -97,8 +97,8 @@ func validateReviewCommentInputs(prFlag, lineFlag int, pathFlag, sideFlag, bodyF
 
 // validateSubmitReviewInputs validates verdict, mergeConfidence, body, and pr flags.
 func validateSubmitReviewInputs(verdictFlag, mergeConfidenceFlag, bodyFlag string, prFlag int, stderr io.Writer) bool {
-	if mergeConfidenceFlag != "high" && mergeConfidenceFlag != "low" {
-		fmt.Fprintf(stderr, "Invalid merge confidence: must be 'high' or 'low', got %q\n", mergeConfidenceFlag)
+	if mergeConfidenceFlag != "high" && mergeConfidenceFlag != "medium" && mergeConfidenceFlag != "low" {
+		fmt.Fprintf(stderr, "Invalid merge confidence: must be 'low', 'medium', or 'high', got %q\n", mergeConfidenceFlag)
 		return false
 	}
 	if verdictFlag != "approved" && verdictFlag != "changes_requested" {
@@ -245,7 +245,7 @@ func parseSubmitReviewFlags(args []string, stderr io.Writer) (submitReviewFlags,
 	fs.StringVar(&flags.Verdict, "verdict", "", "Verdict: 'approved' or 'changes_requested' (required)")
 	fs.StringVar(&flags.Body, "body", "", "Review body (required)")
 	fs.IntVar(&flags.PR, "pr", 0, "PR number (required)")
-	fs.StringVar(&flags.MergeConfidence, "merge-confidence", "", "Merge confidence: 'high' or 'low' (required)")
+	fs.StringVar(&flags.MergeConfidence, "merge-confidence", "", "Merge confidence: 'low', 'medium', or 'high' (required)")
 
 	if err := fs.Parse(args[2:]); err != nil {
 		return submitReviewFlags{}, false

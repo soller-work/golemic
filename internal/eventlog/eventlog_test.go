@@ -388,6 +388,32 @@ func TestValidateReviewSubmitted_ZeroInlineCommentCount_Valid_AC008(t *testing.T
 	}
 }
 
+func TestValidateReviewSubmitted_MediumConfidence_Valid(t *testing.T) {
+	zero := 0
+	raw, _ := json.Marshal(map[string]interface{}{
+		"verdict": "approved", "mergeConfidence": "medium",
+		"reviewId": "PRR_abc",
+		"inlineCommentCount": &zero,
+	})
+	if err := ValidateReviewSubmittedPayload(raw); err != nil {
+		t.Errorf("expected no error for mergeConfidence=medium, got: %v", err)
+	}
+}
+
+func TestValidateReviewSubmitted_BogusConfidence_Invalid(t *testing.T) {
+	zero := 0
+	raw, _ := json.Marshal(map[string]interface{}{
+		"verdict": "approved", "mergeConfidence": "bogus",
+		"reviewId": "PRR_abc",
+		"inlineCommentCount": &zero,
+	})
+	if err := ValidateReviewSubmittedPayload(raw); err == nil {
+		t.Error("expected error for bogus mergeConfidence, got nil")
+	} else if !strings.Contains(err.Error(), "mergeConfidence") {
+		t.Errorf("error should mention mergeConfidence, got: %v", err)
+	}
+}
+
 func TestLastEventOfType_EmptySlice(t *testing.T) {
 	_, err := LastEventOfType([]Event{}, EventRunStarted)
 	if err == nil {
