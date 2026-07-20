@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -202,7 +203,7 @@ func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
 	}
 
 	// Verify transcript paths match expected pattern
-	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stdout.log")
+	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl")
 	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stderr.log")
 	if paths.Stdout != expectedStdout {
 		t.Errorf("stdout path: got %q, want %q", paths.Stdout, expectedStdout)
@@ -331,7 +332,7 @@ func TestRunRole_Timeout_AC002(t *testing.T) {
 	}
 
 	// ---- Verify transcript paths are correct ----
-	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stdout.log")
+	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl")
 	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stderr.log")
 	if paths.Stdout != expectedStdout {
 		t.Errorf("stdout path: got %q, want %q", paths.Stdout, expectedStdout)
@@ -368,7 +369,7 @@ exit 42`
 	}
 
 	// ---- Verify transcript files exist at correct paths ----
-	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stdout.log")
+	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl")
 	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stderr.log")
 
 	if paths.Stdout != expectedStdout {
@@ -781,6 +782,221 @@ func TestMain(m *testing.M) {
 }
 
 
+
+// argContains checks if args contains flag followed by want value.
+func argContains(args []string, flag, want string) bool {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == flag && args[i+1] == want {
+			return true
+		}
+	}
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// AC-6: Default idle timeout is 300s
+// ---------------------------------------------------------------------------
+
+func TestParseIdleTimeout_DefaultIs300s_AC6(t *testing.T) {
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "")
+	got := parseIdleTimeout()
+	want := 300 * time.Second
+	if got != want {
+		t.Errorf("default idle timeout: got %v, want %v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-1: pi launched with --mode json and deterministic --session-id
+// ---------------------------------------------------------------------------
+
+func TestRunRole_ModeJsonAndSessionID_AC1(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.RunID = "test-run-123"
+	cfg.TurnID = 5
+
+	var capturedArgs []string
+	scriptPath := writeScript(t, captureEnvScript())
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
+
+	ctx := context.Background()
+	exitCode, _, err := RunRole(ctx, cfg)
+
+	if err != nil {
+		t.Fatalf("RunRole failed: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code: got %d, want 0", exitCode)
+	}
+
+	// AC-1: Verify --mode json and --session-id are present
+	expectedSessionID := sanitizeSessionID("test-run-123-dev-5")
+	if !argContains(capturedArgs, "--mode", "json") {
+		t.Errorf("args missing '--mode json', got: %v", capturedArgs)
+	}
+	if !argContains(capturedArgs, "--session-id", expectedSessionID) {
+		t.Errorf("args missing '--session-id %s', got: %v", expectedSessionID, capturedArgs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-3: Silent pi killed→resumed with identical session-id, eventually ErrStalled
+// ---------------------------------------------------------------------------
+
+func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.RunID = "run-retry-test"
+	cfg.TurnID = 7
+	cfg.Timeout = 5 * time.Second
+
+	sleepForeverScript := `while true; do sleep 3600; done`
+	scriptPath := writeScript(t, sleepForeverScript)
+
+	// Capture all invocations and their args
+	var allInvocations [][]string
+	var mu sync.Mutex
+	invocationCount := 0
+	CommandFactory = func(name string, args ...string) *exec.Cmd {
+		mu.Lock()
+		allInvocations = append(allInvocations, append([]string{name}, args...))
+		invocationCount++
+		mu.Unlock()
+		cmd := exec.Command(scriptPath, args...)
+		return cmd
+	}
+	t.Cleanup(func() { CommandFactory = exec.Command })
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected ErrStalled, got nil")
+	}
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("error should wrap ErrStalled, got: %v", err)
+	}
+
+	// AC-3: Assert 3 total invocations (1 initial + 2 retries)
+	if invocationCount != 3 {
+		t.Errorf("invocation count: got %d, want 3 (1 initial + 2 retries)", invocationCount)
+	}
+
+	// AC-3: Extract and verify all session-ids are identical
+	expectedSessionID := sanitizeSessionID("run-retry-test-dev-7")
+	for idx, invocation := range allInvocations {
+		var sessionID string
+		for i := 0; i < len(invocation)-1; i++ {
+			if invocation[i] == "--session-id" {
+				sessionID = invocation[i+1]
+				break
+			}
+		}
+		if sessionID != expectedSessionID {
+			t.Errorf("invocation %d session-id: got %q, want %q", idx, sessionID, expectedSessionID)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-2: Fake pi with growing output never killed for stalling
+// ---------------------------------------------------------------------------
+
+func TestRunRole_SteadyOutputNotKilled_AC2(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	// Emit output every 200ms (< 1s idle timeout), run for ~2s
+	steadyScript := `
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  echo "output $i"
+  sleep 0.2
+done
+exit 0
+`
+	scriptPath := writeScript(t, steadyScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
+
+	ctx := context.Background()
+	exitCode, paths, err := RunRole(ctx, cfg)
+
+	// AC-2: Should complete successfully without stalling
+	if err != nil {
+		t.Fatalf("steady output should not trigger stall, got error: %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Errorf("exit code: got %d, want 0", exitCode)
+	}
+
+	// AC-2: Should be invoked exactly once (no stalls, no retries)
+	if *invocations != 1 {
+		t.Errorf("subprocess invocation count: got %d, want 1 (no stalls)", *invocations)
+	}
+
+	// AC-2: Verify output is present
+	stdoutBytes, err := os.ReadFile(paths.Stdout)
+	if err != nil {
+		t.Fatalf("failed to read stdout: %v", err)
+	}
+	if !strings.Contains(string(stdoutBytes), "output 1") {
+		t.Errorf("stdout should contain output, got: %q", string(stdoutBytes))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-4: Reviewer role has correct transcript paths
+// ---------------------------------------------------------------------------
+
+func TestRunRole_ReviewerActivityJsonl_AC4(t *testing.T) {
+	cfg := defaultRoleConfig(t, "reviewer")
+	cfg.ToolAllowlist = []string{"read", "bash"}
+
+	var capturedArgs []string
+	scriptPath := writeScript(t, captureEnvScript())
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
+
+	ctx := context.Background()
+	exitCode, paths, err := RunRole(ctx, cfg)
+
+	if err != nil {
+		t.Fatalf("RunRole failed: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code: got %d, want 0", exitCode)
+	}
+
+	// AC-4: Verify stdout (activity) transcript path ends in .activity.jsonl
+	if !strings.HasSuffix(paths.Stdout, "reviewer.activity.jsonl") {
+		t.Errorf("stdout path should end in 'reviewer.activity.jsonl', got: %q", paths.Stdout)
+	}
+
+	// AC-4: Verify stderr transcript path ends in .stderr.log
+	if !strings.HasSuffix(paths.Stderr, "reviewer.stderr.log") {
+		t.Errorf("stderr path should end in 'reviewer.stderr.log', got: %q", paths.Stderr)
+	}
+
+	// AC-4: Verify files exist
+	if _, err := os.Stat(paths.Stdout); err != nil {
+		t.Errorf("stdout transcript should exist: %v", err)
+	}
+	if _, err := os.Stat(paths.Stderr); err != nil {
+		t.Errorf("stderr transcript should exist: %v", err)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Stall detection tests (AC-1 through AC-7)

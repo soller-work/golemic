@@ -55,13 +55,14 @@ func TestWriteRunHeader_AllFieldsPresent(t *testing.T) {
 		{"branch", "golemic/issue-7"},
 		{"timeout", "45m0s"},
 		{"event log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "events.jsonl")},
-		{"dev stdout log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "dev.stdout.log")},
+		{"dev activity log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "dev.activity.jsonl")},
 		{"dev stderr log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "dev.stderr.log")},
-		{"reviewer stdout log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "reviewer.stdout.log")},
+		{"reviewer activity log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "reviewer.activity.jsonl")},
 		{"reviewer stderr log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "reviewer.stderr.log")},
 		{"dev worktree", filepath.Join(homeDir, ".golemic", "hdr-project", "worktrees", "issue-7")},
 		{"reviewer worktree", filepath.Join(homeDir, ".golemic", "hdr-project", "worktrees", "issue-7-review")},
-		{"tail tip", fmt.Sprintf("tail -f %s", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "events.jsonl"))},
+		{"dev tail tip", fmt.Sprintf("tail -f %s", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "dev.activity.jsonl"))},
+		{"reviewer tail tip", fmt.Sprintf("tail -f %s", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "reviewer.activity.jsonl"))},
 	}
 
 	for _, c := range checks {
