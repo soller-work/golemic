@@ -19,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golemic/internal/agent"
@@ -441,6 +442,36 @@ func (r *Runner) postEscalationComment(prNumber, roundCount int) {
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Warning: failed to post escalation comment: %v\n", err) //nolint:errcheck
+	}
+}
+
+// postModelChainExhaustedComment posts one sanitized PR comment when the model chain is
+// exhausted. Errors are logged and do not change the outcome (BR-10, BR-11).
+func (r *Runner) postModelChainExhaustedComment(prNumber int, chainErr *agent.ModelChainExhaustedError) {
+	if r.executor == nil {
+		return
+	}
+	models := make([]string, len(chainErr.Attempts))
+	categories := make([]string, len(chainErr.Attempts))
+	for i, a := range chainErr.Attempts {
+		models[i] = a.Model
+		categories[i] = a.Reason
+	}
+	body := fmt.Sprintf(
+		"golemic: role %q exhausted all configured models (%s) for issue #%d (PR #%d). "+
+			"Failure categories: %s. Human intervention required.",
+		chainErr.Role,
+		strings.Join(models, ", "),
+		r.issueNum, prNumber,
+		strings.Join(categories, ", "),
+	)
+	_, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
+		r.repoRoot,
+		"gh", "pr", "comment", fmt.Sprintf("%d", prNumber), "--body", body,
+	)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to post model chain exhausted comment: %v\n", err) //nolint:errcheck
 	}
 }
 

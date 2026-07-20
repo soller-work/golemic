@@ -31,6 +31,29 @@ var ErrTimeout = errors.New("agent execution timed out")
 // allowing pi to resume the session; terminal after maxStallRetries.
 var ErrStalled = errors.New("agent execution stalled")
 
+// ErrModelChainExhausted is the sentinel wrapped inside ModelChainExhaustedError.
+var ErrModelChainExhausted = errors.New("model chain exhausted")
+
+// ModelChainExhaustedError is returned by RunRole when every model in a configured
+// fallback chain has failed with a fallback-eligible technical error.
+type ModelChainExhaustedError struct {
+	Role     string
+	Attempts []AttemptSummary
+}
+
+func (e *ModelChainExhaustedError) Error() string {
+	models := make([]string, len(e.Attempts))
+	for i, a := range e.Attempts {
+		models[i] = a.Model + " (" + a.Reason + ")"
+	}
+	return fmt.Sprintf("%s: role %q exhausted model chain: %s",
+		ErrModelChainExhausted, e.Role, strings.Join(models, "; "))
+}
+
+func (e *ModelChainExhaustedError) Is(target error) bool {
+	return target == ErrModelChainExhausted
+}
+
 // ---------------------------------------------------------------------------
 // Command factory (injectable for tests)
 // ---------------------------------------------------------------------------
@@ -234,21 +257,14 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: worktreeDir %q is not a directory", cfg.WorktreeDir)
 	}
 
+	// ---- Parse model chain ----
+	chain, chainErr := ParseModelChain(cfg.Model)
+	if chainErr != nil {
+		return 0, TranscriptPaths{}, chainErr
+	}
+
 	// ---- Prepare static values ----
 	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role + "-" + strconv.Itoa(cfg.TurnID))
-	baseArgs := []string{
-		"-p",
-		"--mode", "json",
-		"--session-id", sessionID,
-		"--append-system-prompt", "@" + cfg.SystemPromptFile,
-		"--tools", strings.Join(cfg.ToolAllowlist, ","),
-		"--model", cfg.Model,
-	}
-	if cfg.Approve {
-		baseArgs = append(baseArgs, "--approve")
-	}
-	args := append(baseArgs, cfg.UserPrompt)
-
 	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".activity.jsonl")
 	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stderr.log")
 	golemicDir := filepath.Dir(cfg.GolemicBinaryPath)
@@ -259,152 +275,208 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 
 	paths = TranscriptPaths{Stdout: stdoutPath, Stderr: stderrPath}
 
-	// ---- Retry loop with stall detection ----
+	// ---- Model chain loop ----
+	var chainAttempts []AttemptSummary
+
+	for _, model := range chain {
+		var attemptErr error
+		exitCode, attemptErr = runModelAttempt(ctx, cfg, model, sessionID, golemicDir, stdoutPath, stderrPath)
+
+		// Wall-clock timeout is always terminal (BR-9).
+		if errors.Is(attemptErr, ErrTimeout) {
+			return 0, paths, attemptErr
+		}
+
+		tr := InspectTranscript(stdoutPath)
+
+		// Success: exit 0, no semantic failure, and no fallback-eligible signal
+		// (auto_retry_end success=false means Pi exhausted its own retries).
+		if attemptErr == nil && exitCode == 0 && !tr.SemanticFailed && !tr.FallbackEligible {
+			return exitCode, paths, nil
+		}
+
+		// Fallback-eligible failure: record and try next model.
+		if tr.FallbackEligible {
+			reason := tr.Reason
+			if reason == "" {
+				reason = "provider error"
+			}
+			chainAttempts = append(chainAttempts, AttemptSummary{Model: model, Reason: reason})
+			continue
+		}
+
+		// Terminal failure: propagate as-is (BR-6, BR-9).
+		if attemptErr != nil {
+			return 0, paths, attemptErr
+		}
+		// Semantic failure (stopReason:error|aborted) at exit 0 — not fallback-eligible,
+		// but still a real failure; return non-zero so the runner doesn't treat it as success (BR-4).
+		if tr.SemanticFailed {
+			return 1, paths, nil
+		}
+		return exitCode, paths, nil
+	}
+
+	// All models in chain exhausted with fallback-eligible failures (BR-7).
+	return 1, paths, &ModelChainExhaustedError{Role: cfg.Role, Attempts: chainAttempts}
+}
+
+// buildPiArgs constructs the argv for a pi --mode json subprocess for the given model.
+func buildPiArgs(cfg RoleConfig, model, sessionID string) []string {
+	args := []string{
+		"-p",
+		"--mode", "json",
+		"--session-id", sessionID,
+		"--append-system-prompt", "@" + cfg.SystemPromptFile,
+		"--tools", strings.Join(cfg.ToolAllowlist, ","),
+		"--model", model,
+	}
+	if cfg.Approve {
+		args = append(args, "--approve")
+	}
+	return append(args, cfg.UserPrompt)
+}
+
+// runModelAttempt runs a single Pi subprocess for the given model with stall-detection retries.
+// It is the inner execution engine; model chain logic lives in RunRole.
+// openTranscriptFiles truncates both transcript files and returns the open file handles.
+func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File, err error) {
+	stdout, err = os.OpenFile(stdoutPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agent: failed to create stdout transcript %s: %w", stdoutPath, err)
+	}
+	stderr, err = os.OpenFile(stderrPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
+	if err != nil {
+		stdout.Close() //nolint:errcheck
+		return nil, nil, fmt.Errorf("agent: failed to create stderr transcript %s: %w", stderrPath, err)
+	}
+	return stdout, stderr, nil
+}
+
+// newPiCmd builds and configures the pi subprocess without starting it.
+func newPiCmd(cfg RoleConfig, args []string, golemicDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
+	cmd := CommandFactory("pi", args...)
+	cmd.Dir = cfg.WorktreeDir
+	cmd.Env = append(
+		os.Environ(),
+		"GOLEMIC_RUN_ID="+cfg.RunID,
+		"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
+		"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
+		"GH_TOKEN="+cfg.GHToken,
+		"PATH="+golemicDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
+	)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
+	return cmd
+}
+
+func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, golemicDir, stdoutPath, stderrPath string) (exitCode int, err error) {
+	args := buildPiArgs(cfg, model, sessionID)
 	idleTimeout := parseIdleTimeout()
 	maxStallRetries := parseMaxStallRetries()
 
 	for attempt := 0; attempt <= maxStallRetries; attempt++ {
-		// Truncate transcript files fresh for each attempt
-		stdoutFile, err := os.OpenFile(stdoutPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
-		if err != nil {
-			return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create stdout transcript %s: %w", stdoutPath, err)
+		stdoutFile, stderrFile, fileErr := openTranscriptFiles(stdoutPath, stderrPath)
+		if fileErr != nil {
+			return 0, fileErr
 		}
-		stderrFile, err := os.OpenFile(stderrPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
-		if err != nil {
+		cmd := newPiCmd(cfg, args, golemicDir, stdoutFile, stderrFile)
+		if startErr := cmd.Start(); startErr != nil {
 			stdoutFile.Close() //nolint:errcheck
-			return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create stderr transcript %s: %w", stderrPath, err)
+			stderrFile.Close() //nolint:errcheck
+			return 0, fmt.Errorf("agent: failed to start pi process: %w", startErr)
 		}
-
-		cmd := CommandFactory("pi", args...)
-		cmd.Dir = cfg.WorktreeDir
-		cmd.Env = append(
-			os.Environ(),
-			"GOLEMIC_RUN_ID="+cfg.RunID,
-			"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
-			"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
-			"GH_TOKEN="+cfg.GHToken,
-			"PATH="+golemicDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
-		)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		cmd.Stdout = stdoutFile
-		cmd.Stderr = stderrFile
-
-		if err := cmd.Start(); err != nil {
-			stdoutFile.Close()  //nolint:errcheck
-			stderrFile.Close()  //nolint:errcheck
-			return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to start pi process: %w", err)
-		}
-
-		// ---- Wait with timeout and stall detection ----
-		timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-		done := make(chan error, 1)
-		go func() {
-			done <- cmd.Wait()
-		}()
-
-		pollTicker := time.NewTicker(pollInterval)
-
-		lastGrowth := time.Now() // Track from process start
-		var lastByteSize int64 = 0
-		stalled := false
-		var waitErr error
-
-		for {
-			select {
-			case <-timeoutCtx.Done():
-				// Wall-clock timeout (terminal, not retried)
-				pollTicker.Stop()
-				killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-				select {
-				case <-done:
-				case <-time.After(5 * time.Second):
-				}
-				stdoutFile.Close()  //nolint:errcheck
-				stderrFile.Close()  //nolint:errcheck
-				cancel()
-				if killErr != nil {
-					return 0, paths, fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
-						ErrTimeout, cfg.Role, cfg.Timeout, killErr)
-				}
-				return 0, paths, fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
-
-			case <-pollTicker.C:
-				// Check transcript growth for stall detection
-				currentSize, lastWrite := transcriptByteSize(stdoutFile, stderrFile)
-				if currentSize > lastByteSize {
-					// Growth detected; anchor the idle window to the actual last
-					// write, not the poll time, so detection is not delayed by up
-					// to one poll interval.
-					lastByteSize = currentSize
-					if lastWrite.After(lastGrowth) {
-						lastGrowth = lastWrite
-					}
-				}
-				// Declare stall when no growth for idleTimeout duration
-				if time.Since(lastGrowth) >= idleTimeout {
-					stalled = true
-					idleDuration := time.Since(lastGrowth)
-					// Log stall detection (P2-2)
-					fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no output for %v >= %v)\n",
-						cfg.Role, attempt, idleDuration, idleTimeout)
-					// Kill the process group
-					killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-					select {
-					case <-done:
-					case <-time.After(5 * time.Second):
-					}
-					// Close files before retry (P2-1 fix)
-					stdoutFile.Close()  //nolint:errcheck
-					stderrFile.Close()  //nolint:errcheck
-					if killErr != nil {
-						pollTicker.Stop()
-						cancel()
-						return 0, paths, fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, killErr)
-					}
-					break
-				}
-
-			case waitErr = <-done:
-				// Process finished (either success or non-zero exit)
-				pollTicker.Stop()
-				stdoutFile.Close()  //nolint:errcheck
-				stderrFile.Close()  //nolint:errcheck
-				cancel()
-
-				if waitErr == nil {
-					return 0, paths, nil
-				}
-
-				// exec.ExitError is expected for non-zero exit codes — return exit code
-				var exitErr *exec.ExitError
-				if errors.As(waitErr, &exitErr) {
-					return exitErr.ExitCode(), paths, nil
-				}
-
-				// Other errors (e.g. I/O on the pipes) are unexpected
-				return 0, paths, fmt.Errorf("agent: process wait failed: %w", waitErr)
-			}
-
-			if stalled {
-				break
-			}
-		}
-
-		pollTicker.Stop()
-		cancel()
-
-		// If not stalled, break out of retry loop (success or terminal error already returned above)
+		exitCode, stalled, waitErr := waitForProcess(ctx, cfg, cmd, stdoutFile, stderrFile, attempt, idleTimeout)
 		if !stalled {
-			break
+			return exitCode, waitErr
 		}
-
-		// Stalled: retry if attempts remaining
+		if waitErr != nil {
+			return 0, waitErr
+		}
 		if attempt >= maxStallRetries {
 			break
 		}
-		// Continue to next attempt
 	}
+	return 0, fmt.Errorf("%w: role %q stalled after %d attempts with idle timeout %v", ErrStalled, cfg.Role, maxStallRetries+1, idleTimeout)
+}
 
-	// All attempts stalled; return ErrStalled
-	return 0, paths, fmt.Errorf("%w: role %q stalled after %d attempts with idle timeout %v", ErrStalled, cfg.Role, maxStallRetries+1, idleTimeout)
+// trackTranscriptGrowth updates lastByteSize and lastGrowth based on observed transcript size.
+func trackTranscriptGrowth(currentSize int64, lastWrite time.Time, lastByteSize *int64, lastGrowth *time.Time) {
+	if currentSize > *lastByteSize {
+		*lastByteSize = currentSize
+		if lastWrite.After(*lastGrowth) {
+			*lastGrowth = lastWrite
+		}
+	}
+}
+
+// killProcessGroup sends SIGKILL to the process group, drains done, and closes transcript files.
+// Returns the kill error (nil on success).
+func killProcessGroup(cmd *exec.Cmd, stdoutFile, stderrFile *os.File, done <-chan error) error {
+	killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+	}
+	stdoutFile.Close() //nolint:errcheck
+	stderrFile.Close() //nolint:errcheck
+	return killErr
+}
+
+// waitForProcess runs the timeout/stall/wait loop after cmd has been started.
+// It closes stdoutFile and stderrFile in all code paths.
+// Returns (exitCode, stalled, err): when stalled=true and err=nil the caller should retry.
+func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, attempt int, idleTimeout time.Duration) (exitCode int, stalled bool, err error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	pollTicker := time.NewTicker(pollInterval)
+	lastGrowth := time.Now()
+	var lastByteSize int64
+	var waitErr error
+
+	for {
+		select {
+		case <-timeoutCtx.Done():
+			pollTicker.Stop()
+			killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
+			cancel()
+			if killErr != nil {
+				return 0, false, fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
+					ErrTimeout, cfg.Role, cfg.Timeout, killErr)
+			}
+			return 0, false, fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
+
+		case <-pollTicker.C:
+			currentSize, lastWrite := transcriptByteSize(stdoutFile, stderrFile)
+			trackTranscriptGrowth(currentSize, lastWrite, &lastByteSize, &lastGrowth)
+			if time.Since(lastGrowth) >= idleTimeout {
+				idleDuration := time.Since(lastGrowth)
+				fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no output for %v >= %v)\n",
+					cfg.Role, attempt, idleDuration, idleTimeout)
+				killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
+				pollTicker.Stop()
+				cancel()
+				if killErr != nil {
+					return 0, false, fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, killErr)
+				}
+				return 0, true, nil
+			}
+
+		case waitErr = <-done:
+			pollTicker.Stop()
+			stdoutFile.Close()  //nolint:errcheck
+			stderrFile.Close()  //nolint:errcheck
+			cancel()
+			if waitErr == nil {
+				return 0, false, nil
+			}
+			var exitErr *exec.ExitError
+			if errors.As(waitErr, &exitErr) {
+				return exitErr.ExitCode(), false, nil
+			}
+			return 0, false, fmt.Errorf("agent: process wait failed: %w", waitErr)
+		}
+	}
 }

@@ -254,6 +254,16 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 			fmt.Fprintf(r.stderr, "review_failed: reviewer agent stalled\n") //nolint:errcheck
 			return outcomeStalled
 		}
+		var chainErr *agent.ModelChainExhaustedError
+		if errors.As(err, &chainErr) {
+			r.writeAgentCompleted(eventLogPath, "reviewer", 1)
+			endSpan(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
+			if prNum, prErr := r.getPRNumber(eventLogPath); prErr == nil {
+				r.postModelChainExhaustedComment(prNum, chainErr)
+			}
+			return outcomeReviewFailed
+		}
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "review_failed: agent failed: %v\n", err) //nolint:errcheck
 		return outcomeReviewFailed
