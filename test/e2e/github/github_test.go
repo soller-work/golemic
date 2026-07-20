@@ -55,6 +55,21 @@ func requireGh(t *testing.T) {
 	}
 }
 
+// requireWritePermission skips the test when the active GH_TOKEN lacks write
+// or admin access on the given repo. Prevents deleteIssue failures when the
+// runner's dev-bot token has only READ permission on the e2e repo.
+func requireWritePermission(t *testing.T, repo string) {
+	t.Helper()
+	out, err := runGhCmdOnce("repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission")
+	if err != nil {
+		t.Skipf("skipping: cannot check permission on %s: %v", repo, err)
+	}
+	perm := strings.TrimSpace(out)
+	if perm != "ADMIN" && perm != "WRITE" {
+		t.Skipf("skipping: dev-bot lacks write on %s (viewerPermission=%s)", repo, perm)
+	}
+}
+
 // TestIssueLifecycle verifies AC-002:
 // Given: Harness ready, gh CLI authenticated
 // When: Test calls CreateTestIssue(title, body)
@@ -63,6 +78,7 @@ func requireGh(t *testing.T) {
 func TestIssueLifecycle(t *testing.T) {
 	requireGh(t)
 	repo := e2eRepo(t)
+	requireWritePermission(t, repo)
 
 	// Create an issue.
 	issueNum, err := CreateTestIssue(repo, "E2E Test: Issue Lifecycle", "This is a test issue for E2E infrastructure.")
@@ -98,6 +114,7 @@ func TestIssueLifecycle(t *testing.T) {
 func TestCreateTestIssue(t *testing.T) {
 	requireGh(t)
 	repo := e2eRepo(t)
+	requireWritePermission(t, repo)
 
 	uniqueTitle := fmt.Sprintf("E2E Test: Create %d", testTimestamp())
 	issueNum, err := CreateTestIssue(repo, uniqueTitle, "Body for create test")
@@ -120,6 +137,7 @@ func TestCreateTestIssue(t *testing.T) {
 func TestDeleteTestIssue(t *testing.T) {
 	requireGh(t)
 	repo := e2eRepo(t)
+	requireWritePermission(t, repo)
 
 	issueNum, err := CreateTestIssue(repo, "E2E Test: Delete Test", "Body for delete test")
 	if err != nil {
@@ -144,6 +162,7 @@ func TestDeleteTestIssue(t *testing.T) {
 func TestGitHubAssertions(t *testing.T) {
 	requireGh(t)
 	repo := e2eRepo(t)
+	requireWritePermission(t, repo)
 	repoPath := e2eRepoPath(t)
 	if repoPath == "" {
 		t.Skip("golemic_e2e not found locally")
@@ -191,6 +210,7 @@ func TestGitHubAssertions(t *testing.T) {
 func TestAssertReviewExists(t *testing.T) {
 	requireGh(t)
 	repo := e2eRepo(t)
+	requireWritePermission(t, repo)
 	repoPath := e2eRepoPath(t)
 	if repoPath == "" {
 		t.Skip("golemic_e2e not found locally")
@@ -228,6 +248,7 @@ func TestAssertReviewExists(t *testing.T) {
 func TestUniqueIssueNumber(t *testing.T) {
 	requireGh(t)
 	repo := e2eRepo(t)
+	requireWritePermission(t, repo)
 
 	// Create two issues with unique numbers (test timestamp in title).
 	title1 := fmt.Sprintf("E2E Test: Unique #1 %d", testTimestamp())
