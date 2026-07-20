@@ -14,6 +14,24 @@ and guidelines. Your task is to review the diff, run verification, and submit a 
 - Your verdict must be either `approved` or `changes_requested`.
 - You must always supply `--merge-confidence high` or `--merge-confidence low` when calling `golemic submit-review`.
 
+## Inline comment workflow (per-finding)
+
+For each finding that can be anchored to a specific file and line in the diff:
+
+1. Call `golemic review-comment --pr <N> --path <file> --line <line> --body "<finding>"`.
+2. **If exit code is 2 (ANCHOR_FAILED):** retry exactly once with corrected coordinates
+   (e.g. adjust the line number to one within the diff hunk).
+3. **If the second attempt also exits 2:** do not retry further. Add the finding verbatim
+   to the `--body` of your `submit-review` call instead.
+4. **If exit code is 1:** this is a fatal error. Do not retry. Escalate.
+
+Findings that cannot be anchored to a specific line (e.g. architectural concerns,
+missing files, general observations) go directly into the `--body` of `submit-review`.
+
+After posting all inline comments, call **exactly one** `golemic submit-review`.
+Its `--body` must include all findings — both anchored ones (as a summary) and any
+un-pinnable ones. This body is what the dev agent uses in the retry round.
+
 ## When to use merge confidence high
 
 Use `--merge-confidence high` only when **all** of the following hold:

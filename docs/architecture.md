@@ -68,10 +68,11 @@ des Kerns; die Fach- und Kontrolllogik bleibt davon getrennt.
 
 ### 2.4 GitHub-Interaktion über `gh` CLI
 Kern und Rollen sprechen GitHub über die **`gh` CLI** (`gh issue view`,
-`gh pr create`, `gh pr review`), Auth über `GH_TOKEN`. Grund: maximal schlank —
+`gh pr create`, `gh api graphql`), Auth über `GH_TOKEN`. Grund: maximal schlank —
 `gh` deckt Issues, PRs und Reviews out-of-the-box ab, regelt Auth und Pagination,
-und die Rollen nutzen dieselben Befehle in ihrer Shell. Direkte REST/GraphQL-Aufrufe
-werden nur gezielt nachgerüstet, wenn `gh` etwas nicht kann. Der Verbindungstest im
+und die Rollen nutzen dieselben Befehle in ihrer Shell. Für Review-Operationen, die
+`gh pr review` nicht unterstützt (inline Threads, pending-Review-Flow), werden
+gezielte GraphQL-Mutations über `gh api graphql` aufgerufen. Der Verbindungstest im
 Setup ist dann simpel (`gh auth status`).
 
 **`git push` und Commit-Identität:** git ignoriert `GH_TOKEN`. Damit der Dev nicht
@@ -105,10 +106,19 @@ Event-Log ist zugleich **Historie, Audit und Recovery**: der Runner kann den
 Zustand daraus rekonstruieren und einen abgebrochenen Lauf fortsetzen (Recovery
 ist eine spätere Iteration, siehe §2.11).
 
-**Ein Kanal, keine Divergenz.** Der Reviewer ruft *ein* Tool `submit-review`, das
-**beides** tut: Event ins Log schreiben **und** via `gh pr review` nach GitHub
-spiegeln. Das Event-Log ist die *interne Wahrheit*, GitHub die *Projektion*.
-Analog `open-pr` für den Dev.
+**Ein Kanal, keine Divergenz.** Der Reviewer ruft pro Finding `review-comment` (inline
+Thread) und abschließend genau einmal `submit-review` (Verdikt + Summary). Beide
+Tools koppeln GitHub-Aufruf und Logging atomar. Das Event-Log ist die *interne Wahrheit*,
+GitHub die *Projektion*. Analog `open-pr` für den Dev.
+
+**Reviewer-Flow (GraphQL):**
+1. Pro pinnable Finding: `golemic review-comment --pr N --path … --line … --body …`
+   → `addPullRequestReviewThread` auf den viewer-pending-Review (discover-or-create via
+   `reviews(states:PENDING)` + `addPullRequestReview`).
+   Exit 2 = ANCHOR_FAILED → 1 Retry; zweiter Exit 2 → Finding in Summary-Body.
+2. Abschluss: `golemic submit-review --verdict … --body … --pr N --merge-confidence …`
+   → `submitPullRequestReview(event:APPROVE|REQUEST_CHANGES, body)` → schreibt
+   `review_submitted` Event mit erweitertem Payload.
 
 **Lauf-Kontext-Vertrag (Env-Vars).** Die Subcommands laufen als eigene Prozesse in
 der Shell des LLM und finden ihren Lauf-Kontext über Umgebungsvariablen, die der
@@ -152,7 +162,7 @@ Lifecycle-Events schreibt der Runner selbst.
 | Runner | `worktree_created` | `path`, `branch`, `baseSha`, `role` |
 | Dev (`emit`) | `dev_started` | – |
 | Dev (`open-pr`) | `pr_opened` | `prNumber`, `url`, `branch` |
-| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`high`/`low`) |
+| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`high`/`low`), `reviewId` (GraphQL node id), `inlineCommentCount` (int ≥ 0) |
 | Runner | `ci_wait_finished` | `result`, `round` |
 | Runner | `automerge_skipped` | `reason` |
 | Runner | `automerge_failed` | `reason` |
@@ -426,14 +436,25 @@ When the gate passes:
 
 On `merge_failed`, worktrees are left in place for debugging. Cleanup only runs on `success`.
 
-### submit-review Extension
+### submit-review Extension and review-comment (Slice A of #35)
 
-`golemic submit-review` gains a required `--merge-confidence high|low` flag (BR-009). It is validated fail-fast before any `gh` call. The value is written into the `review_submitted` event payload and mirrored as a `confidence:*` label on the PR (label created on demand).
+`golemic submit-review` uses GraphQL exclusively (BR-001) via a discover-or-create
+pending-review flow followed by `submitPullRequestReview`. The `review_submitted`
+event payload now includes `reviewId` (GraphQL node id) and `inlineCommentCount`
+(integer ≥ 0) in addition to the existing fields.
+
+`golemic review-comment` adds one inline thread to the viewer’s pending review via
+`addPullRequestReviewThread`. Exit 2 signals ANCHOR_FAILED (line/path/side not in diff)
+so the reviewer agent can apply the 1-retry contract (BR-003). Exit 1 is any other
+failure. No event is written by `review-comment`.
+
+The `--merge-confidence high|low` flag on `submit-review` is unchanged (BR-009). It is
+validated fail-fast before any `gh` call and mirrored as a `confidence:*` label on the PR.
 
 **Implementation modules:**
 - `internal/runner/merge.go` — gate, rebase, verify, push, squash merge
-- `internal/eventlog/eventlog.go` — `pr_merged`, `automerge_skipped`, `automerge_failed` event types; `mergeConfidence` in `review_submitted` payload
-- `cmd/golemic/main.go` — `--merge-confidence` flag and PR label mirroring
+- `internal/eventlog/eventlog.go` — `pr_merged`, `automerge_skipped`, `automerge_failed` event types; extended `review_submitted` payload with `reviewId` + `inlineCommentCount`
+- `cmd/golemic/main.go` — `review-comment` subcommand; GraphQL-based `submit-review`; `--merge-confidence` flag and PR label mirroring
 - `prompts/reviewer.md` — criteria for merge confidence high
 
 ## 6. Remote Gate: GitHub Actions verify

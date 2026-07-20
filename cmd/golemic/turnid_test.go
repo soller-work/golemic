@@ -38,8 +38,10 @@ func TestSubmitReview_DuplicateTurnIsNoOp_AC001(t *testing.T) { //nolint:cyclop
 	}
 
 	// Pre-populate log: first submit-review already written for turnId 5.
+	zero := 0
 	payload, _ := json.Marshal(map[string]interface{}{
 		"verdict": "changes_requested", "body": "fix it", "prNumber": 10, "mergeConfidence": "low",
+		"reviewId": "PRR_dedup", "inlineCommentCount": &zero,
 	})
 	writeEventToLog(t, logPath, eventlog.Event{
 		Type: eventlog.EventReviewSubmitted, Ts: time.Now().Format(time.RFC3339),
@@ -52,6 +54,7 @@ func TestSubmitReview_DuplicateTurnIsNoOp_AC001(t *testing.T) { //nolint:cyclop
 			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "review" {
 				ghCalled++
 			}
+			// Dedup fires before any gh call; executor should not be reached.
 			return "", fmt.Errorf("should not be called")
 		},
 	}
@@ -94,8 +97,10 @@ func TestSubmitReview_DistinctTurnIDsAllowBothReviews_AC002(t *testing.T) { //no
 	logPath := filepath.Join(dir, "events.jsonl")
 
 	// Round 1: turnId 2 already emitted review_submitted.
+	zero := 0
 	payload1, _ := json.Marshal(map[string]interface{}{
 		"verdict": "changes_requested", "body": "round1", "prNumber": 20, "mergeConfidence": "low",
+		"reviewId": "PRR_round1", "inlineCommentCount": &zero,
 	})
 	writeEventToLog(t, logPath, eventlog.Event{
 		Type: eventlog.EventReviewSubmitted, Ts: time.Now().Format(time.RFC3339),
@@ -109,12 +114,21 @@ func TestSubmitReview_DistinctTurnIDsAllowBothReviews_AC002(t *testing.T) { //no
 		"GOLEMIC_TURN_ID":   "4",
 	}
 
-	ghCalled := 0
+	submitCalled := 0
 	exec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "review" {
-				ghCalled++
-				return "ok", nil
+			if name == "gh" && args[0] == "repo" {
+				return `{"owner":{"login":"o"},"name":"r"}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "viewer{login}") {
+				return `{"data":{"viewer":{"login":"bot"},"repository":{"pullRequest":{"id":"PR_20","reviews":{"nodes":[]}}}}}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "addPullRequestReview") {
+				return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_round2"}}}}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "submitPullRequestReview") {
+				submitCalled++
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_round2","comments":{"totalCount":0}}}}}`, nil
 			}
 			if name == "gh" && args[0] == "label" {
 				return "", nil
@@ -133,8 +147,8 @@ func TestSubmitReview_DistinctTurnIDsAllowBothReviews_AC002(t *testing.T) { //no
 	if got != 0 {
 		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
 	}
-	if ghCalled != 1 {
-		t.Errorf("gh should be called once for distinct turnId; called %d time(s)", ghCalled)
+	if submitCalled != 1 {
+		t.Errorf("submitPullRequestReview should be called once for distinct turnId; called %d time(s)", submitCalled)
 	}
 
 	reader := eventlog.Reader{}
@@ -362,10 +376,19 @@ func TestSubmitReview_GhFailureThenSuccessInSameTurn_AC007(t *testing.T) { //nol
 		"GOLEMIC_TURN_ID":   "3",
 	}
 
-	// First invocation: gh fails.
+	// First invocation: GraphQL submit fails.
 	failExec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "review" {
+			if name == "gh" && args[0] == "repo" {
+				return `{"owner":{"login":"o"},"name":"r"}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "viewer{login}") {
+				return `{"data":{"viewer":{"login":"bot"},"repository":{"pullRequest":{"id":"PR_5","reviews":{"nodes":[]}}}}}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "addPullRequestReview") {
+				return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_5"}}}}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "submitPullRequestReview") {
 				return "", fmt.Errorf("network error")
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -391,13 +414,22 @@ func TestSubmitReview_GhFailureThenSuccessInSameTurn_AC007(t *testing.T) { //nol
 		}
 	}
 
-	// Second invocation: gh succeeds — should NOT be treated as duplicate.
-	ghCalled := 0
+	// Second invocation: GraphQL submit succeeds — should NOT be treated as duplicate.
+	submitCalled := 0
 	successExec := fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "review" {
-				ghCalled++
-				return "ok", nil
+			if name == "gh" && args[0] == "repo" {
+				return `{"owner":{"login":"o"},"name":"r"}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "viewer{login}") {
+				return `{"data":{"viewer":{"login":"bot"},"repository":{"pullRequest":{"id":"PR_5","reviews":{"nodes":[]}}}}}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "addPullRequestReview") {
+				return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_5"}}}}`, nil
+			}
+			if name == "gh" && args[0] == "api" && containsArg(args, "submitPullRequestReview") {
+				submitCalled++
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_5","comments":{"totalCount":0}}}}}`, nil
 			}
 			if name == "gh" && args[0] == "label" {
 				return "", nil
@@ -414,8 +446,8 @@ func TestSubmitReview_GhFailureThenSuccessInSameTurn_AC007(t *testing.T) { //nol
 	if got2 != 0 {
 		t.Fatalf("second invocation should succeed; exit code: %d, stderr: %s", got2, stderr2.String())
 	}
-	if ghCalled != 1 {
-		t.Errorf("gh should be called once on the successful retry; called %d time(s)", ghCalled)
+	if submitCalled != 1 {
+		t.Errorf("submitPullRequestReview should be called once on the successful retry; called %d time(s)", submitCalled)
 	}
 
 	// Exactly one review_submitted event for turnId 3.
