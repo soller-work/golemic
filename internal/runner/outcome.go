@@ -36,6 +36,30 @@ func (r *Runner) countReviewSubmittedEvents(eventLogPath string) int {
 	return count
 }
 
+// latestReviewID reads the reviewId field from the most recent review_submitted event.
+func (r *Runner) latestReviewID(eventLogPath string) (string, error) {
+	reader := eventlog.Reader{}
+	events, err := reader.Read(eventLogPath)
+	if err != nil {
+		return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == eventlog.EventReviewSubmitted {
+			var d struct {
+				ReviewID string `json:"reviewId"`
+			}
+			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
+				return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
+			}
+			if d.ReviewID == "" {
+				return "", fmt.Errorf("NO_VALID_REVIEW: reviewId is empty in review_submitted event")
+			}
+			return d.ReviewID, nil
+		}
+	}
+	return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")
+}
+
 // latestReviewBody reads the body field from the most recent review_submitted event.
 func (r *Runner) latestReviewBody(eventLogPath string) (string, error) {
 	reader := eventlog.Reader{}

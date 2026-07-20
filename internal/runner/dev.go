@@ -14,8 +14,8 @@ import (
 )
 
 // runDevRetryAgent runs the dev agent in the existing worktree to address reviewer findings.
-// findings must be non-empty (enforced by RenderDevRetry).
-func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, findings, parentSpanID string, round int) string {
+// findings must be non-empty (enforced by RenderDevRetry). findingsJSON may be empty.
+func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, findings, findingsJSON, parentSpanID string, round int) string { //nolint:funlen
 	golemicBinaryPath, _ := os.Executable()
 	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
@@ -23,6 +23,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 
 	userPrompt, err := prompt.RenderDevRetry(
 		findings,
+		findingsJSON,
 		prompt.Issue{
 			Number: r.issue.Number,
 			Title:  r.issue.Title,

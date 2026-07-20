@@ -544,3 +544,52 @@ func TestRenderDevRebaseConflictResolve_MissingGuidelinesError(t *testing.T) {
 		t.Error("expected error for missing guidelines file, got nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RenderDevRetry tests (AC-002 trace: FindingsJSON injection)
+// ---------------------------------------------------------------------------
+
+func TestRenderDevRetry_ContainsFindingsJSON(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	findings := "Fix the null pointer"
+	findingsJSON := `[{"path":"main.go","line":10,"side":"RIGHT","body":"Nil pointer risk"}]`
+
+	p, err := RenderDevRetry(findings, findingsJSON, testIssue, "golemic/issue-42", "go test", guidelinesPath)
+	if err != nil {
+		t.Fatalf("RenderDevRetry: %v", err)
+	}
+
+	mustContain(t, p, []string{
+		findings,
+		"FindingsJSON",
+		findingsJSON,
+		"golemic slice --issue 42",
+		"authoritative spec",
+	})
+}
+
+func TestRenderDevRetry_NoFindingsJSONSectionWhenEmpty(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	p, err := RenderDevRetry("Some findings", "", testIssue, "golemic/issue-42", "go test", guidelinesPath)
+	if err != nil {
+		t.Fatalf("RenderDevRetry: %v", err)
+	}
+
+	if strings.Contains(p, "FindingsJSON") {
+		t.Errorf("prompt must not contain FindingsJSON section when findingsJSON is empty; got: %s", p)
+	}
+}
+
+func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	_, err := RenderDevRetry("", "", testIssue, "golemic/issue-42", "go test", guidelinesPath)
+	if err == nil {
+		t.Fatal("expected EMPTY_FINDINGS error for empty findings, got nil")
+	}
+	if !strings.Contains(err.Error(), "EMPTY_FINDINGS") {
+		t.Errorf("expected EMPTY_FINDINGS in error, got: %v", err)
+	}
+}

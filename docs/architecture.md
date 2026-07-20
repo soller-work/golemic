@@ -457,6 +457,18 @@ validated fail-fast before any `gh` call and mirrored as a `confidence:*` label 
 - `cmd/golemic/main.go` — `review-comment` subcommand; GraphQL-based `submit-review`; `--merge-confidence` flag and PR label mirroring
 - `prompts/reviewer.md` — criteria for merge confidence high
 
+### Pre-round Sweep and FindingsJSON Injection (Slice B of #35)
+
+**Pre-round sweep (BR-001):** At the start of every reviewer round, before `runReviewerAgent` is invoked, the runner queries the viewer's PENDING reviews on the PR via GraphQL (`pullRequest.reviews(first:1, states:[PENDING], author:{login:"viewer"})`). If a pending review node is found (orphan from a prior aborted round), the runner deletes it via `deletePullRequestReview`. An empty result (no pending review) is a no-op and the round proceeds normally. Sweep failure is fail-closed: an error terminates the round with `review_failed`.
+
+**FindingsJSON injection (BR-002):** When the verdict is `changes_requested` and the round count is below the maximum, the runner loads the just-submitted review's inline comments via REST (`GET /repos/{owner}/{repo}/pulls/{N}/reviews/{reviewId}/comments`) using the reviewer token. The comments are transformed into a structured `FindingsJSON` array — one entry per comment with `path`, `line`, `side`, and `body` fields — and injected into the dev-retry prompt alongside the existing summary body. Only comments from the current round's review (identified by `reviewId` from the latest `review_submitted` event) are included; no bleed from earlier rounds. An empty inline comment list (reviewer used only the summary body) yields an empty string and no `FindingsJSON` section in the prompt. REST call failure terminates the retry with `review_failed: failed to load inline comments: …`.
+
+**Implementation modules:**
+- `internal/runner/outcome.go` — `latestReviewID` helper (reads `reviewId` from latest `review_submitted` event)
+- `internal/runner/reviewer.go` — `sweepPendingReviews` (GraphQL discover+delete), `loadInlineComments` (REST fetch), `buildFindingsJSON` (transform + marshal)
+- `internal/runner/runner.go` — pre-round sweep call in `pingPongLoop`; `buildFindingsJSON` call in `handleVerdict` on `changes_requested`
+- `internal/prompt/prompt.go` — `devRetryTemplateData.FindingsJSON` field; conditional `FindingsJSON` section in `devRetryUserTemplate`
+
 ## 6. Remote Gate: GitHub Actions verify
 
 **Workflow:** `.github/workflows/verify.yml`
