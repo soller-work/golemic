@@ -168,8 +168,8 @@ func parseSubmitReviewResponse(submitOut string, stderr io.Writer) (string, int,
 		Data struct {
 			SubmitPullRequestReview struct {
 				PullRequestReview struct {
-					ID       string `json:"id"`
-					Comments struct {
+					FullDatabaseID string `json:"fullDatabaseId"`
+					Comments       struct {
 						TotalCount int `json:"totalCount"`
 					} `json:"comments"`
 				} `json:"pullRequestReview"`
@@ -180,7 +180,7 @@ func parseSubmitReviewResponse(submitOut string, stderr io.Writer) (string, int,
 		fmt.Fprintf(stderr, "Failed to submit review: failed to parse response: %v\n", err)
 		return "", 0, false
 	}
-	submittedReviewID := submitResp.Data.SubmitPullRequestReview.PullRequestReview.ID
+	submittedReviewID := submitResp.Data.SubmitPullRequestReview.PullRequestReview.FullDatabaseID
 	if submittedReviewID == "" {
 		fmt.Fprintf(stderr, "Failed to submit review: response missing review id\n")
 		return "", 0, false

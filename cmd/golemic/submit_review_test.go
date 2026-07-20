@@ -57,7 +57,7 @@ func graphqlSubmitHandler(prNum int, verdict, body, reviewID string, inlineCount
 			if !containsArg(args, "body="+body) {
 				return "", fmt.Errorf("expected body=%q in args, got %v", body, args)
 			}
-			return fmt.Sprintf(`{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":%q,"comments":{"totalCount":%d}}}}}`, reviewID, inlineCount), nil
+			return fmt.Sprintf(`{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":%q,"comments":{"totalCount":%d}}}}}`, reviewID, inlineCount), nil
 		case args[0] == "label" && args[1] == "create":
 			return "", nil
 		case args[0] == "pr" && args[1] == "edit":
@@ -580,7 +580,7 @@ func TestRunSubmitReview_LabelSetFailed(t *testing.T) { //nolint:cyclop
 				return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}`, nil
 			}
 			if name == "gh" && args[0] == "api" && containsArg(args, "submitPullRequestReview") {
-				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1","comments":{"totalCount":0}}}}}`, nil
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":"PRR_1","comments":{"totalCount":0}}}}}`, nil
 			}
 			if name == "gh" && args[0] == "label" && args[1] == "create" {
 				return "", nil
@@ -668,7 +668,7 @@ func TestRunSubmitReview_ExistingPendingReviewDiscovered(t *testing.T) { //nolin
 				if !containsArg(args, "reviewId=PRR_existing") {
 					return "", fmt.Errorf("expected existing review id, got %v", args)
 				}
-				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_existing","comments":{"totalCount":3}}}}}`, nil
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":"PRR_existing","comments":{"totalCount":3}}}}}`, nil
 			}
 			if name == "gh" && args[0] == "label" {
 				return "", nil
@@ -740,7 +740,7 @@ func TestRunSubmitReview_NoGhPrReviewCall(t *testing.T) { //nolint:cyclop
 				return `{"data":{"addPullRequestReview":{"pullRequestReview":{"id":"PRR_1"}}}}`, nil
 			}
 			if name == "gh" && args[0] == "api" && containsArg(args, "submitPullRequestReview") {
-				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_1","comments":{"totalCount":0}}}}}`, nil
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":"PRR_1","comments":{"totalCount":0}}}}}`, nil
 			}
 			if name == "gh" && args[0] == "label" {
 				return "", nil

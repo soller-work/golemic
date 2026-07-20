@@ -128,7 +128,7 @@ func TestSubmitReview_DistinctTurnIDsAllowBothReviews_AC002(t *testing.T) { //no
 			}
 			if name == "gh" && args[0] == "api" && containsArg(args, "submitPullRequestReview") {
 				submitCalled++
-				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_round2","comments":{"totalCount":0}}}}}`, nil
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":"PRR_round2","comments":{"totalCount":0}}}}}`, nil
 			}
 			if name == "gh" && args[0] == "label" {
 				return "", nil
@@ -429,7 +429,7 @@ func TestSubmitReview_GhFailureThenSuccessInSameTurn_AC007(t *testing.T) { //nol
 			}
 			if name == "gh" && args[0] == "api" && containsArg(args, "submitPullRequestReview") {
 				submitCalled++
-				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"id":"PRR_5","comments":{"totalCount":0}}}}}`, nil
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":"PRR_5","comments":{"totalCount":0}}}}}`, nil
 			}
 			if name == "gh" && args[0] == "label" {
 				return "", nil
