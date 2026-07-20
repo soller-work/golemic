@@ -68,6 +68,8 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 7. **Only after ` + "`" + `{{.VerifyCommand}}` + "`" + ` exits 0**, open the PR:
    ` + "`" + `golemic open-pr --title "..." --body "..."` + "`" + `
    The body **must** include a closing keyword so merging auto-closes the issue, e.g. ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `.
+
+> **Important:** Do not run ` + "`" + `gh pr create` + "`" + ` — the runner requires the ` + "`" + `pr_opened` + "`" + ` event that only ` + "`" + `golemic open-pr` + "`" + ` writes. ` + "`" + `golemic open-pr` + "`" + ` is the **sole** permitted method to open a PR.
 `
 
 const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
