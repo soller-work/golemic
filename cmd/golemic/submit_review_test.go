@@ -547,7 +547,7 @@ func TestRunSubmitReview_InvalidMergeConfidence_AC009(t *testing.T) {
 		},
 	}
 	var stdout, stderr bytes.Buffer
-	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "medium"}
+	args := []string{"golemic", "submit-review", "--verdict", "approved", "--body", "LGTM", "--pr", "123", "--merge-confidence", "bogus"}
 	got := runSubmitReview(args, &stdout, &stderr, func(k string) string { return env[k] }, exec)
 	if got != 1 {
 		t.Fatalf("exit code: got %d, want 1", got)

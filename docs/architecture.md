@@ -396,13 +396,12 @@ After a successful reviewer phase (valid `review_submitted` event, clean worktre
 
 ### Gate (DT-001)
 
-The merge phase evaluates three conditions in order:
+The merge phase evaluates two conditions in order:
 
 1. **Verdict** from the latest `review_submitted` event must be `approved`.
-2. **Merge confidence** from the same event must be `high`. The reviewer sets this via `golemic submit-review --merge-confidence high|low`. The event payload is authoritative; the `confidence:*` PR label is a read-only projection.
-3. **Risk label** on the originating issue must be `risk:low` or `risk:medium`. Read via `gh issue view --json labels` with the dev token. Missing label = `risk:high` (fail-closed). When multiple risk labels are present the most restrictive wins.
+2. **Merge confidence** from the same event must not be `low`. The reviewer sets this via `golemic submit-review --merge-confidence low|medium|high`. The event payload is authoritative; the `confidence:*` PR label is a read-only projection. Both `medium` and `high` allow auto-merge; `low` blocks it.
 
-If any condition is not met, the runner writes an `automerge_skipped` event (with a reason: `confidence low`, `risk:high`, or `no risk label`) and finishes with outcome `success` — a PR left open for the human is a valid delivery. Exit code 0, cleanup runs.
+If either condition is not met, the runner writes an `automerge_skipped` event (with reason `confidence low`) and finishes with outcome `success` — a PR left open for the human is a valid delivery. Exit code 0, cleanup runs. Risk labels on the issue do not participate in any merge decision.
 
 ### Rebase and Verification
 
@@ -448,14 +447,14 @@ event payload now includes `reviewId` (GraphQL node id) and `inlineCommentCount`
 so the reviewer agent can apply the 1-retry contract (BR-003). Exit 1 is any other
 failure. No event is written by `review-comment`.
 
-The `--merge-confidence high|low` flag on `submit-review` is unchanged (BR-009). It is
+The `--merge-confidence low|medium|high` flag on `submit-review` accepts three values (BR-009). It is
 validated fail-fast before any `gh` call and mirrored as a `confidence:*` label on the PR.
 
 **Implementation modules:**
 - `internal/runner/merge.go` — gate, rebase, verify, push, squash merge
 - `internal/eventlog/eventlog.go` — `pr_merged`, `automerge_skipped`, `automerge_failed` event types; extended `review_submitted` payload with `reviewId` + `inlineCommentCount`
 - `cmd/golemic/main.go` — `review-comment` subcommand; GraphQL-based `submit-review`; `--merge-confidence` flag and PR label mirroring
-- `prompts/reviewer.md` — criteria for merge confidence high
+- `prompts/reviewer.md` — three-tier merge confidence criteria (low blocks; medium/high auto-merge)
 
 ### Pre-round Sweep and FindingsJSON Injection (Slice B of #35)
 

@@ -72,12 +72,14 @@ func handleGitCmd(args []string) (string, error) {
 		sub = args[0]
 	}
 	switch sub {
-	case "fetch", "worktree", "config", "branch":
+	case "fetch", "worktree", "config", "branch", "ls-remote":
 		return "", nil
 	case "rev-parse":
 		return "abc123\n", nil
 	case "status":
 		return "", nil // clean
+	case "merge-base":
+		return "", nil // branch is up-to-date
 	}
 	return "", fmt.Errorf("not mocked: git %v", args)
 }
@@ -123,6 +125,14 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 			}
 			if len(args) < 2 || args[0] != "pr" {
 				return "[]", nil
+			}
+			switch args[1] {
+			case "checks":
+				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			case "merge":
+				return "sha-pp\n", nil
+			case "edit":
+				return "", nil
 			}
 			if args[1] != "comment" {
 				return "[]", nil

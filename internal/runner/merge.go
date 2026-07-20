@@ -17,53 +17,15 @@ import (
 	"golemic/internal/worktree"
 )
 
-// riskLabelFromIssue selects the effective risk label by taking the most restrictive
-// of all risk:* labels on the issue. Returns "" when no risk label is present.
-// BR-002: missing treated as risk:high (handled by caller); most restrictive wins.
-func riskLabelFromIssue(labels []issueLabel) string {
-	hasHigh := false
-	hasMedium := false
-	hasLow := false
-	for _, l := range labels {
-		switch l.Name {
-		case "risk:high":
-			hasHigh = true
-		case "risk:medium":
-			hasMedium = true
-		case "risk:low":
-			hasLow = true
-		}
-	}
-	if hasHigh {
-		return "risk:high"
-	}
-	if hasMedium {
-		return "risk:medium"
-	}
-	if hasLow {
-		return "risk:low"
-	}
-	return ""
-}
-
 // evaluateAutoMergeGate applies DT-001 given the already-known verdict=approved.
 // Returns (proceed bool, skipReason string).
-// The reason is one of: "confidence low", "risk:high", "no risk label".
+// Proceeds iff mergeConfidence != "low"; only skip reason is "confidence low".
 func (r *Runner) evaluateAutoMergeGate(eventLogPath string) (bool, string) {
 	confidence, err := r.latestMergeConfidence(eventLogPath)
-	if err != nil || confidence != "high" {
+	if err != nil || confidence == "low" {
 		return false, "confidence low"
 	}
-
-	riskLabel := riskLabelFromIssue(r.issue.Labels)
-	switch riskLabel {
-	case "risk:low", "risk:medium":
-		return true, ""
-	case "risk:high":
-		return false, "risk:high"
-	default:
-		return false, "no risk label"
-	}
+	return true, ""
 }
 
 // writeAutomergeSkipped appends an automerge_skipped event.

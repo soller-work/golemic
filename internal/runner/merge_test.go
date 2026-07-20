@@ -18,59 +18,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// riskLabelFromIssue unit tests
-// ---------------------------------------------------------------------------
-
-func TestRiskLabelFromIssue_LowOnly(t *testing.T) {
-	labels := []issueLabel{{Name: "risk:low"}}
-	if got := riskLabelFromIssue(labels); got != "risk:low" {
-		t.Errorf("got %q, want %q", got, "risk:low")
-	}
-}
-
-func TestRiskLabelFromIssue_MediumOnly(t *testing.T) {
-	labels := []issueLabel{{Name: "risk:medium"}}
-	if got := riskLabelFromIssue(labels); got != "risk:medium" {
-		t.Errorf("got %q, want %q", got, "risk:medium")
-	}
-}
-
-func TestRiskLabelFromIssue_HighOnly(t *testing.T) {
-	labels := []issueLabel{{Name: "risk:high"}}
-	if got := riskLabelFromIssue(labels); got != "risk:high" {
-		t.Errorf("got %q, want %q", got, "risk:high")
-	}
-}
-
-func TestRiskLabelFromIssue_Absent(t *testing.T) {
-	labels := []issueLabel{{Name: "bug"}, {Name: "enhancement"}}
-	if got := riskLabelFromIssue(labels); got != "" {
-		t.Errorf("got %q, want empty", got)
-	}
-}
-
-func TestRiskLabelFromIssue_NoLabels(t *testing.T) {
-	if got := riskLabelFromIssue(nil); got != "" {
-		t.Errorf("got %q, want empty", got)
-	}
-}
-
-func TestRiskLabelFromIssue_HighWinsOverLow(t *testing.T) {
-	labels := []issueLabel{{Name: "risk:low"}, {Name: "risk:high"}}
-	if got := riskLabelFromIssue(labels); got != "risk:high" {
-		t.Errorf("most restrictive should win; got %q, want %q", got, "risk:high")
-	}
-}
-
-func TestRiskLabelFromIssue_MediumWinsOverLow(t *testing.T) {
-	labels := []issueLabel{{Name: "risk:low"}, {Name: "risk:medium"}}
-	if got := riskLabelFromIssue(labels); got != "risk:medium" {
-		t.Errorf("most restrictive should win; got %q, want %q", got, "risk:medium")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// DT-001 gate evaluation — all six rows (AC-001 to AC-006)
+// DT-001 gate evaluation
 // ---------------------------------------------------------------------------
 
 // writeReviewEventForMerge writes a review_submitted event with verdict and confidence.
@@ -98,67 +46,33 @@ func writeReviewEventForMerge(t *testing.T, logPath, verdict, confidence string)
 	}
 }
 
-func makeRunnerWithLabels(labels []issueLabel) *Runner {
-	return &Runner{
-		issue: &issueData{Labels: labels},
-	}
-}
-
-// DT-001 row 1: approved + high + risk:low → proceed
-func TestEvaluateAutoMergeGate_RiskLow_Proceeds_AC001(t *testing.T) {
+// DT-001: approved + high → proceed (risk labels not consulted)
+func TestEvaluateAutoMergeGate_High_Proceeds(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
-	r := makeRunnerWithLabels([]issueLabel{{Name: "risk:low"}})
+	r := &Runner{issue: &issueData{}}
 	proceed, reason := r.evaluateAutoMergeGate(logPath)
 	if !proceed {
 		t.Errorf("expected proceed, got skip with reason %q", reason)
 	}
 }
 
-// DT-001 row 2: approved + high + risk:medium → proceed
-func TestEvaluateAutoMergeGate_RiskMedium_Proceeds_AC002(t *testing.T) {
+// DT-001: approved + medium → proceed (medium is not low)
+func TestEvaluateAutoMergeGate_Medium_Proceeds(t *testing.T) {
 	logPath := newLogPath(t)
-	writeReviewEventForMerge(t, logPath, "approved", "high")
-	r := makeRunnerWithLabels([]issueLabel{{Name: "risk:medium"}})
+	writeReviewEventForMerge(t, logPath, "approved", "medium")
+	r := &Runner{issue: &issueData{}}
 	proceed, reason := r.evaluateAutoMergeGate(logPath)
 	if !proceed {
 		t.Errorf("expected proceed, got skip with reason %q", reason)
 	}
 }
 
-// DT-001 row 3: approved + high + risk:high → skip
-func TestEvaluateAutoMergeGate_RiskHigh_Skips_AC003(t *testing.T) {
-	logPath := newLogPath(t)
-	writeReviewEventForMerge(t, logPath, "approved", "high")
-	r := makeRunnerWithLabels([]issueLabel{{Name: "risk:high"}})
-	proceed, reason := r.evaluateAutoMergeGate(logPath)
-	if proceed {
-		t.Error("expected skip, got proceed")
-	}
-	if reason != "risk:high" {
-		t.Errorf("reason: got %q, want %q", reason, "risk:high")
-	}
-}
-
-// DT-001 row 4: approved + high + absent label → skip with "no risk label"
-func TestEvaluateAutoMergeGate_NoRiskLabel_Skips_AC004(t *testing.T) {
-	logPath := newLogPath(t)
-	writeReviewEventForMerge(t, logPath, "approved", "high")
-	r := makeRunnerWithLabels([]issueLabel{{Name: "bug"}})
-	proceed, reason := r.evaluateAutoMergeGate(logPath)
-	if proceed {
-		t.Error("expected skip, got proceed")
-	}
-	if reason != "no risk label" {
-		t.Errorf("reason: got %q, want %q", reason, "no risk label")
-	}
-}
-
-// DT-001 row 5: approved + low + any → skip with "confidence low"
-func TestEvaluateAutoMergeGate_ConfidenceLow_Skips_AC005(t *testing.T) {
+// DT-001: approved + low → skip with "confidence low"
+func TestEvaluateAutoMergeGate_Low_Skips(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewEventForMerge(t, logPath, "approved", "low")
-	r := makeRunnerWithLabels([]issueLabel{{Name: "risk:low"}})
+	r := &Runner{issue: &issueData{}}
 	proceed, reason := r.evaluateAutoMergeGate(logPath)
 	if proceed {
 		t.Error("expected skip, got proceed")
@@ -168,17 +82,14 @@ func TestEvaluateAutoMergeGate_ConfidenceLow_Skips_AC005(t *testing.T) {
 	}
 }
 
-// DT-001 row 4 (conflicting): risk:low + risk:high → most restrictive = risk:high → skip
-func TestEvaluateAutoMergeGate_ConflictingLabels_MostRestrictiveWins(t *testing.T) {
+// DT-001: approved + high, no risk label → proceed (risk is ignored)
+func TestEvaluateAutoMergeGate_HighNoRiskLabel_Proceeds(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
-	r := makeRunnerWithLabels([]issueLabel{{Name: "risk:low"}, {Name: "risk:high"}})
+	r := &Runner{issue: &issueData{Labels: []issueLabel{{Name: "bug"}}}}
 	proceed, reason := r.evaluateAutoMergeGate(logPath)
-	if proceed {
-		t.Error("expected skip, got proceed")
-	}
-	if reason != "risk:high" {
-		t.Errorf("reason: got %q, want %q", reason, "risk:high")
+	if !proceed {
+		t.Errorf("expected proceed (risk ignored), got skip with reason %q", reason)
 	}
 }
 
@@ -299,89 +210,6 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop,goc
 // ---------------------------------------------------------------------------
 // Merge phase: skip path writes automerge_skipped and returns success (BR-008)
 // ---------------------------------------------------------------------------
-
-func TestRunMergePhase_RiskHigh_WritesAutomergeSkipped(t *testing.T) {
-	logPath := newLogPath(t)
-	writePROpenedEvent(t, logPath, 10)
-	writeReviewEventForMerge(t, logPath, "approved", "high")
-
-	r := &Runner{
-		executor:   &fakeExecutor{},
-		issueNum:   10,
-		runID:      "test-run",
-		repoRoot:   "/repo",
-		homeDir:    t.TempDir(),
-		issue:      &issueData{Labels: []issueLabel{{Name: "risk:high"}}},
-		cfg:        &config.Config{Project: "proj"},
-		creds:      mustLoadCreds(t),
-		branchName: "golemic/issue-10",
-	}
-
-	var written []eventlog.Event
-	w := &recordingWriter{events: &written}
-
-	outcome := r.runMergePhase(w, logPath)
-	if outcome != outcomeSuccess {
-		t.Errorf("outcome: got %q, want %q (skip must be success)", outcome, outcomeSuccess)
-	}
-
-	var found bool
-	for _, ev := range written {
-		if ev.Type == eventlog.EventAutomergeSkipped {
-			found = true
-			var payload map[string]string
-			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-				t.Fatalf("unmarshal: %v", err)
-			}
-			if payload["reason"] != "risk:high" {
-				t.Errorf("reason: got %q, want %q", payload["reason"], "risk:high")
-			}
-		}
-	}
-	if !found {
-		t.Error("automerge_skipped event not written")
-	}
-}
-
-func TestRunMergePhase_NoRiskLabel_WritesAutomergeSkipped(t *testing.T) {
-	logPath := newLogPath(t)
-	writePROpenedEvent(t, logPath, 11)
-	writeReviewEventForMerge(t, logPath, "approved", "high")
-
-	r := &Runner{
-		executor:   &fakeExecutor{},
-		issueNum:   11,
-		runID:      "test-run",
-		repoRoot:   "/repo",
-		homeDir:    t.TempDir(),
-		issue:      &issueData{Labels: []issueLabel{{Name: "bug"}}},
-		cfg:        &config.Config{Project: "proj"},
-		creds:      mustLoadCreds(t),
-		branchName: "golemic/issue-11",
-	}
-
-	var written []eventlog.Event
-	w := &recordingWriter{events: &written}
-	outcome := r.runMergePhase(w, logPath)
-
-	if outcome != outcomeSuccess {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
-	}
-	found := false
-	for _, ev := range written {
-		if ev.Type == eventlog.EventAutomergeSkipped {
-			found = true
-			var payload map[string]string
-			_ = json.Unmarshal(ev.Payload, &payload)
-			if payload["reason"] != "no risk label" {
-				t.Errorf("reason: got %q, want %q", payload["reason"], "no risk label")
-			}
-		}
-	}
-	if !found {
-		t.Error("automerge_skipped event not written")
-	}
-}
 
 // TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped also asserts that
 // gh pr edit --add-label confidence:low is called (P3-1 / AC-005).
