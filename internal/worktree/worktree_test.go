@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1087,5 +1088,69 @@ func TestCreateForReviewer_EventWriteFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "EVENT_WRITE_FAILED") {
 		t.Errorf("expected EVENT_WRITE_FAILED in error, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WriteMCPFiles tests (issue-92)
+// ---------------------------------------------------------------------------
+
+func TestWriteMCPFiles_WritesFileAndExclude(t *testing.T) {
+	// Create a minimal directory structure that resembles a git worktree.
+	dir := t.TempDir()
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.MkdirAll(filepath.Join(gitDir, "info"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Use a regular .git directory (not a worktree file) for simplicity.
+	cbmCache := filepath.Join(t.TempDir(), "cbm")
+
+	if err := WriteMCPFiles(dir, cbmCache); err != nil {
+		t.Fatalf("WriteMCPFiles: %v", err)
+	}
+
+	// .mcp.json must exist and contain expected keys
+	mcpPath := filepath.Join(dir, ".mcp.json")
+	data, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("read .mcp.json: %v", err)
+	}
+	content := string(data)
+	for _, want := range []string{"codebase-memory", "npx", "codebase-memory-mcp@0.9.0", cbmCache, dir} {
+		if !strings.Contains(content, want) {
+			t.Errorf(".mcp.json missing %q; content: %s", want, content)
+		}
+	}
+
+	// .git/info/exclude must contain .mcp.json
+	excludeData, err := os.ReadFile(filepath.Join(gitDir, "info", "exclude"))
+	if err != nil {
+		t.Fatalf("read exclude: %v", err)
+	}
+	if !strings.Contains(string(excludeData), ".mcp.json") {
+		t.Errorf(".git/info/exclude missing .mcp.json; content: %s", string(excludeData))
+	}
+}
+
+func TestWriteMCPFiles_ExcludeIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.MkdirAll(filepath.Join(gitDir, "info"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	cbmCache := t.TempDir()
+
+	// Call twice — exclude must not be doubled.
+	if err := WriteMCPFiles(dir, cbmCache); err != nil {
+		t.Fatalf("first WriteMCPFiles: %v", err)
+	}
+	if err := WriteMCPFiles(dir, cbmCache); err != nil {
+		t.Fatalf("second WriteMCPFiles: %v", err)
+	}
+
+	excludeData, _ := os.ReadFile(filepath.Join(gitDir, "info", "exclude"))
+	count := strings.Count(string(excludeData), ".mcp.json")
+	if count != 1 {
+		t.Errorf(".mcp.json appeared %d times in exclude, want 1", count)
 	}
 }

@@ -120,6 +120,7 @@ type RoleConfig struct {
 	ToolAllowlist     []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
 	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
 	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
+	Approve           bool          // when true, --approve is added to the pi argv (for project-local MCP config)
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.
@@ -235,15 +236,18 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 
 	// ---- Prepare static values ----
 	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role + "-" + strconv.Itoa(cfg.TurnID))
-	args := []string{
+	baseArgs := []string{
 		"-p",
 		"--mode", "json",
 		"--session-id", sessionID,
 		"--append-system-prompt", "@" + cfg.SystemPromptFile,
 		"--tools", strings.Join(cfg.ToolAllowlist, ","),
 		"--model", cfg.Model,
-		cfg.UserPrompt,
 	}
+	if cfg.Approve {
+		baseArgs = append(baseArgs, "--approve")
+	}
+	args := append(baseArgs, cfg.UserPrompt)
 
 	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".activity.jsonl")
 	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stderr.log")

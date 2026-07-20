@@ -27,18 +27,20 @@ type Issue struct {
 
 // devTemplateData holds the template variables for the dev user prompt.
 type devTemplateData struct {
-	Issue         Issue
-	Branch        string
-	VerifyCommand string
-	Guidelines    string
+	Issue          Issue
+	Branch         string
+	VerifyCommand  string
+	Guidelines     string
+	CodebaseMemory bool
 }
 
 // reviewerTemplateData holds the template variables for the reviewer user prompt.
 type reviewerTemplateData struct {
-	PRNumber      int
-	Issue         Issue
-	VerifyCommand string
-	Guidelines    string
+	PRNumber       int
+	Issue          Issue
+	VerifyCommand  string
+	Guidelines     string
+	CodebaseMemory bool
 }
 
 const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
@@ -54,7 +56,17 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 ## Guidelines
 
 {{.Guidelines}}
+{{if .CodebaseMemory}}
+---
 
+## Code Intelligence
+
+Your worktree has been indexed into a knowledge graph. The following read-only MCP tools are available:
+
+` + "`" + `search_graph` + "`" + `, ` + "`" + `trace_call_path` + "`" + `, ` + "`" + `query_graph` + "`" + `, ` + "`" + `get_architecture` + "`" + `, ` + "`" + `get_graph_schema` + "`" + `, ` + "`" + `get_code_snippet` + "`" + `, ` + "`" + `search_code` + "`" + `
+
+Use these tools to explore the codebase before making changes.
+{{end}}
 ---
 
 ## Instructions
@@ -83,7 +95,17 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 ## Guidelines
 
 {{.Guidelines}}
+{{if .CodebaseMemory}}
+---
 
+## Code Intelligence
+
+Your worktree has been indexed into a knowledge graph. The following read-only MCP tools are available:
+
+` + "`" + `search_graph` + "`" + `, ` + "`" + `trace_call_path` + "`" + `, ` + "`" + `query_graph` + "`" + `, ` + "`" + `get_architecture` + "`" + `, ` + "`" + `get_graph_schema` + "`" + `, ` + "`" + `get_code_snippet` + "`" + `, ` + "`" + `search_code` + "`" + `, ` + "`" + `detect_changes` + "`" + `
+
+Use ` + "`" + `detect_changes` + "`" + ` to understand the blast radius of the PR\u2019s modifications.
+{{end}}
 ---
 
 ## Instructions
@@ -111,17 +133,18 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 //
 // Returns an error if the guidelines file does not exist or cannot be read,
 // or if template execution fails.
-func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath string, cbmEnabled bool) (userPrompt string, err error) {
 	guidelines, err := readGuidelines(guidelinesPath)
 	if err != nil {
 		return "", err
 	}
 
 	data := devTemplateData{
-		Issue:         issue,
-		Branch:        branch,
-		VerifyCommand: verifyCommand,
-		Guidelines:    guidelines,
+		Issue:          issue,
+		Branch:         branch,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+		CodebaseMemory: cbmEnabled,
 	}
 
 	tmpl, err := template.New("dev").Parse(devUserTemplate)
@@ -146,17 +169,18 @@ func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath 
 //
 // Returns an error if the guidelines file does not exist or cannot be read,
 // or if template execution fails.
-func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string, cbmEnabled bool) (userPrompt string, err error) {
 	guidelines, err := readGuidelines(guidelinesPath)
 	if err != nil {
 		return "", err
 	}
 
 	data := reviewerTemplateData{
-		PRNumber:      prNumber,
-		Issue:         issue,
-		VerifyCommand: verifyCommand,
-		Guidelines:    guidelines,
+		PRNumber:       prNumber,
+		Issue:          issue,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+		CodebaseMemory: cbmEnabled,
 	}
 
 	tmpl, err := template.New("reviewer").Parse(reviewerUserTemplate)
@@ -174,12 +198,13 @@ func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesP
 
 // devRetryTemplateData holds the template variables for the dev retry user prompt.
 type devRetryTemplateData struct {
-	Issue         Issue
-	Branch        string
-	Findings      string
-	FindingsJSON  string
-	VerifyCommand string
-	Guidelines    string
+	Issue          Issue
+	Branch         string
+	Findings       string
+	FindingsJSON   string
+	VerifyCommand  string
+	Guidelines     string
+	CodebaseMemory bool
 }
 
 const devRetryUserTemplate = `# Dev Retry: Address Review Findings for Issue #{{.Issue.Number}}
@@ -211,7 +236,17 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 ## Guidelines
 
 {{.Guidelines}}
+{{if .CodebaseMemory}}
+---
 
+## Code Intelligence
+
+Your worktree has been indexed into a knowledge graph. The following read-only MCP tools are available:
+
+` + "`" + `search_graph` + "`" + `, ` + "`" + `trace_call_path` + "`" + `, ` + "`" + `query_graph` + "`" + `, ` + "`" + `get_architecture` + "`" + `, ` + "`" + `get_graph_schema` + "`" + `, ` + "`" + `get_code_snippet` + "`" + `, ` + "`" + `search_code` + "`" + `
+
+Use these tools to explore the codebase before making changes.
+{{end}}
 ---
 
 ## Instructions
@@ -227,7 +262,7 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 // and optional structured FindingsJSON from inline review comments.
 //
 // Returns EMPTY_FINDINGS error if findings is empty (BR-002, IF-001).
-func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, verifyCommand string, guidelinesPath string) (userPrompt string, err error) {
+func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, verifyCommand string, guidelinesPath string, cbmEnabled bool) (userPrompt string, err error) {
 	if findings == "" {
 		return "", fmt.Errorf("EMPTY_FINDINGS: changes_requested review has an empty body")
 	}
@@ -238,12 +273,13 @@ func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, v
 	}
 
 	data := devRetryTemplateData{
-		Issue:         issue,
-		Branch:        branch,
-		Findings:      findings,
-		FindingsJSON:  findingsJSON,
-		VerifyCommand: verifyCommand,
-		Guidelines:    guidelines,
+		Issue:          issue,
+		Branch:         branch,
+		Findings:       findings,
+		FindingsJSON:   findingsJSON,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+		CodebaseMemory: cbmEnabled,
 	}
 
 	tmpl, err := template.New("devRetry").Parse(devRetryUserTemplate)

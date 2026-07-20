@@ -11,15 +11,16 @@ import (
 
 // Config represents the structure of .golemic/config.json
 type Config struct {
-	Project          string          `json:"project"`
-	VerifyCommand    string          `json:"verify_command"`
-	Label            string          `json:"label"`
-	Models           Models          `json:"models"`
-	TimeoutMinutes   int             `json:"timeout_minutes"`
-	TimeoutSeconds   int             `json:"timeout_seconds,omitempty"`
-	CITimeoutMinutes int             `json:"ci_timeout_minutes,omitempty"`
-	RequireCIChecks  bool            `json:"require_ci_checks,omitempty"`
-	Telemetry        TelemetryConfig `json:"telemetry"`
+	Project          string               `json:"project"`
+	VerifyCommand    string               `json:"verify_command"`
+	Label            string               `json:"label"`
+	Models           Models               `json:"models"`
+	TimeoutMinutes   int                  `json:"timeout_minutes"`
+	TimeoutSeconds   int                  `json:"timeout_seconds,omitempty"`
+	CITimeoutMinutes int                  `json:"ci_timeout_minutes,omitempty"`
+	RequireCIChecks  bool                 `json:"require_ci_checks,omitempty"`
+	Telemetry        TelemetryConfig      `json:"telemetry"`
+	CodebaseMemory   CodebaseMemoryConfig `json:"codebase_memory"`
 }
 
 // TelemetryConfig controls span telemetry emission.
@@ -27,21 +28,32 @@ type TelemetryConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+// CodebaseMemoryConfig controls the optional codebase-memory indexing feature.
+type CodebaseMemoryConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
 // configRaw is used for parsing to detect missing vs zero values
 type configRaw struct {
-	Project          *string        `json:"project"`
-	VerifyCommand    *string        `json:"verify_command"`
-	Label            *string        `json:"label"`
-	Models           *modelsRaw     `json:"models"`
-	TimeoutMinutes   *int           `json:"timeout_minutes"`
-	TimeoutSeconds   *int           `json:"timeout_seconds"`
-	CITimeoutMinutes *int           `json:"ci_timeout_minutes"`
-	RequireCIChecks  *bool          `json:"require_ci_checks"`
-	Telemetry        *telemetryRaw  `json:"telemetry"`
+	Project          *string              `json:"project"`
+	VerifyCommand    *string              `json:"verify_command"`
+	Label            *string              `json:"label"`
+	Models           *modelsRaw           `json:"models"`
+	TimeoutMinutes   *int                 `json:"timeout_minutes"`
+	TimeoutSeconds   *int                 `json:"timeout_seconds"`
+	CITimeoutMinutes *int                 `json:"ci_timeout_minutes"`
+	RequireCIChecks  *bool                `json:"require_ci_checks"`
+	Telemetry        *telemetryRaw        `json:"telemetry"`
+	CodebaseMemory   *codebaseMemoryRaw   `json:"codebase_memory"`
 }
 
 // telemetryRaw is used for parsing the telemetry config block.
 type telemetryRaw struct {
+	Enabled *bool `json:"enabled"`
+}
+
+// codebaseMemoryRaw is used for parsing the codebase_memory config block.
+type codebaseMemoryRaw struct {
 	Enabled *bool `json:"enabled"`
 }
 
@@ -190,6 +202,11 @@ func Load(repoRoot string) (*Config, error) {
 		config.Telemetry.Enabled = *raw.Telemetry.Enabled
 	} else {
 		config.Telemetry.Enabled = true
+	}
+
+	// Extract codebase_memory.enabled (optional; default false per BR-2)
+	if raw.CodebaseMemory != nil && raw.CodebaseMemory.Enabled != nil {
+		config.CodebaseMemory.Enabled = *raw.CodebaseMemory.Enabled
 	}
 
 	// Extract require_ci_checks (optional; default false)

@@ -530,7 +530,7 @@ func TestRenderDevRetry_VerbatimFindings(t *testing.T) {
 	}
 
 	findings := "Fix the null pointer dereference in handler.go line 42"
-	p, err := prompt.RenderDevRetry(findings, "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
+	p, err := prompt.RenderDevRetry(findings, "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -551,7 +551,7 @@ func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := prompt.RenderDevRetry("", "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath)
+	_, err := prompt.RenderDevRetry("", "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath, false)
 	if err == nil {
 		t.Fatal("expected EMPTY_FINDINGS error, got nil")
 	}

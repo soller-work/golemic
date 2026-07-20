@@ -11,7 +11,14 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/prompt"
 	"golemic/internal/telemetry"
+	"golemic/internal/worktree"
 )
+
+// cbmDevTools are the read-only graph tools granted to the dev agent when codebase-memory is enabled.
+var cbmDevTools = []string{
+	"search_graph", "trace_call_path", "query_graph",
+	"get_architecture", "get_graph_schema", "get_code_snippet", "search_code",
+}
 
 // runDevRetryAgent runs the dev agent in the existing worktree to address reviewer findings.
 // findings must be non-empty (enforced by RenderDevRetry). findingsJSON may be empty.
@@ -20,6 +27,12 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	if cbmEnabled {
+		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
+		r.indexWorktree(devWorktreePath, cbmCacheDir)
+	}
 
 	userPrompt, err := prompt.RenderDevRetry(
 		findings,
@@ -31,6 +44,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		r.branchName,
 		r.cfg.VerifyCommand,
 		filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
+		cbmEnabled,
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err)
@@ -45,7 +59,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		runFn = agent.RunRole
 	}
 
-	cfg := r.buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir)
+	cfg := r.buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, r.cfg.CodebaseMemory.Enabled)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 
 	if err != nil {
@@ -69,6 +83,16 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
 
+	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	if cbmEnabled {
+		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
+		r.indexWorktree(devWorktreePath, cbmCacheDir)
+		if err := worktree.WriteMCPFiles(devWorktreePath, cbmCacheDir); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: failed to write CBM MCP files for dev worktree: %v\n", err)
+			cbmEnabled = false
+		}
+	}
+
 	// Render dev prompt
 	userPrompt, err := prompt.RenderDev(
 		prompt.Issue{
@@ -78,6 +102,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		r.branchName,
 		r.cfg.VerifyCommand,
 		filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
+		cbmEnabled,
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to render dev prompt: %v\n", err)
@@ -92,6 +117,10 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
+	devTools := []string{"read", "bash", "write", "edit"}
+	if cbmEnabled {
+		devTools = append(devTools, cbmDevTools...)
+	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
@@ -104,8 +133,9 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Dev,
 		Timeout:           timeout,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		ToolAllowlist:     devTools,
 		RunsDir:           runsDir,
+		Approve:           cbmEnabled,
 	})
 
 	if err != nil {
@@ -139,7 +169,11 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 }
 
 // buildDevAgentConfig creates the agent.RoleConfig for the dev retry agent.
-func (r *Runner) buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string) agent.RoleConfig {
+func (r *Runner) buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, cbmEnabled bool) agent.RoleConfig {
+	tools := []string{"read", "bash", "write", "edit"}
+	if cbmEnabled {
+		tools = append(tools, cbmDevTools...)
+	}
 	return agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
@@ -152,8 +186,27 @@ func (r *Runner) buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, u
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             r.cfg.Models.Dev,
 		Timeout:           timeout,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		ToolAllowlist:     tools,
 		RunsDir:           runsDir,
+		Approve:           cbmEnabled,
+	}
+}
+
+// indexWorktree runs codebase-memory-mcp to index wtPath into cbmCacheDir.
+// Failure is logged and does not abort the run (BR-7).
+func (r *Runner) indexWorktree(wtPath, cbmCacheDir string) {
+	if err := os.MkdirAll(cbmCacheDir, 0755); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to create CBM cache dir %s: %v\n", cbmCacheDir, err)
+		return
+	}
+	_, err := r.executor.RunWithEnvInDir(
+		map[string]string{"CBM_CACHE_DIR": cbmCacheDir, "CBM_LOG_LEVEL": "warn"},
+		wtPath,
+		"npx", "-y", "codebase-memory-mcp@0.9.0", "cli", "index_repository",
+		"--repo-path", wtPath, "--mode", "fast",
+	)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: codebase-memory indexing failed (proceeding without code intelligence): %v\n", err)
 	}
 }
 

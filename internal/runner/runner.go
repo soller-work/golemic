@@ -343,6 +343,11 @@ func (r *Runner) Run() int {
 		} else {
 			endCleanRev(telemetry.StatusOK, nil)
 		}
+
+		cbmCacheDir := filepath.Join(golemicDir2, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
+		if err := os.RemoveAll(cbmCacheDir); err != nil {
+			fmt.Fprintf(r.stderr, "Warning: failed to remove CBM cache dir %s: %v\n", cbmCacheDir, err) //nolint:errcheck
+		}
 	}
 
 	// Close run span

@@ -523,3 +523,43 @@ func writeAndLoad(t *testing.T, dir, configJSON string) *Config {
 	}
 	return cfg
 }
+
+// ---------------------------------------------------------------------------
+// CodebaseMemory config tests (issue-92)
+// ---------------------------------------------------------------------------
+
+func TestCodebaseMemory_AbsentDefaultsFalse(t *testing.T) {
+	cfg := writeAndLoad(t, t.TempDir(), `{"project":"p","verify_command":"v"}`)
+	if cfg.CodebaseMemory.Enabled {
+		t.Error("CodebaseMemory.Enabled must default to false when block is absent")
+	}
+}
+
+func TestCodebaseMemory_ExplicitTrue(t *testing.T) {
+	cfg := writeAndLoad(t, t.TempDir(), `{"project":"p","verify_command":"v","codebase_memory":{"enabled":true}}`)
+	if !cfg.CodebaseMemory.Enabled {
+		t.Error("CodebaseMemory.Enabled must be true when set to true")
+	}
+}
+
+func TestCodebaseMemory_ExplicitFalse(t *testing.T) {
+	cfg := writeAndLoad(t, t.TempDir(), `{"project":"p","verify_command":"v","codebase_memory":{"enabled":false}}`)
+	if cfg.CodebaseMemory.Enabled {
+		t.Error("CodebaseMemory.Enabled must be false when set to false")
+	}
+}
+
+func TestCodebaseMemory_UnknownFieldStillRejected(t *testing.T) {
+	dir := t.TempDir()
+	golemicDir := filepath.Join(dir, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{"project":"p","verify_command":"v","unknown_field":"x"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for unknown field, got nil")
+	}
+}

@@ -11,6 +11,7 @@ package worktree
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -209,6 +210,98 @@ func IsDirty(worktreePath string, executor preflight.Executor) (bool, error) {
 // reviewerWorktreePath returns the absolute path for a reviewer worktree.
 func reviewerWorktreePath(golemicDir string, issueNumber int) string {
 	return filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", issueNumber))
+}
+
+// mcpServerEntry is the MCP server config entry for codebase-memory.
+type mcpServerEntry struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+}
+
+// mcpConfig is the top-level .mcp.json structure.
+type mcpConfig struct {
+	MCPServers map[string]mcpServerEntry `json:"mcpServers"`
+}
+
+// WriteMCPFiles writes .mcp.json into the worktree and adds it to .git/info/exclude.
+// The CBM_CACHE_DIR in the .mcp.json matches the one passed to the indexer so that
+// both the indexer and the agent reader share the same on-disk database.
+func WriteMCPFiles(wtPath, cbmCacheDir string) error {
+	cfg := mcpConfig{
+		MCPServers: map[string]mcpServerEntry{
+			"codebase-memory": {
+				Command: "npx",
+				Args:    []string{"-y", "codebase-memory-mcp@0.9.0"},
+				Env: map[string]string{
+					"CBM_CACHE_DIR":    cbmCacheDir,
+					"CBM_LOG_LEVEL":    "warn",
+					"CBM_ALLOWED_ROOT": wtPath,
+				},
+			},
+		},
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal .mcp.json: %w", err)
+	}
+	mcpPath := filepath.Join(wtPath, ".mcp.json")
+	if err := os.WriteFile(mcpPath, data, 0644); err != nil {
+		return fmt.Errorf("write .mcp.json: %w", err)
+	}
+
+	gitDir, err := worktreeGitDir(wtPath)
+	if err != nil {
+		return fmt.Errorf("find git dir: %w", err)
+	}
+	return appendExcludePattern(filepath.Join(gitDir, "info", "exclude"), ".mcp.json")
+}
+
+// worktreeGitDir returns the path to the .git directory for a worktree.
+// In a git worktree, .git is a file containing "gitdir: <path>".
+func worktreeGitDir(wtPath string) (string, error) {
+	dotGit := filepath.Join(wtPath, ".git")
+	fi, err := os.Stat(dotGit)
+	if err != nil {
+		return "", fmt.Errorf("stat .git: %w", err)
+	}
+	if fi.IsDir() {
+		return dotGit, nil
+	}
+	raw, err := os.ReadFile(dotGit)
+	if err != nil {
+		return "", fmt.Errorf("read .git file: %w", err)
+	}
+	content := strings.TrimSpace(string(raw))
+	const prefix = "gitdir: "
+	if !strings.HasPrefix(content, prefix) {
+		return "", fmt.Errorf(".git file has unexpected content: %q", content)
+	}
+	gitDir := strings.TrimPrefix(content, prefix)
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(wtPath, gitDir)
+	}
+	return gitDir, nil
+}
+
+// appendExcludePattern appends pattern to the git exclude file if not already present.
+func appendExcludePattern(excludePath, pattern string) error {
+	data, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read exclude file: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == pattern {
+			return nil
+		}
+	}
+	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("open exclude file: %w", err)
+	}
+	defer f.Close() //nolint:errcheck
+	_, err = fmt.Fprintf(f, "\n%s\n", pattern)
+	return err
 }
 
 // Cleanup removes the worktree and its local branch for the given issue.
