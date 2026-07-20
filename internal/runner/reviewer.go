@@ -17,7 +17,9 @@ import (
 )
 
 // graphqlDiscoverPending queries the viewer's PENDING reviews on a PR.
-const graphqlDiscoverPending = `query($owner:String!,$name:String!,$prNumber:Int!){repository(owner:$owner,name:$name){pullRequest(number:$prNumber){reviews(first:1,states:[PENDING],author:{login:"viewer"}){nodes{id}}}}}`
+// states:[PENDING] already scopes to the token's own pending reviews, so no author filter is needed
+// (and the reviews connection's author arg is a String login, not an object — GitHub rejects object literals).
+const graphqlDiscoverPending = `query($owner:String!,$name:String!,$prNumber:Int!){repository(owner:$owner,name:$name){pullRequest(number:$prNumber){reviews(first:1,states:[PENDING]){nodes{id}}}}}`
 
 // graphqlDeleteReview deletes a pending review by its node ID.
 const graphqlDeleteReview = `mutation($reviewId:ID!){deletePullRequestReview(input:{pullRequestReviewId:$reviewId}){pullRequestReview{id}}}`

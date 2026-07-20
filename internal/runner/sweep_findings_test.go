@@ -355,6 +355,30 @@ func TestBuildFindingsJSON_InjectsComments_AC002(t *testing.T) { //nolint:cyclop
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Schema-level query shape validation
+// ---------------------------------------------------------------------------
+
+// TestGraphqlDiscoverPending_QueryShape validates that graphqlDiscoverPending
+// does not use the object-literal author argument that GitHub rejects
+// ("Expected type 'String'" error). PENDING state alone scopes to the viewer.
+func TestGraphqlDiscoverPending_QueryShape(t *testing.T) {
+	// Must not contain object-literal author filter (GitHub rejects it with argumentLiteralsIncompatible).
+	if strings.Contains(graphqlDiscoverPending, `author:{`) {
+		t.Error("graphqlDiscoverPending must not use 'author:{...}' object literal; GitHub expects a String login")
+	}
+	// Must filter by PENDING state (the scope mechanism for viewer-only visibility).
+	if !strings.Contains(graphqlDiscoverPending, "states:[PENDING]") {
+		t.Error("graphqlDiscoverPending must include states:[PENDING] filter")
+	}
+	// Must be parameterized (not hardcoded repo values).
+	for _, param := range []string{"$owner", "$name", "$prNumber"} {
+		if !strings.Contains(graphqlDiscoverPending, param) {
+			t.Errorf("graphqlDiscoverPending missing parameter %q", param)
+		}
+	}
+}
+
 // Integration: buildFindingsJSON returns empty string when there are no inline comments.
 func TestBuildFindingsJSON_EmptyWhenNoComments_AC002(t *testing.T) {
 	exec := &fakeExecutor{
