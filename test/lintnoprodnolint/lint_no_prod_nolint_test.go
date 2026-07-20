@@ -214,3 +214,73 @@ func TestViolationCountLine(t *testing.T) {
 		t.Errorf("expected '3 violation(s) found' in output, got: %s", out)
 	}
 }
+
+// fixtureAggregateLint writes a Makefile to dir with an aggregate lint target
+// that mirrors the real repo structure: a stubbed first step (exits 0) followed
+// by $(MAKE) lint-no-prod-nolint. This allows testing that make lint propagates
+// the non-zero exit code from lint-no-prod-nolint.
+func fixtureAggregateLint(t *testing.T, dir string) {
+	t.Helper()
+	makefileContent := `COMPLEXITY_LINTERS := cyclop|gocognit|funlen|nestif|maintidx|interfacebloat
+
+.PHONY: lint-no-prod-nolint
+lint-no-prod-nolint: ## Ban complexity //nolint directives in production Go files (cmd/*.go, internal/*.go, excl. _test.go)
+	@violations=$$(git ls-files 'cmd/*.go' 'internal/*.go' \
+		| grep -v '_test\.go$$' \
+		| xargs -r grep -EHn '//nolint:[^/]*\b($(COMPLEXITY_LINTERS))\b' 2>/dev/null || true); \
+	if [ -n "$$violations" ]; then \
+		count=$$(echo "$$violations" | wc -l); \
+		echo "$$violations" >&2; \
+		echo "$${count} violation(s) found: complexity nolint directives are forbidden in production code; split the function instead" >&2; \
+		exit 1; \
+	fi
+
+.PHONY: lint
+lint: ## Run linters (aggregate target for testing)
+	@echo golangci-stub-ok
+	$(MAKE) lint-no-prod-nolint
+`
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte(makefileContent), 0o644); err != nil {
+		t.Fatalf("write Makefile: %v", err)
+	}
+}
+
+// AC-006: make lint propagates non-zero exit code from lint-no-prod-nolint on failure.
+func TestMakeLintPropagatesFailure(t *testing.T) {
+	dir := t.TempDir()
+	fixtureRepo(t, dir, map[string]string{
+		"cmd/tool.go": "package main\n\nfunc big() {} //nolint:cyclop\n",
+	})
+	fixtureAggregateLint(t, dir)
+
+	out, err := runTarget(t, dir, "lint")
+	if err == nil {
+		t.Fatal("expected make lint exit 1 (propagate lint-no-prod-nolint failure), got exit 0")
+	}
+	if !strings.Contains(out, "cmd/tool.go") {
+		t.Errorf("expected cmd/tool.go in output, got: %s", out)
+	}
+	if !strings.Contains(out, "nolint:cyclop") {
+		t.Errorf("expected nolint:cyclop in output, got: %s", out)
+	}
+	if !strings.Contains(out, "1 violation(s) found") {
+		t.Errorf("expected count summary in output, got: %s", out)
+	}
+}
+
+// AC-006: make lint exits 0 when no violations are present.
+func TestMakeLintSucceedsClean(t *testing.T) {
+	dir := t.TempDir()
+	fixtureRepo(t, dir, map[string]string{
+		"cmd/tool.go": "package main\n\nfunc good() {}\n",
+	})
+	fixtureAggregateLint(t, dir)
+
+	out, err := runTarget(t, dir, "lint")
+	if err != nil {
+		t.Fatalf("expected make lint exit 0, got error: %v\noutput: %s", err, out)
+	}
+	if strings.Contains(out, "violation") {
+		t.Errorf("clean lint should not report violations, got: %s", out)
+	}
+}
