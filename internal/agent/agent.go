@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,11 @@ import (
 // and the entire process group has been killed.
 var ErrTimeout = errors.New("agent execution timed out")
 
+// ErrStalled is returned when the agent process produces no output for the idle
+// threshold over the max number of retries and the entire process group has been
+// killed after each stall. Stalls are transient; wall-clock timeouts are terminal.
+var ErrStalled = errors.New("agent execution stalled")
+
 // ---------------------------------------------------------------------------
 // Command factory (injectable for tests)
 // ---------------------------------------------------------------------------
@@ -32,6 +38,54 @@ var ErrTimeout = errors.New("agent execution timed out")
 // production value: var CommandFactory = exec.Command). Override in tests to
 // inject a fake binary without a real pi installation.
 var CommandFactory = exec.Command
+
+// ---------------------------------------------------------------------------
+// Stall detection configuration
+// ---------------------------------------------------------------------------
+
+// pollInterval is the interval for checking transcript growth (30s in production).
+// Override in tests via direct assignment (mirrors CommandFactory seam).
+var pollInterval = 30 * time.Second
+
+// stallLogWriter receives the per-killed-attempt stall diagnostic. Defaults to
+// os.Stderr; override in tests to capture and assert the emitted line.
+var stallLogWriter io.Writer = os.Stderr
+
+const (
+	// defaultIdleTimeout is the default idle timeout (90s).
+	defaultIdleTimeout = 90 * time.Second
+	// defaultMaxStallRetries is the default max number of retries on stall (2).
+	defaultMaxStallRetries = 2
+)
+
+// parseIdleTimeout reads GOLEMIC_AGENT_IDLE_TIMEOUT_SEC from environment.
+// Returns the timeout duration, or defaultIdleTimeout if absent or invalid.
+// If the parsed value is <= 0 or < pollInterval, returns defaultIdleTimeout.
+func parseIdleTimeout() time.Duration {
+	envVal := os.Getenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC")
+	if envVal == "" {
+		return defaultIdleTimeout
+	}
+	sec, err := strconv.Atoi(envVal)
+	if err != nil || sec <= 0 || time.Duration(sec)*time.Second < pollInterval {
+		return defaultIdleTimeout
+	}
+	return time.Duration(sec) * time.Second
+}
+
+// parseMaxStallRetries reads GOLEMIC_AGENT_MAX_STALL_RETRIES from environment.
+// Returns the max retries count, or defaultMaxStallRetries if absent or invalid.
+func parseMaxStallRetries() int {
+	envVal := os.Getenv("GOLEMIC_AGENT_MAX_STALL_RETRIES")
+	if envVal == "" {
+		return defaultMaxStallRetries
+	}
+	count, err := strconv.Atoi(envVal)
+	if err != nil || count < 0 {
+		return defaultMaxStallRetries
+	}
+	return count
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -62,6 +116,27 @@ type TranscriptPaths struct {
 	Stderr string // path to <RunsDir>/<RunID>/<role>.stderr.log
 }
 
+// transcriptByteSize returns the combined byte size of the stdout and stderr
+// transcripts and the most recent modification time across them. Using the open
+// file handles avoids TOCTOU races during execution. The mod time lets the caller
+// anchor the idle window to the actual last write rather than the poll time.
+func transcriptByteSize(stdoutFile, stderrFile *os.File) (int64, time.Time) {
+	var size int64
+	var modTime time.Time
+	if fi, err := stdoutFile.Stat(); err == nil {
+		size += fi.Size()
+		modTime = fi.ModTime()
+	}
+	if fi, err := stderrFile.Stat(); err == nil {
+		size += fi.Size()
+		if fi.ModTime().After(modTime) {
+			modTime = fi.ModTime()
+		}
+	}
+	return size, modTime
+}
+
+
 // ---------------------------------------------------------------------------
 // RunRole
 // ---------------------------------------------------------------------------
@@ -85,6 +160,14 @@ type TranscriptPaths struct {
 // If the process exceeds cfg.Timeout, the entire process group is killed
 // (SIGKILL to -pgid) and the returned error wraps ErrTimeout. Partial output
 // up to the kill point is preserved in the transcript files.
+//
+// Stall detection: if the combined transcript byte size doesn't grow for the
+// idle threshold (default 90s, configurable via GOLEMIC_AGENT_IDLE_TIMEOUT_SEC),
+// the process group is killed and the attempt is retried (up to maxStallRetries
+// times, default 2, configurable via GOLEMIC_AGENT_MAX_STALL_RETRIES). Fresh
+// transcript files are truncated per attempt. If all attempts stall, returns
+// ErrStalled. If a producing-but-slow process exceeds wall-clock Timeout, that
+// is terminal (not retried) and returns ErrTimeout.
 //
 // The exit code is returned as-is (informational, not semantically interpreted).
 func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths TranscriptPaths, err error) {
@@ -138,7 +221,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: worktreeDir %q is not a directory", cfg.WorktreeDir)
 	}
 
-	// ---- Build command ----
+	// ---- Prepare static values ----
 	args := []string{
 		"-p",
 		"--append-system-prompt", "@" + cfg.SystemPromptFile,
@@ -146,90 +229,160 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 		"--model", cfg.Model,
 		cfg.UserPrompt,
 	}
-	cmd := CommandFactory("pi", args...)
-	cmd.Dir = cfg.WorktreeDir
 
-	// ---- Environment ----
-	golemicDir := filepath.Dir(cfg.GolemicBinaryPath)
-	cmd.Env = append(
-		os.Environ(),
-		"GOLEMIC_RUN_ID="+cfg.RunID,
-		"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
-		"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
-		"GH_TOKEN="+cfg.GHToken,
-		"PATH="+golemicDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
-	)
-
-	// ---- Process group (for timeout kill) ----
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-
-	// ---- Transcript files ----
 	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stdout.log")
 	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stderr.log")
+	golemicDir := filepath.Dir(cfg.GolemicBinaryPath)
 
 	if err := os.MkdirAll(filepath.Join(cfg.RunsDir, cfg.RunID), 0755); err != nil {
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create transcript directory: %w", err)
 	}
 
-	// P3-6: Use O_NOFOLLOW to refuse opening transcript files through symlinks.
-	stdoutFile, err := os.OpenFile(stdoutPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
-	if err != nil {
-		return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create stdout transcript %s: %w", stdoutPath, err)
-	}
-	defer stdoutFile.Close()
-
-	stderrFile, err := os.OpenFile(stderrPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
-	if err != nil {
-		return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create stderr transcript %s: %w", stderrPath, err)
-	}
-	defer stderrFile.Close()
-
-	cmd.Stdout = stdoutFile
-	cmd.Stderr = stderrFile
-
 	paths = TranscriptPaths{Stdout: stdoutPath, Stderr: stderrPath}
 
-	// ---- Start ----
-	if err := cmd.Start(); err != nil {
-		return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to start pi process: %w", err)
+	// ---- Retry loop with stall detection ----
+	idleTimeout := parseIdleTimeout()
+	maxStallRetries := parseMaxStallRetries()
+
+	for attempt := 0; attempt <= maxStallRetries; attempt++ {
+		// Truncate transcript files fresh for each attempt
+		stdoutFile, err := os.OpenFile(stdoutPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
+		if err != nil {
+			return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create stdout transcript %s: %w", stdoutPath, err)
+		}
+		stderrFile, err := os.OpenFile(stderrPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0644)
+		if err != nil {
+			stdoutFile.Close() //nolint:errcheck
+			return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create stderr transcript %s: %w", stderrPath, err)
+		}
+
+		cmd := CommandFactory("pi", args...)
+		cmd.Dir = cfg.WorktreeDir
+		cmd.Env = append(
+			os.Environ(),
+			"GOLEMIC_RUN_ID="+cfg.RunID,
+			"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
+			"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
+			"GH_TOKEN="+cfg.GHToken,
+			"PATH="+golemicDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
+		)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Stdout = stdoutFile
+		cmd.Stderr = stderrFile
+
+		if err := cmd.Start(); err != nil {
+			stdoutFile.Close()  //nolint:errcheck
+			stderrFile.Close()  //nolint:errcheck
+			return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to start pi process: %w", err)
+		}
+
+		// ---- Wait with timeout and stall detection ----
+		timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		done := make(chan error, 1)
+		go func() {
+			done <- cmd.Wait()
+		}()
+
+		pollTicker := time.NewTicker(pollInterval)
+		defer pollTicker.Stop()
+
+		lastGrowth := time.Now() // Track from process start
+		var lastByteSize int64 = 0
+		stalled := false
+		var waitErr error
+
+		for {
+			select {
+			case <-timeoutCtx.Done():
+				// Wall-clock timeout (terminal, not retried)
+				killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+				}
+				stdoutFile.Close()  //nolint:errcheck
+				stderrFile.Close()  //nolint:errcheck
+				cancel()
+				if killErr != nil {
+					return 0, paths, fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
+						ErrTimeout, cfg.Role, cfg.Timeout, killErr)
+				}
+				return 0, paths, fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
+
+			case <-pollTicker.C:
+				// Check transcript growth for stall detection
+				currentSize, lastWrite := transcriptByteSize(stdoutFile, stderrFile)
+				if currentSize > lastByteSize {
+					// Growth detected; anchor the idle window to the actual last
+					// write, not the poll time, so detection is not delayed by up
+					// to one poll interval.
+					lastByteSize = currentSize
+					if lastWrite.After(lastGrowth) {
+						lastGrowth = lastWrite
+					}
+				}
+				// Declare stall when no growth for idleTimeout duration
+				if time.Since(lastGrowth) >= idleTimeout {
+					stalled = true
+					idleDuration := time.Since(lastGrowth)
+					// Log stall detection (P2-2)
+					fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no output for %v >= %v)\n",
+						cfg.Role, attempt, idleDuration, idleTimeout)
+					// Kill the process group
+					killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+					}
+					// Close files before retry (P2-1 fix)
+					stdoutFile.Close()  //nolint:errcheck
+					stderrFile.Close()  //nolint:errcheck
+					if killErr != nil {
+						cancel()
+						return 0, paths, fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, killErr)
+					}
+					break
+				}
+
+			case waitErr = <-done:
+				// Process finished (either success or non-zero exit)
+				stdoutFile.Close()  //nolint:errcheck
+				stderrFile.Close()  //nolint:errcheck
+				cancel()
+
+				if waitErr == nil {
+					return 0, paths, nil
+				}
+
+				// exec.ExitError is expected for non-zero exit codes — return exit code
+				var exitErr *exec.ExitError
+				if errors.As(waitErr, &exitErr) {
+					return exitErr.ExitCode(), paths, nil
+				}
+
+				// Other errors (e.g. I/O on the pipes) are unexpected
+				return 0, paths, fmt.Errorf("agent: process wait failed: %w", waitErr)
+			}
+
+			if stalled {
+				break
+			}
+		}
+
+		cancel()
+
+		// If not stalled, break out of retry loop (success or terminal error already returned above)
+		if !stalled {
+			break
+		}
+
+		// Stalled: retry if attempts remaining
+		if attempt >= maxStallRetries {
+			break
+		}
+		// Continue to next attempt
 	}
 
-	// ---- Wait with timeout ----
-	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-	}()
-
-	select {
-	case <-timeoutCtx.Done():
-		// Kill the entire process group (not just the parent).
-		// Negative PID means the process group whose leader is cmd.Process.Pid.
-		killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		// Reap the child to avoid zombies. If kill failed, use a secondary
-		// timeout to avoid blocking on <-done indefinitely.
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-		}
-		if killErr != nil {
-			return 0, paths, fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
-				ErrTimeout, cfg.Role, cfg.Timeout, killErr)
-		}
-		return 0, paths, fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
-
-	case waitErr := <-done:
-		if waitErr == nil {
-			return 0, paths, nil
-		}
-		// exec.ExitError is expected for non-zero exit codes — return exit code.
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
-			return exitErr.ExitCode(), paths, nil
-		}
-		// Other errors (e.g. I/O on the pipes) are unexpected.
-		return 0, paths, fmt.Errorf("agent: process wait failed: %w", waitErr)
-	}
+	// All attempts stalled; return ErrStalled
+	return 0, paths, fmt.Errorf("%w: role %q stalled after %d attempts with idle timeout %v", ErrStalled, cfg.Role, maxStallRetries+1, idleTimeout)
 }

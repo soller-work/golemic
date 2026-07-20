@@ -303,6 +303,10 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 			fmt.Fprintf(r.stderr, "dev_failed: CI retry dev agent exceeded timeout\n") //nolint:errcheck
 			return outcomeDevFailed
 		}
+		if errors.Is(err, agent.ErrStalled) {
+			fmt.Fprintf(r.stderr, "dev_failed: CI retry dev agent stalled\n") //nolint:errcheck
+			return outcomeStalled
+		}
 		fmt.Fprintf(r.stderr, "dev_failed: CI retry agent failed: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed
 	}

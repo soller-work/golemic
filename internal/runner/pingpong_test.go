@@ -176,6 +176,7 @@ type agentRoundConfig struct {
 	body      string // for reviewer: body to write
 	exitCode  int    // non-zero = failure
 	doTimeout bool   // simulate agent.ErrTimeout
+	doStalled bool   // simulate agent.ErrStalled
 }
 
 // capturedPrompts records the UserPrompt passed to each dev call.
@@ -218,6 +219,9 @@ func makeOrchestrateFakeAgent(t *testing.T, rounds []agentRoundConfig, capture *
 		}
 		if round.doTimeout {
 			return 0, agent.TranscriptPaths{}, agent.ErrTimeout
+		}
+		if round.doStalled {
+			return 0, agent.TranscriptPaths{}, agent.ErrStalled
 		}
 		isFirst := cfg.Role == "dev" && devCallCount == 0
 		if cfg.Role == "dev" {
@@ -414,7 +418,48 @@ func TestPingPong_ReviewerTimeoutInRetryRound_AC005(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-006: Failed escalation comment still terminates escalated
+// AC-006: Dev and Reviewer stall detection → outcome "stalled" + diagnostic
+// ---------------------------------------------------------------------------
+
+func TestPingPong_DevStallDetection_AC006a(t *testing.T) {
+	var commentCalls []string
+	exec := pingPongExecutor(false, &commentCalls)
+
+	r, logPath, stderr := setupPingPongRunner(t, exec)
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", doStalled: true}, // dev stalls on first attempt
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeStalled {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeStalled)
+	}
+	if !strings.Contains(stderr.String(), "dev agent stalled") {
+		t.Errorf("stderr should contain stalled diagnostic, got: %s", stderr.String())
+	}
+}
+
+func TestPingPong_ReviewerStallDetection_AC006b(t *testing.T) {
+	var commentCalls []string
+	exec := pingPongExecutor(false, &commentCalls)
+
+	r, logPath, stderr := setupPingPongRunner(t, exec)
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", doStalled: true}, // reviewer stalls
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeStalled {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeStalled)
+	}
+	if !strings.Contains(stderr.String(), "reviewer agent stalled") {
+		t.Errorf("stderr should contain stalled diagnostic, got: %s", stderr.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-006 (original): Failed escalation comment still terminates escalated
 // ---------------------------------------------------------------------------
 
 func TestPingPong_CommentFailureStillEscalated_AC006(t *testing.T) {

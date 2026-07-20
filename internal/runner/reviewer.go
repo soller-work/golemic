@@ -74,6 +74,11 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 			fmt.Fprintf(r.stderr, "review_failed: reviewer agent exceeded timeout\n") //nolint:errcheck
 			return outcomeTimeout
 		}
+		if errors.Is(err, agent.ErrStalled) {
+			endSpan(telemetry.StatusKilled, nil)
+			fmt.Fprintf(r.stderr, "review_failed: reviewer agent stalled\n") //nolint:errcheck
+			return outcomeStalled
+		}
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "review_failed: agent failed: %v\n", err) //nolint:errcheck
 		return outcomeReviewFailed

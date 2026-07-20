@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -43,6 +44,24 @@ func fakeCommandFactory(t *testing.T, scriptPath string, capturedArgs *[]string)
 	}
 	// P3-4: Restore CommandFactory on test teardown to avoid cross-test pollution.
 	t.Cleanup(func() { CommandFactory = exec.Command })
+}
+
+// attemptAwareFactory returns a CommandFactory that runs different scripts per invocation.
+// Invocation 0 runs script0, invocation 1 runs script1, etc. Returns *invocations for later assertion.
+func attemptAwareFactory(t *testing.T, scripts []string) *int {
+	t.Helper()
+	invocations := 0
+	CommandFactory = func(name string, args ...string) *exec.Cmd {
+		idx := invocations
+		invocations++
+		if idx >= len(scripts) {
+			t.Fatalf("unexpected invocation %d (only %d scripts configured)", idx+1, len(scripts))
+		}
+		cmd := exec.Command(scripts[idx], args...)
+		return cmd
+	}
+	t.Cleanup(func() { CommandFactory = exec.Command })
+	return &invocations
 }
 
 // captureEnvScript returns a shell script that prints args and selected env vars
@@ -759,4 +778,388 @@ func TestMain(m *testing.M) {
 	// Restore to avoid side effects
 	CommandFactory = exec.Command
 	os.Exit(code)
+}
+
+
+
+// ---------------------------------------------------------------------------
+// Stall detection tests (AC-1 through AC-7)
+// ---------------------------------------------------------------------------
+
+// AC-1: subprocess stalls (no output) → RunRole kills it, retries, detects stall
+func TestRunRole_StallDetection_AC1(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	sleepForeverScript := `while true; do sleep 3600; done`
+	scriptPath := writeScript(t, sleepForeverScript)
+
+	// Attempt-aware factory: all invocations run the same stall script
+	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath})
+
+	// Lower poll interval for fast test
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	// Capture the per-killed-attempt stall diagnostic.
+	var stallLog bytes.Buffer
+	origWriter := stallLogWriter
+	stallLogWriter = &stallLog
+	t.Cleanup(func() { stallLogWriter = origWriter })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+
+	ctx := context.Background()
+	_, paths, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected error from stall detection, got nil")
+	}
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("error should wrap ErrStalled, got: %v", err)
+	}
+
+	// AC-1: Assert subprocess invoked exactly 1 + maxStallRetries = 2 times
+	if *invocations != 2 {
+		t.Errorf("subprocess invocation count: got %d, want 2 (1 initial + 1 retry)", *invocations)
+	}
+
+	// AC-1: Assert one stall diagnostic per killed attempt, each naming the role,
+	// the attempt index, and the idle threshold.
+	logLines := strings.Count(stallLog.String(), "stalled at attempt")
+	if logLines != 2 {
+		t.Errorf("stall log: got %d 'stalled at attempt' lines, want 2\n%s", logLines, stallLog.String())
+	}
+	for _, want := range []string{`role "dev"`, "stalled at attempt 0", "stalled at attempt 1"} {
+		if !strings.Contains(stallLog.String(), want) {
+			t.Errorf("stall log should contain %q, got:\n%s", want, stallLog.String())
+		}
+	}
+
+	if _, err := os.Stat(paths.Stdout); err != nil {
+		t.Errorf("stdout transcript should exist: %v", err)
+	}
+}
+
+// AC-1 (regression): a subprocess that writes once immediately then hangs must be
+// detected as stalled at ~idleTimeout — anchored to the actual last write, not the
+// poll time. With Timeout set between idleTimeout and idleTimeout+pollInterval, the
+// pre-fix behavior (anchoring to poll time) would return ErrTimeout; the fix returns
+// ErrStalled.
+func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	// idle=2s, poll=1.5s. The write lands well inside the first poll window, so the
+	// fix (anchor to the actual write ~t0) detects the stall at the ~3.0s poll; the
+	// pre-fix behaviour (anchor to the first poll at ~1.5s) would only detect it at
+	// the ~4.5s poll. A 3.75s wall-clock timeout (750ms margin either side, robust
+	// under -race) therefore yields ErrStalled with the fix but ErrTimeout without it.
+	cfg.Timeout = 3750 * time.Millisecond
+
+	writeOnceThenHang := `printf 'hello'
+while true; do sleep 3600; done`
+	scriptPath := writeScript(t, writeOnceThenHang)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 1500 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "2")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("expected ErrStalled (idle window anchored to last write), got: %v", err)
+	}
+	if errors.Is(err, ErrTimeout) {
+		t.Errorf("should not be classified as wall-clock timeout: %v", err)
+	}
+	if *invocations != 1 {
+		t.Errorf("subprocess invocation count: got %d, want 1", *invocations)
+	}
+}
+
+// AC-2: all attempts stall → returns ErrStalled (not ErrTimeout)
+func TestRunRole_AllAttemptsStall_AC2(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	sleepForeverScript := `while true; do sleep 3600; done`
+	scriptPath := writeScript(t, sleepForeverScript)
+	var capturedArgs []string
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected ErrStalled, got nil")
+	}
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("error should wrap ErrStalled, got: %v", err)
+	}
+	if errors.Is(err, ErrTimeout) {
+		t.Errorf("error should NOT wrap ErrTimeout: %v", err)
+	}
+}
+
+// AC-3: first attempt stalls, retry produces output and succeeds
+func TestRunRole_StallThenSuccess_AC3(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	// Attempt 1: write a distinctive marker to stdout (the transcript), then hang so it stalls.
+	stallScript := `printf 'MARKER_ATTEMPT_ONE'
+while true; do sleep 3600; done`
+	// Attempt 2: write a different marker to stdout, emit success, exit 0.
+	successScript := `printf 'MARKER_ATTEMPT_TWO'
+echo "success"
+exit 0`
+
+	stallPath := writeScript(t, stallScript)
+	successPath := writeScript(t, successScript)
+
+	// Attempt-aware factory: attempt 1 stalls, attempt 2 succeeds
+	invocations := attemptAwareFactory(t, []string{stallPath, successPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+
+	ctx := context.Background()
+	exitCode, paths, err := RunRole(ctx, cfg)
+
+	if err != nil {
+		t.Fatalf("RunRole should succeed after retry, got error: %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Errorf("exit code: got %d, want 0", exitCode)
+	}
+
+	// AC-3: Assert invoked exactly 2 times (1 stall + 1 success)
+	if *invocations != 2 {
+		t.Errorf("subprocess invocation count: got %d, want 2 (1 stall + 1 success)", *invocations)
+	}
+
+	stdoutBytes, err := os.ReadFile(paths.Stdout)
+	if err != nil {
+		t.Fatalf("failed to read stdout: %v", err)
+	}
+	if !strings.Contains(string(stdoutBytes), "MARKER_ATTEMPT_TWO") {
+		t.Errorf("stdout should contain attempt-2 marker, got: %q", string(stdoutBytes))
+	}
+
+	// AC-3: BR-4 truncation — final transcript must contain ONLY attempt 2's output,
+	// proving attempt 1's transcript was truncated on retry.
+	if strings.Contains(string(stdoutBytes), "MARKER_ATTEMPT_ONE") {
+		t.Errorf("stdout should NOT contain attempt-1 marker (must be truncated on retry), got: %q", string(stdoutBytes))
+	}
+}
+
+// AC-4: steady output (emitting within idle window), never stalls → completes normally
+func TestRunRole_SteadyOutput_AC4(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	// Emit every 300ms (< 1s idle timeout), run for ~2s total (spans idle window)
+	// This ensures the idle clock keeps resetting and stall never triggers.
+	steadyScript := `
+for i in 1 2 3 4 5 6 7; do
+  echo "output $i"
+  sleep 0.3
+done
+exit 0
+`
+	scriptPath := writeScript(t, steadyScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+
+	ctx := context.Background()
+	exitCode, paths, err := RunRole(ctx, cfg)
+
+	if err != nil {
+		t.Fatalf("steady output should not trigger stall, got error: %v", err)
+	}
+
+	if exitCode != 0 {
+		t.Errorf("exit code: got %d, want 0", exitCode)
+	}
+
+	// AC-4: Assert invoked exactly once (no stalls, no retries)
+	if *invocations != 1 {
+		t.Errorf("subprocess invocation count: got %d, want 1 (no stalls)", *invocations)
+	}
+
+	stdoutBytes, err := os.ReadFile(paths.Stdout)
+	if err != nil {
+		t.Fatalf("failed to read stdout: %v", err)
+	}
+	if !strings.Contains(string(stdoutBytes), "output 1") {
+		t.Errorf("stdout should contain output, got: %q", string(stdoutBytes))
+	}
+}
+
+// AC-5: produces output but exceeds wall-clock timeout → ErrTimeout (terminal, not retried)
+func TestRunRole_TimeoutNotRetried_AC5(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 500 * time.Millisecond
+
+	// Output immediately, then sleep forever
+	timeoutScript := `echo "started" && while true; do sleep 3600; done`
+	scriptPath := writeScript(t, timeoutScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	// Long idle timeout so stall detection doesn't fire
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "90")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
+
+	ctx := context.Background()
+	_, paths, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected ErrTimeout, got nil")
+	}
+
+	if !errors.Is(err, ErrTimeout) {
+		t.Errorf("error should wrap ErrTimeout, got: %v", err)
+	}
+	// Should NOT be stalled (wall-clock timeout fires first)
+	if errors.Is(err, ErrStalled) {
+		t.Errorf("timeout should not be retried as stall: %v", err)
+	}
+
+	// AC-5: Assert invoked exactly once (wall-clock timeout terminal, not retried)
+	if *invocations != 1 {
+		t.Errorf("subprocess invocation count: got %d, want 1 (timeout is terminal)", *invocations)
+	}
+
+	stdoutBytes, err := os.ReadFile(paths.Stdout)
+	if err != nil {
+		t.Fatalf("failed to read stdout: %v", err)
+	}
+	if !strings.Contains(string(stdoutBytes), "started") {
+		t.Errorf("stdout should contain 'started', got: %q", string(stdoutBytes))
+	}
+}
+
+// AC-7: custom env vars (GOLEMIC_AGENT_MAX_STALL_RETRIES) are parsed and honored
+func TestRunRole_CustomEnvVars_AC7(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	sleepScript := `while true; do sleep 3600; done`
+	scriptPath := writeScript(t, sleepScript)
+
+	// Configure 3 retries: 1 initial + 3 retries = 4 invocations
+	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath, scriptPath, scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "3") // custom retry count
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected ErrStalled, got nil")
+	}
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("error should wrap ErrStalled, got: %v", err)
+	}
+
+	// AC-7: Assert invocation count matches 1 + GOLEMIC_AGENT_MAX_STALL_RETRIES
+	expectedInvocations := 1 + 3 // 1 initial + 3 retries
+	if *invocations != expectedInvocations {
+		t.Errorf("subprocess invocation count: got %d, want %d (1 initial + 3 configured retries)", *invocations, expectedInvocations)
+	}
+}
+
+// Test env var parsing
+func TestParseIdleTimeout_Invalid(t *testing.T) {
+	origPoll := pollInterval
+	t.Cleanup(func() { pollInterval = origPoll })
+	pollInterval = 20 * time.Millisecond
+
+	tests := []struct {
+		name     string
+		envValue string
+		want     time.Duration
+	}{
+		{"empty", "", defaultIdleTimeout},
+		{"negative", "-1", defaultIdleTimeout},
+		{"zero", "0", defaultIdleTimeout},
+		{"non-numeric", "abc", defaultIdleTimeout},
+		{"below poll interval", "0.01", defaultIdleTimeout},
+		{"valid (>= poll)", "1", 1 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envValue != "" {
+				t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", tt.envValue)
+			} else {
+				t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "")
+			}
+			got := parseIdleTimeout()
+			if got != tt.want {
+				t.Errorf("parseIdleTimeout(): got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseMaxStallRetries_Invalid(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		want     int
+	}{
+		{"empty", "", defaultMaxStallRetries},
+		{"negative", "-1", defaultMaxStallRetries},
+		{"non-numeric", "abc", defaultMaxStallRetries},
+		{"valid", "5", 5},
+		{"zero", "0", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envValue != "" {
+				t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", tt.envValue)
+			} else {
+				t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "")
+			}
+			got := parseMaxStallRetries()
+			if got != tt.want {
+				t.Errorf("parseMaxStallRetries(): got %d, want %d", got, tt.want)
+			}
+		})
+	}
 }
