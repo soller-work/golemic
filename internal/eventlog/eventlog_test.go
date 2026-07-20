@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,7 +31,8 @@ func testEvent(t *testing.T, typ, runID, ts string, payload interface{}) Event {
 }
 
 func testPayload(verdict string) json.RawMessage {
-	b, _ := json.Marshal(map[string]string{"verdict": verdict, "mergeConfidence": "high"})
+	zero := 0
+	b, _ := json.Marshal(map[string]interface{}{"verdict": verdict, "mergeConfidence": "high", "reviewId": "PRR_test123", "inlineCommentCount": &zero})
 	return b
 }
 
@@ -313,7 +315,8 @@ func TestWriteReviewSubmitted_Valid(t *testing.T) {
 	}
 	defer w.Close()
 
-	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]string{"verdict": "approved", "mergeConfidence": "high"})
+	zero := 0
+	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]interface{}{"verdict": "approved", "mergeConfidence": "high", "reviewId": "PRR_abc", "inlineCommentCount": &zero})
 	if err := w.Write(ev); err != nil {
 		t.Fatal(err)
 	}
@@ -331,6 +334,57 @@ func TestWriteReviewSubmitted_Invalid(t *testing.T) {
 	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]string{"verdict": "reject"})
 	if err := w.Write(ev); err == nil {
 		t.Error("expected error for invalid verdict, got nil")
+	}
+}
+
+// AC-008: ValidateReviewSubmittedPayload enforces new fields (BR-006)
+func TestValidateReviewSubmitted_MissingReviewID_AC008(t *testing.T) {
+	zero := 0
+	raw, _ := json.Marshal(map[string]interface{}{
+		"verdict": "approved", "mergeConfidence": "high",
+		"inlineCommentCount": &zero,
+		// reviewId intentionally absent
+	})
+	if err := ValidateReviewSubmittedPayload(raw); err == nil {
+		t.Error("expected error for missing reviewId, got nil")
+	} else if !strings.Contains(err.Error(), "reviewId") {
+		t.Errorf("error should mention reviewId, got: %v", err)
+	}
+}
+
+func TestValidateReviewSubmitted_MissingInlineCommentCount_AC008(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"verdict": "approved", "mergeConfidence": "high",
+		"reviewId": "PRR_abc",
+		// inlineCommentCount intentionally absent
+	})
+	if err := ValidateReviewSubmittedPayload(raw); err == nil {
+		t.Error("expected error for missing inlineCommentCount, got nil")
+	} else if !strings.Contains(err.Error(), "inlineCommentCount") {
+		t.Errorf("error should mention inlineCommentCount, got: %v", err)
+	}
+}
+
+func TestValidateReviewSubmitted_NegativeInlineCommentCount_AC008(t *testing.T) {
+	raw, _ := json.Marshal(map[string]interface{}{
+		"verdict": "approved", "mergeConfidence": "high",
+		"reviewId": "PRR_abc",
+		"inlineCommentCount": -1,
+	})
+	if err := ValidateReviewSubmittedPayload(raw); err == nil {
+		t.Error("expected error for negative inlineCommentCount, got nil")
+	}
+}
+
+func TestValidateReviewSubmitted_ZeroInlineCommentCount_Valid_AC008(t *testing.T) {
+	zero := 0
+	raw, _ := json.Marshal(map[string]interface{}{
+		"verdict": "approved", "mergeConfidence": "high",
+		"reviewId": "PRR_abc",
+		"inlineCommentCount": &zero,
+	})
+	if err := ValidateReviewSubmittedPayload(raw); err != nil {
+		t.Errorf("expected no error for inlineCommentCount=0, got: %v", err)
 	}
 }
 

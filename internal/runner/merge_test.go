@@ -81,9 +81,12 @@ func writeReviewEventForMerge(t *testing.T, logPath, verdict, confidence string)
 		t.Fatalf("open writer: %v", err)
 	}
 	defer w.Close() //nolint:errcheck
-	payload, _ := json.Marshal(map[string]string{
-		"verdict":         verdict,
-		"mergeConfidence": confidence,
+	zero := 0
+	payload, _ := json.Marshal(map[string]interface{}{
+		"verdict":            verdict,
+		"mergeConfidence":    confidence,
+		"reviewId":           "PRR_test",
+		"inlineCommentCount": &zero,
 	})
 	if err := w.Write(eventlog.Event{
 		Type:    eventlog.EventReviewSubmitted,

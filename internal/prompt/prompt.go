@@ -90,7 +90,14 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 2. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `gh pr view {{.PRNumber}}` + "`" + `
 3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Review the changes against the spec and the guidelines above.
-5. Call exactly one: ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}}` + "`" + `
+5. For each finding that can be anchored to a specific file and line, call:
+   ` + "`" + `golemic review-comment --pr {{.PRNumber}} --path <file> --line <line> --body "<finding>"` + "`" + `
+   - If the command exits 2 (ANCHOR_FAILED), retry **once** with corrected coordinates.
+   - If the second attempt also exits 2, include the finding in the ` + "`" + `--body` + "`" + ` of ` + "`" + `submit-review` + "`" + ` instead.
+   - Any other error (exit 1) is fatal; do not retry.
+6. After posting all inline comments, call **exactly one**:
+   ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}} --merge-confidence high|low` + "`" + `
+   The ` + "`" + `--body` + "`" + ` must summarise all findings, including any that could not be anchored as inline comments.
 `
 
 // RenderDev renders a dev user prompt with all run-specific facts injected.
