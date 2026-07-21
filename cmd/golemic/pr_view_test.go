@@ -41,6 +41,17 @@ func TestRunPRView_NegativePRFlag(t *testing.T) {
 	}
 }
 
+func TestRunPRView_NonNumericPRFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := runPRView([]string{"golemic", "pr-view", "--pr", "abc"}, &stdout, &stderr, fakeExecutor{})
+	if code != 1 {
+		t.Errorf("exit code: got %d, want 1", code)
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout should be empty on error, got: %q", stdout.String())
+	}
+}
+
 // AC: valid PR number calls gh pr view and prints output to stdout.
 func TestRunPRView_Success(t *testing.T) {
 	const prOutput = "title:\tFix the bug\nstate:\tOPEN\n"

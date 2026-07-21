@@ -258,7 +258,7 @@ alle lauf-spezifischen Fakten im gerenderten User-Prompt:
   --body …`.
 - **Reviewer:** PR-Nummer, Issue inline, `verify_command`, Guidelines
   (`guidelines/reviewer.md`), Schrittliste: Diff selbst holen
-  (`git diff origin/main...HEAD`, `gh pr view`) → `verify_command` ausführen →
+  (`git diff origin/main...HEAD`, `golemic pr-view`) → `verify_command` ausführen →
   gegen Issue + Guidelines prüfen → genau ein `golemic submit-review …`.
   Diff wird bewusst **nicht** ins Prompt injiziert (Kontextfenster bei großen PRs).
 
