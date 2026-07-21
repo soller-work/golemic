@@ -43,6 +43,10 @@ type reviewerTemplateData struct {
 	CodebaseMemory bool
 }
 
+// workingDirDirective is injected into every runner prompt before ## Instructions.
+// Agents must not prefix bash commands with cd <worktree> because cmd.Dir is already set.
+const workingDirDirective = "## Working Directory\n\nYour `bash` tool starts each invocation with `cwd` already set to the worktree root. Do **not** prefix commands with `cd <path>` — it wastes tokens and clutters the run's progress display. If you must operate in a subdirectory for a single call, use a subshell, e.g. `(cd internal/foo && go test ./...)`."
+
 const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 **Title:** {{.Issue.Title}}
@@ -73,6 +77,10 @@ Your worktree has been indexed into a code-intelligence graph. Prefer these comm
 
 Reach for ` + "`" + `grep` + "`" + `/` + "`" + `find` + "`" + ` only when CBM cannot answer (e.g. inspecting comments, non-source files, or scratch output).
 {{end}}
+---
+
+` + workingDirDirective + `
+
 ---
 
 ## Instructions
@@ -119,6 +127,10 @@ Your worktree has been indexed into a code-intelligence graph. Prefer these comm
 
 Reach for ` + "`" + `grep` + "`" + `/` + "`" + `find` + "`" + ` only when CBM cannot answer (e.g. inspecting comments, non-source files, or scratch output).
 {{end}}
+---
+
+` + workingDirDirective + `
+
 ---
 
 ## Instructions
@@ -268,6 +280,10 @@ Reach for ` + "`" + `grep` + "`" + `/` + "`" + `find` + "`" + ` only when CBM ca
 {{end}}
 ---
 
+` + workingDirDirective + `
+
+---
+
 ## Instructions
 
 1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
@@ -347,6 +363,10 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 
 ---
 
+` + workingDirDirective + `
+
+---
+
 ## Instructions
 
 1. The failing checks above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue’s web UI.
@@ -418,6 +438,10 @@ const devRebaseConflictResolveUserTemplate = `# Rebase Conflict Resolution: PR #
 ## Guidelines
 
 {{.Guidelines}}
+
+---
+
+` + workingDirDirective + `
 
 ---
 
