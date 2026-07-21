@@ -120,7 +120,7 @@ Use ` + "`" + `detect_changes` + "`" + ` to understand the blast radius of the P
    - If the second attempt also exits 2, include the finding in the ` + "`" + `--body` + "`" + ` of ` + "`" + `submit-review` + "`" + ` instead.
    - Any other error (exit 1) is fatal; do not retry.
 6. After posting all inline comments, call **exactly one**:
-   ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}} --merge-confidence high|low` + "`" + `
+   ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}} --merge-confidence high|medium|low` + "`" + `
    The ` + "`" + `--body` + "`" + ` must summarise all findings, including any that could not be anchored as inline comments.
 `
 
