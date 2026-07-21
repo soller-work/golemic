@@ -1,26 +1,26 @@
 # Dev Guidelines
 
 ## Stack
-Go 1.21, nur Standardbibliothek — keine Frameworks. Module `golemic`; nicht-öffentliche Pakete unter `internal/`. Der Runner ist deterministisch, tool-gesteuert; LLM-Urteil steckt nur in den Rollen-Prompts.
+Go 1.21, standard library only — no frameworks. Module `golemic`; non-public packages under `internal/`. The runner is deterministic and tool-driven; LLM judgement lives only in the role prompts.
 
 ## Build/Test
-- Grün-Pflicht: `go build ./... && go test ./...`
-- Sauber halten: `gofmt`, `go vet`, `golangci-lint` (depguard erzwingt Import-Layering).
-- Neue Logik testgetrieben; Unit-Tests hermetisch (Abhängigkeiten injizieren, kein echtes Netz/GitHub).
+- Must stay green: `go build ./... && go test ./...`
+- Keep clean: `gofmt`, `go vet`, `golangci-lint` (depguard enforces import layering).
+- New logic test-driven; unit tests hermetic (inject dependencies, no real network/GitHub).
 
 ## Commits
-Conventional Commits mit Slice-Nummer: `type(scope): summary (NNN)` — z.B. `fix(runner): … (018)`.
+Conventional Commits with slice number: `type(scope): summary (NNN)` — e.g. `fix(runner): … (018)`.
 
-## Code-Qualität — Do's
-- KISS, YAGNI, DRY (Wissen deduplizieren, nicht jede Zeile).
-- Kleine, klar benannte Pakete; kleine Interfaces beim Konsumenten definieren; konkrete Typen zurückgeben.
-- Abhängigkeiten explizit injizieren; Zero Values nutzbar machen; Komposition statt Abstraktion.
-- Fehler mit `%w` und Kontext wrappen; `context.Context` als erster Parameter.
-- Geschäftslogik von HTTP, DB und Infrastruktur trennen; ein Typ / eine Funktion → eine Verantwortung.
+## Code Quality — Do's
+- KISS, YAGNI, DRY (deduplicate knowledge, not every line).
+- Small, clearly named packages; define small interfaces at the consumer; return concrete types.
+- Inject dependencies explicitly; make zero values usable; prefer composition over abstraction.
+- Wrap errors with `%w` and context; `context.Context` as the first parameter.
+- Separate business logic from HTTP, DB, and infrastructure; one type / one function → one responsibility.
 
-## Code-Qualität — Don'ts
-- Keine Abstraktionen/Factories/Manager/Wrapper ohne konkreten Bedarf; keine „God Interfaces".
-- Keine `utils`/`common`/`helpers`-Pakete; keine unnötig tiefen Paketstrukturen; keine zyklischen Abhängigkeiten.
-- Kein globaler veränderlicher Zustand; keine versteckten Seiteneffekte.
-- Keine Panics für normale Fehler; Fehler nicht ignorieren; Fehlerketten nicht mit `%v` zerstören.
-- `context.Context` nicht in Structs speichern; kein Premature Optimization; keine cleveren Einzeiler auf Kosten der Lesbarkeit.
+## Code Quality — Don'ts
+- No abstractions/factories/managers/wrappers without a concrete need; no "God Interfaces".
+- No `utils`/`common`/`helpers` packages; no unnecessarily deep package structures; no cyclic dependencies.
+- No global mutable state; no hidden side effects.
+- No panics for normal errors; do not ignore errors; do not destroy error chains with `%v`.
+- Do not store `context.Context` in structs; no premature optimization; no clever one-liners at the cost of readability.
