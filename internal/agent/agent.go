@@ -350,16 +350,22 @@ func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File
 }
 
 // newPiCmd builds and configures the pi subprocess without starting it.
-func newPiCmd(cfg RoleConfig, args []string, golemicDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
+// shimDir, when non-empty, is prepended to PATH so its gh shim takes precedence
+// over any system gh binary, blocking direct gh usage from agent bash.
+func newPiCmd(cfg RoleConfig, args []string, golemicDir, shimDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
 	cmd := CommandFactory("pi", args...)
 	cmd.Dir = cfg.WorktreeDir
+	agentPath := golemicDir + string(filepath.ListSeparator) + os.Getenv("PATH")
+	if shimDir != "" {
+		agentPath = shimDir + string(filepath.ListSeparator) + agentPath
+	}
 	env := append(
 		os.Environ(),
 		"GOLEMIC_RUN_ID="+cfg.RunID,
 		"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
 		"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
 		"GH_TOKEN="+cfg.GHToken,
-		"PATH="+golemicDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
+		"PATH="+agentPath,
 	)
 	env = append(env, cfg.Env...)
 	cmd.Env = env
@@ -374,12 +380,15 @@ func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, gole
 	idleTimeout := parseIdleTimeout()
 	maxStallRetries := parseMaxStallRetries()
 
+	shimDir, cleanupShim := ghShimCreator()
+	defer cleanupShim()
+
 	for attempt := 0; attempt <= maxStallRetries; attempt++ {
 		stdoutFile, stderrFile, fileErr := openTranscriptFiles(stdoutPath, stderrPath)
 		if fileErr != nil {
 			return 0, fileErr
 		}
-		cmd := newPiCmd(cfg, args, golemicDir, stdoutFile, stderrFile)
+		cmd := newPiCmd(cfg, args, golemicDir, shimDir, stdoutFile, stderrFile)
 		if startErr := cmd.Start(); startErr != nil {
 			stdoutFile.Close() //nolint:errcheck
 			stderrFile.Close() //nolint:errcheck
