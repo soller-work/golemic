@@ -13,7 +13,6 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/eventlog"
-	"golemic/internal/preflight"
 	"golemic/internal/prompt"
 )
 
@@ -21,16 +20,43 @@ const (
 	defaultCIPollInterval = 10 * time.Second
 	maxCILogBytes         = 8000
 	maxCIFixRounds        = 2
+
+	// branchProtectionRequiredCICheck is the required CI context trusted for green.
+	branchProtectionRequiredCICheck = "verify"
 )
 
-// noChecksRe matches the exact stderr line gh emits for a PR on a branch with no CI checks.
-var noChecksRe = regexp.MustCompile(`^no checks reported on the '.+' branch$`)
-
-// ghCheckItem is one entry from `gh pr checks --json name,bucket,link`.
+// ghCheckItem is the internal check representation used throughout the CI gate.
 type ghCheckItem struct {
-	Name   string `json:"name"`
-	Bucket string `json:"bucket"` // pass/fail/pending/skipping/cancel/actionRequired/waiting
-	Link   string `json:"link"`
+	Name   string
+	Bucket string // pass/fail/pending
+	Link   string
+}
+
+// ghCheckRunItem is one entry from the GitHub check-runs REST API.
+type ghCheckRunItem struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`     // queued, in_progress, completed
+	Conclusion string `json:"conclusion"` // success, failure, neutral, cancelled, skipped, timed_out, action_required
+	HTMLURL    string `json:"html_url"`
+}
+
+type ghCheckRunsResponse struct {
+	CheckRuns []ghCheckRunItem `json:"check_runs"`
+}
+
+// checkRunBucket maps a GitHub check run status/conclusion to a bucket string.
+func checkRunBucket(status, conclusion string) string {
+	if status != "completed" {
+		return "pending"
+	}
+	switch conclusion {
+	case "success", "neutral", "skipped":
+		return "pass"
+	case "failure", "cancelled", "timed_out", "action_required":
+		return "fail"
+	default:
+		return "pending"
+	}
 }
 
 // categorizeBucket maps a gh check bucket to "pass", "fail", or "pending".
@@ -45,57 +71,154 @@ func categorizeBucket(bucket string) string {
 	}
 }
 
-// queryCIChecks calls gh pr checks and returns a result string and failed items.
-// Result is one of: "green", "red", "no_checks", "pending".
-// When RequireCIChecks is true, no_checks is mapped to pending so the poll loop
-// waits for the workflow to register rather than treating absence as success.
-// Returns error on gh invocation or parse failure (CHECKS_QUERY_FAILED).
-func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
+// getPRHeadSHA returns the current head commit SHA of the given PR.
+func (r *Runner) getPRHeadSHA(prNumber int) (string, error) {
 	out, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.DevToken()},
 		r.repoRoot,
-		"gh", "pr", "checks", fmt.Sprintf("%d", prNumber), "--json", "name,bucket,link",
+		"gh", "pr", "view", fmt.Sprintf("%d", prNumber), "--json", "headRefOid", "--jq", ".headRefOid",
 	)
 	if err != nil {
-		var ee *preflight.ErrExit
-		if errors.As(err, &ee) && ee.ExitCode == 1 && noChecksRe.MatchString(strings.TrimSpace(ee.Stderr)) {
-			return r.noChecksResult(), nil, nil
-		}
-		return "", nil, fmt.Errorf("CHECKS_QUERY_FAILED: %w", err)
+		return "", fmt.Errorf("failed to get PR head SHA: %w", err)
 	}
+	return strings.TrimSpace(out), nil
+}
 
+// getRepoNWO returns the repository "owner/name" string, cached after the first successful call.
+func (r *Runner) getRepoNWO() (string, error) {
+	if r.cachedNWO != "" {
+		return r.cachedNWO, nil
+	}
+	out, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		r.repoRoot,
+		"gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner",
+	)
+	if err != nil {
+		return "", fmt.Errorf("failed to get repo NWO: %w", err)
+	}
+	r.cachedNWO = strings.TrimSpace(out)
+	return r.cachedNWO, nil
+}
+
+// queryCheckRunsForSHA fetches check runs for a specific commit SHA via the GitHub API.
+func (r *Runner) queryCheckRunsForSHA(nwo, sha string) ([]ghCheckItem, error) {
+	out, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		r.repoRoot,
+		"gh", "api", fmt.Sprintf("repos/%s/commits/%s/check-runs", nwo, sha),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("CHECKS_QUERY_FAILED: check-runs API failed: %w", err)
+	}
 	out = strings.TrimSpace(out)
 	if out == "" || out == "null" {
-		return r.noChecksResult(), nil, nil
+		return nil, nil
 	}
-
-	var checks []ghCheckItem
-	if err := json.Unmarshal([]byte(out), &checks); err != nil {
-		return "", nil, fmt.Errorf("CHECKS_QUERY_FAILED: failed to parse gh pr checks output: %w", err)
+	var resp ghCheckRunsResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return nil, fmt.Errorf("CHECKS_QUERY_FAILED: failed to parse check-runs response: %w", err)
 	}
+	items := make([]ghCheckItem, 0, len(resp.CheckRuns))
+	for _, cr := range resp.CheckRuns {
+		items = append(items, ghCheckItem{
+			Name:   cr.Name,
+			Bucket: checkRunBucket(cr.Status, cr.Conclusion),
+			Link:   cr.HTMLURL,
+		})
+	}
+	return items, nil
+}
 
+// getLocalHeadSHA reads the HEAD commit SHA from the given worktree directory.
+func (r *Runner) getLocalHeadSHA(worktreeDir string) (string, error) {
+	out, err := r.executor.RunInDir(worktreeDir, "git", "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("failed to get local HEAD SHA: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// queryCIChecks queries check runs for the PR's current head SHA and returns a result string.
+// Result is one of: "green", "red", "pending".
+// Only checks reported for the PR's current head commit are trusted; this prevents
+// stale completed checks from a superseded SHA from causing a premature "green".
+// A missing required check for the current head is pending so the poll loop waits
+// for the workflow to register instead of falling back to a local merge path.
+// Returns error on gh invocation or parse failure (CHECKS_QUERY_FAILED).
+func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
+	headSHA, err := r.getPRHeadSHA(prNumber)
+	if err != nil {
+		return "", nil, fmt.Errorf("CHECKS_QUERY_FAILED: %w", err)
+	}
+	nwo, err := r.getRepoNWO()
+	if err != nil {
+		return "", nil, fmt.Errorf("CHECKS_QUERY_FAILED: %w", err)
+	}
+	checks, err := r.queryCheckRunsForSHA(nwo, headSHA)
+	if err != nil {
+		return "", nil, err // already CHECKS_QUERY_FAILED prefixed
+	}
 	if len(checks) == 0 {
-		return r.noChecksResult(), nil, nil
+		return "pending", nil, nil
 	}
-
 	return classifyChecks(checks)
 }
 
-// noChecksResult returns the result string for a PR with no registered checks.
-// Returns "pending" when RequireCIChecks is true (waits for workflow registration),
-// otherwise returns "no_checks" (existing behaviour, treated as success by runCIGate).
-func (r *Runner) noChecksResult() string {
-	if r.cfg != nil && r.cfg.RequireCIChecks {
-		return "pending"
+// pollCheckRunsForSHA polls the check-runs API for a specific commit SHA until all
+// checks complete or ciTimeout expires. Empty check runs are treated as pending so
+// the runner waits through the brief window after a force-push before GitHub creates
+// new check run objects for the new commit.
+func (r *Runner) pollCheckRunsForSHA(sha, nwo string, ciTimeout time.Duration) (string, []ghCheckItem, error) {
+	query := func() (string, []ghCheckItem, error) {
+		checks, err := r.queryCheckRunsForSHA(nwo, sha)
+		if err != nil {
+			return "", nil, err
+		}
+		if len(checks) == 0 {
+			return "pending", nil, nil // CI hasn't started yet for this SHA
+		}
+		return classifyChecks(checks)
 	}
-	return "no_checks"
+
+	result, failed, err := query()
+	if err != nil {
+		return "", nil, err
+	}
+	if result != "pending" {
+		return result, failed, nil
+	}
+
+	ticker := time.NewTicker(r.ciPollInterval())
+	defer ticker.Stop()
+	deadline := time.NewTimer(ciTimeout)
+	defer deadline.Stop()
+
+	for {
+		select {
+		case <-deadline.C:
+			return "timeout", nil, nil
+		case <-ticker.C:
+			result, failed, err = query()
+			if err != nil {
+				return "", nil, err
+			}
+			if result != "pending" {
+				return result, failed, nil
+			}
+		}
+	}
 }
 
 // classifyChecks inspects check items and returns the aggregate result.
 func classifyChecks(checks []ghCheckItem) (string, []ghCheckItem, error) {
 	var failed []ghCheckItem
 	hasPending := false
+	hasRequiredCheck := false
 	for _, c := range checks {
+		if c.Name == branchProtectionRequiredCICheck {
+			hasRequiredCheck = true
+		}
 		switch categorizeBucket(c.Bucket) {
 		case "fail":
 			failed = append(failed, c)
@@ -106,7 +229,7 @@ func classifyChecks(checks []ghCheckItem) (string, []ghCheckItem, error) {
 	if len(failed) > 0 {
 		return "red", failed, nil
 	}
-	if hasPending {
+	if hasPending || !hasRequiredCheck {
 		return "pending", nil, nil
 	}
 	return "green", nil, nil
@@ -180,13 +303,13 @@ func (r *Runner) ciTimeout() time.Duration {
 }
 
 // pollCIChecks polls gh pr checks until all complete or ciTimeout expires.
-// Returns result ("green"|"red"|"timeout"|"no_checks") and any failed items.
+// Returns result ("green"|"red"|"timeout") and any failed items.
 func (r *Runner) pollCIChecks(prNumber int, ciTimeout time.Duration) (string, []ghCheckItem, error) {
 	result, failed, err := r.queryCIChecks(prNumber)
 	if err != nil {
 		return "", nil, err
 	}
-	if result != "pending" {
+	if result == "green" || result == "red" {
 		return result, failed, nil
 	}
 
@@ -204,7 +327,7 @@ func (r *Runner) pollCIChecks(prNumber int, ciTimeout time.Duration) (string, []
 			if err != nil {
 				return "", nil, err
 			}
-			if result != "pending" {
+			if result == "green" || result == "red" {
 				return result, failed, nil
 			}
 		}
@@ -385,7 +508,7 @@ func (r *Runner) buildFailedCheckInfo(result string, failedChecks []ghCheckItem)
 
 // runCIGate implements the CI gate phase between pr_opened and reviewer creation.
 // It polls PR checks and retries the dev agent up to maxCIFixRounds times on failure.
-// Returns outcomeSuccess when checks are green or absent; outcomeDevFailed otherwise.
+// Returns outcomeSuccess when checks are green; outcomeDevFailed otherwise.
 func (r *Runner) runCIGate(prNumber int, eventLogPath string, agentTimeout time.Duration) string {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	ciTimeout := r.ciTimeout()
@@ -400,7 +523,7 @@ func (r *Runner) runCIGate(prNumber int, eventLogPath string, agentTimeout time.
 
 		r.writeCIWaitFinished(eventLogPath, result, fixRound)
 
-		if result == "green" || result == "no_checks" {
+		if result == "green" {
 			return outcomeSuccess
 		}
 

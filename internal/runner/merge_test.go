@@ -140,6 +140,48 @@ type nopWriter struct{}
 
 func (nopWriter) Write(eventlog.Event) error { return nil }
 
+// dispatchMergeGh handles gh calls used by merge-phase tests.
+func dispatchMergeGh(args []string, checkRunsResponses []string, checkRunsIdx *int, commentCalls *[]string, mergeSHA string) (string, bool) {
+	if resp, ok := dispatchMergeGhChecks(args, checkRunsResponses, checkRunsIdx, commentCalls); ok {
+		return resp, true
+	}
+	if resp, ok := dispatchMergeGhMerge(args, mergeSHA); ok {
+		return resp, true
+	}
+	return "", false
+}
+
+func dispatchMergeGhChecks(args []string, checkRunsResponses []string, checkRunsIdx *int, commentCalls *[]string) (string, bool) {
+	switch {
+	case isGHPRViewHeadSHA(args):
+		return ciTestHeadSHA + "\n", true
+	case isGHRepoViewNWO(args):
+		return ciTestNWO + "\n", true
+	case isGHCheckRunsAPI(args):
+		if checkRunsIdx == nil {
+			if len(checkRunsResponses) == 0 {
+				return emptyCheckRunsJSON, true
+			}
+			return checkRunsResponses[0], true
+		}
+		return seqResponse(checkRunsResponses, checkRunsIdx), true
+	case ghArgsMatch(args, "pr", "comment"):
+		if commentCalls != nil {
+			*commentCalls = append(*commentCalls, extractBodyArg(args))
+		}
+		return "", true
+	default:
+		return "", false
+	}
+}
+
+func dispatchMergeGhMerge(args []string, mergeSHA string) (string, bool) {
+	if ghArgsMatch(args, "pr", "merge") && mergeSHA != "" {
+		return mergeSHA, true
+	}
+	return "", false
+}
+
 // ---------------------------------------------------------------------------
 // Merge phase: up-to-date shortcut skips rebase, verify, push (BR-003)
 // ---------------------------------------------------------------------------
@@ -166,8 +208,8 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop,goc
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			calls = append(calls, fmt.Sprintf("%s %s", name, strings.Join(args, " ")))
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "abc123\n", nil
@@ -379,8 +421,8 @@ func TestRunMergePhase_MergeFailure_AutomergeFailed_AC011(t *testing.T) { //noli
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "", fmt.Errorf("gh pr merge failed: branch protection required")
@@ -526,20 +568,27 @@ func mustLoadCredsFromDir(t *testing.T, homeDir, project string) *credentials.Cr
 func TestVerifyAndPush_GreenCI_MergesSuccessfully_AC001(t *testing.T) { //nolint:cyclop
 	checksCall := 0
 	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-local\n", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			switch {
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
-				checksCall++
-				if checksCall == 1 {
-					// Initial query: pending
-					return `[{"name":"build","bucket":"waiting","link":""}]`, nil
+			if name == "gh" {
+				if isGHCheckRunsAPI(args) {
+					checksCall++
+					if checksCall == 1 {
+						return ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}}), nil
+					}
+					return requiredVerifyCheckRunsJSON(), nil
 				}
-				// Subsequent polls: green
-				return `[{"name":"build","bucket":"pass","link":""}]`, nil
-			case name == "git" && len(args) >= 1 && args[0] == "push":
+				if resp, ok := dispatchMergeGh(args, nil, nil, nil, "sha-abc"); ok {
+					return resp, nil
+				}
+			}
+			if name == "git" && len(args) >= 1 && args[0] == "push" {
 				return "", nil
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "merge":
-				return "sha-abc", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
@@ -562,7 +611,7 @@ func TestVerifyAndPush_GreenCI_MergesSuccessfully_AC001(t *testing.T) { //nolint
 		t.Error("pr_merged event not written")
 	}
 	if checksCall < 2 {
-		t.Errorf("expected at least 2 gh pr checks calls (initial + poll); got %d", checksCall)
+		t.Errorf("expected at least 2 gh api check-runs calls (initial + poll); got %d", checksCall)
 	}
 }
 
@@ -570,17 +619,26 @@ func TestVerifyAndPush_GreenCI_MergesSuccessfully_AC001(t *testing.T) { //nolint
 func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolint:cyclop
 	checksCall := 0
 	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-local\n", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			switch {
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
-				checksCall++
-				if checksCall == 1 {
-					return `[{"name":"build","bucket":"waiting","link":""}]`, nil // pending → has CI
+			if name == "gh" {
+				if isGHCheckRunsAPI(args) {
+					checksCall++
+					if checksCall == 1 {
+						return ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}}), nil
+					}
+					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "failure"}}), nil
 				}
-				return `[{"name":"build","bucket":"fail","link":""}]`, nil // red after push
-			case name == "git" && len(args) >= 1 && args[0] == "push":
-				return "", nil
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "comment":
+				if resp, ok := dispatchMergeGh(args, nil, nil, nil, ""); ok {
+					return resp, nil
+				}
+			}
+			if name == "git" && len(args) >= 1 && args[0] == "push" {
 				return "", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -611,25 +669,112 @@ func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolin
 	}
 }
 
-// AC-008 (success): no CI configured → verify_command passes → push → squash merge.
-func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) { //nolint:cyclop
+// AC-009: stale green on the superseded SHA must not merge; only the pushed SHA can release the merge.
+func TestVerifyAndPush_StaleGreenIgnoredUntilPushedGreen_AC009(t *testing.T) { //nolint:funlen,gocognit,cyclop
+	oldSHA := "sha-old"
+	pushedSHA := "sha-new"
+	currentSHAQueries := 0
+	mergeCalls := 0
+	pushSeen := false
+
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
-			// verify_command runs via sh -c (P1-1)
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return pushedSHA + "\n", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 1 && args[0] == "push" {
+				pushSeen = true
+				return "", nil
+			}
+			if name != "gh" {
+				return "", fmt.Errorf("unexpected: %s %v", name, args)
+			}
+			switch {
+			case isGHPRViewHeadSHA(args):
+				return oldSHA + "\n", nil
+			case isGHRepoViewNWO(args):
+				return ciTestNWO + "\n", nil
+			case isGHCheckRunsAPI(args):
+				if !strings.Contains(args[1], "/commits/") {
+					t.Fatalf("expected commit-specific check-runs query, got %q", args[1])
+				}
+				if !pushSeen {
+					if !strings.Contains(args[1], oldSHA) {
+						t.Fatalf("before push expected old SHA query, got %q", args[1])
+					}
+					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}), nil
+				}
+				if !strings.Contains(args[1], pushedSHA) {
+					t.Fatalf("after push expected pushed SHA query, got %q", args[1])
+				}
+				currentSHAQueries++
+				switch currentSHAQueries {
+				case 1:
+					return emptyCheckRunsJSON, nil
+				case 2:
+					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}), nil
+				default:
+					t.Fatalf("unexpected extra pushed-SHA poll %d for %q", currentSHAQueries, args[1])
+				}
+			case ghArgsMatch(args, "pr", "merge"):
+				if !pushSeen {
+					t.Fatal("merge attempted before push")
+				}
+				mergeCalls++
+				return "sha-merged", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
+	r := makeVerifyRunner(t, exec)
+	var written []eventlog.Event
+	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if currentSHAQueries != 2 {
+		t.Errorf("expected 2 pushed-SHA polls (pending then green), got %d", currentSHAQueries)
+	}
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 squash merge, got %d", mergeCalls)
+	}
+	for _, ev := range written {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			t.Errorf("automerge_failed must not be written on stale-green recovery path")
+		}
+	}
+}
+
+// AC-008 regression: empty current-head checks stay pending and must not fall back
+// to local verify_command + immediate squash merge.
+func TestVerifyAndPush_NoCI_TimesOutWithoutMerging_AC008(t *testing.T) { //nolint:cyclop
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-local\n", nil
+			}
 			if name == "sh" && len(args) == 2 && args[0] == "-c" {
+				t.Error("verify_command must not be used as a no-CI fallback after issue #125")
 				return "ok", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			switch {
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
-				// no_checks: gh exits 1 with the exact message
-				return "", noChecksErr()
-			case name == "git" && len(args) >= 1 && args[0] == "push":
+			if name == "gh" {
+				if resp, ok := dispatchMergeGh(args, []string{emptyCheckRunsJSON}, nil, nil, ""); ok {
+					return resp, nil
+				}
+			}
+			if name == "git" && len(args) >= 1 && args[0] == "push" {
 				return "", nil
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "merge":
-				return "sha-abc", nil
+			}
+			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "merge" {
+				t.Fatal("squash merge must not be called while the required check is absent")
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
@@ -639,17 +784,13 @@ func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) 
 	var written []eventlog.Event
 	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
 
-	if outcome != outcomeSuccess {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
 	}
-	found := false
 	for _, ev := range written {
 		if ev.Type == eventlog.EventPRMerged {
-			found = true
+			t.Error("pr_merged must not be written while the required check is absent")
 		}
-	}
-	if !found {
-		t.Error("pr_merged event not written")
 	}
 }
 
@@ -664,10 +805,12 @@ func TestVerifyAndPush_NoCI_VerifyFails_MergeFailed_AC008(t *testing.T) { //noli
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			switch {
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "checks":
-				return "", noChecksErr()
-			case name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "comment":
+			if name == "gh" {
+				if resp, ok := dispatchMergeGh(args, []string{emptyCheckRunsJSON}, nil, nil, ""); ok {
+					return resp, nil
+				}
+			}
+			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "comment" {
 				return "", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -696,13 +839,6 @@ func TestVerifyAndPush_NoCI_VerifyFails_MergeFailed_AC008(t *testing.T) { //noli
 			t.Error("pr_merged must not be written when verify_command fails")
 		}
 	}
-}
-
-// noChecksErr returns the exact error that gh emits for a PR with no CI checks.
-// queryCIChecks uses errors.As to detect *preflight.ErrExit, so we must return
-// the real struct, not a custom interface.
-func noChecksErr() error {
-	return &preflight.ErrExit{ExitCode: 1, Stderr: "no checks reported on the 'golemic/issue-50' branch"}
 }
 
 // ---------------------------------------------------------------------------
@@ -882,8 +1018,8 @@ func TestRunMergePhase_DeletesRemoteBranchAfterMerge(t *testing.T) { //nolint:cy
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-002", nil
@@ -964,8 +1100,8 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-003", nil
@@ -1024,8 +1160,8 @@ func TestRunMergePhase_SilentSuccessOnRaceDeleteFailure(t *testing.T) { //nolint
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-043", nil
@@ -1084,8 +1220,8 @@ func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclo
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-004", nil
@@ -1309,8 +1445,8 @@ func TestRunMergePhase_UpToDate_GreenCI_Merges_AC002(t *testing.T) { //nolint:cy
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-ac002", nil
@@ -1367,12 +1503,17 @@ func TestRunMergePhase_UpToDate_PendingThenGreen_Merges_AC003(t *testing.T) { //
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				checksCall++
-				if checksCall == 1 {
-					return `[{"name":"verify","bucket":"waiting","link":""}]`, nil
+			if name == "gh" {
+				if isGHCheckRunsAPI(args) {
+					checksCall++
+					if checksCall == 1 {
+						return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "in_progress"}}), nil
+					}
+					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}), nil
 				}
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+				if resp, ok := dispatchMergeGh(args, nil, nil, nil, ""); ok {
+					return resp, nil
+				}
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				return "sha-ac003", nil
@@ -1417,8 +1558,8 @@ func TestRunMergePhase_UpToDate_RedCI_MergeFailed_AC004(t *testing.T) { //nolint
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return `[{"name":"verify","bucket":"fail","link":""}]`, nil
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "failure"}})}, nil, nil, ""); ok {
+				return resp, nil
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				t.Error("gh pr merge must not be called when CI is red (AC-004)")
@@ -1479,8 +1620,10 @@ func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nol
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				return "", noChecksErr()
+			if name == "gh" {
+				if resp, ok := dispatchMergeGh(args, []string{emptyCheckRunsJSON}, nil, nil, ""); ok {
+					return resp, nil
+				}
 			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				t.Error("gh pr merge must not be called when no checks reported (AC-005)")
@@ -1504,7 +1647,7 @@ func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nol
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
 	}
 
-	const wantReason = "required check not reported for PR head"
+	const wantReason = "CI checks timeout on up-to-date branch"
 	var found bool
 	var reason string
 	for _, ev := range *eventsPtr {
@@ -1524,7 +1667,7 @@ func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nol
 }
 
 // AC-006: behind branch (isBranchUpToDate=false after fetch) → rebaseBranch + verifyAndPush flow,
-// and the existing AC-008 no_checks path in verifyAndPush still runs runVerifyCommand (BR-005 regression).
+// then force-pushes and waits for a current-head required check before merge.
 func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //nolint:cyclop,gocognit,funlen
 	logPath := newLogPath(t)
 
@@ -1533,7 +1676,7 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 	mkCredDir(t, homeDir, project)
 	creds := mustLoadCredsFromDir(t, homeDir, project)
 
-	var rebaseCalled, verifyCommandCalled, forcePushCalled bool
+	var rebaseCalled, forcePushCalled bool
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" && args[0] == "fetch" {
@@ -1546,16 +1689,20 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 				rebaseCalled = true
 				return "", nil
 			}
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-local\n", nil
+			}
 			if name == "sh" && args[0] == "-c" {
-				verifyCommandCalled = true
-				return "", nil // verify_command passes
+				t.Error("runVerifyCommand must not be used as a no-CI fallback after issue #125")
+				return "", nil
 			}
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				// no_checks → verifyAndPush runs local verify_command (AC-008 / BR-005)
-				return "", noChecksErr()
+			if name == "gh" {
+				if resp, ok := dispatchMergeGh(args, []string{requiredVerifyCheckRunsJSON()}, nil, nil, ""); ok {
+					return resp, nil
+				}
 			}
 			if name == "git" && args[0] == "push" {
 				forcePushCalled = true
@@ -1597,11 +1744,8 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 	if !rebaseCalled {
 		t.Error("rebaseBranch must be called on behind-branch path (AC-006)")
 	}
-	if !verifyCommandCalled {
-		t.Error("runVerifyCommand must be called in verifyAndPush no_checks path (AC-006 / BR-005)")
-	}
 	if !forcePushCalled {
-		t.Error("forcePushBranch must be called after verify_command passes (AC-006 / BR-005)")
+		t.Error("forcePushBranch must be called before polling the pushed head (AC-006)")
 	}
 
 	var prMergedFound bool
@@ -1666,13 +1810,13 @@ func makeConflictRetryRunner(t *testing.T, exec *fakeExecutor) (*Runner, string,
 
 	var written []eventlog.Event
 	r := &Runner{
-		executor:   exec,
-		issueNum:   65,
-		runID:      "test-run",
-		repoRoot:   repoRoot,
-		homeDir:    homeDir,
-		project:    project,
-		issue:      &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
+		executor: exec,
+		issueNum: 65,
+		runID:    "test-run",
+		repoRoot: repoRoot,
+		homeDir:  homeDir,
+		project:  project,
+		issue:    &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
 		cfg: &config.Config{
 			Project:        project,
 			VerifyCommand:  "go test ./...",
@@ -1704,6 +1848,8 @@ type conflictRebaseExecConfig struct {
 	statusAfterAgent string
 	// whether merge-base --is-ancestor succeeds after agent
 	ancestorAfterAgent bool
+	// checkRunsResponses overrides the default green verify check-runs response.
+	checkRunsResponses []string
 	// extra handler called on any unrecognised call
 	fallback func(name string, args ...string) (string, error)
 }
@@ -1711,6 +1857,10 @@ type conflictRebaseExecConfig struct {
 func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeExecutor { //nolint:funlen,gocognit,cyclop
 	t.Helper()
 	statusCalls := 0
+	checkRunsResponses := cfg.checkRunsResponses
+	if len(checkRunsResponses) == 0 {
+		checkRunsResponses = []string{requiredVerifyCheckRunsJSON()}
+	}
 	return &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			// runVerifyCommand uses RunInDir with "sh -c" (no env).
@@ -1764,6 +1914,9 @@ func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeEx
 				if len(args) >= 3 && args[1] == "--verify" && args[2] == "REBASE_HEAD" {
 					return "", cfg.rebaseHeadError
 				}
+				if len(args) >= 2 && args[1] == "HEAD" {
+					return "sha-local\n", nil
+				}
 				return "", fmt.Errorf("unexpected rev-parse args: %v", args)
 			case "ls-remote":
 				return "", nil // branch gone, skip delete
@@ -1777,9 +1930,10 @@ func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeEx
 			if name == "gh" && args[0] == "pr" && args[1] == "comment" {
 				return "", nil
 			}
-			if name == "gh" && args[0] == "pr" && args[1] == "checks" {
-				// no_checks → verifyAndPush runs local verify_command
-				return "", noChecksErr()
+			if name == "gh" {
+				if resp, ok := dispatchMergeGh(args, checkRunsResponses, nil, nil, ""); ok {
+					return resp, nil
+				}
 			}
 			if name == "sh" && args[0] == "-c" {
 				return "", nil // verify_command passes
@@ -1810,7 +1964,7 @@ func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nol
 		statusOnConflict:   "UU foo.go\n",
 		conflictedFiles:    "foo.go\n",
 		rebaseHeadError:    fmt.Errorf("not found"), // rebase done
-		statusAfterAgent:   "",                       // tree clean
+		statusAfterAgent:   "",                      // tree clean
 		ancestorAfterAgent: true,
 	})
 	r, logPath, eventsPtr := makeConflictRetryRunner(t, exec)
@@ -1866,20 +2020,21 @@ func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nol
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: conflict resolved but verify_command fails → merge_failed
+// AC-002: conflict resolved but the current-head required CI check fails → merge_failed
 // ---------------------------------------------------------------------------
 
-func TestRunMergePhase_ConflictResolved_VerifyFails_AC002(t *testing.T) { //nolint:cyclop
+func TestRunMergePhase_ConflictResolved_CIFails_AC002(t *testing.T) { //nolint:cyclop
 	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
 		statusOnConflict:   "UU bar.go\n",
 		conflictedFiles:    "bar.go\n",
 		rebaseHeadError:    fmt.Errorf("not found"),
 		statusAfterAgent:   "",
 		ancestorAfterAgent: true,
+		checkRunsResponses: []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "failure"}})},
 		fallback: func(name string, args ...string) (string, error) {
-			// override verify_command to fail
 			if name == "sh" && len(args) >= 2 && args[0] == "-c" {
-				return "", fmt.Errorf("verify_command failed")
+				t.Error("verify_command must not be used as a no-CI fallback after issue #125")
+				return "", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
@@ -1898,7 +2053,9 @@ func TestRunMergePhase_ConflictResolved_VerifyFails_AC002(t *testing.T) { //noli
 	for _, ev := range *eventsPtr {
 		if ev.Type == eventlog.EventAutomergeConflictRetry {
 			retryFound = true
-			var p struct{ Result string `json:"result"` }
+			var p struct {
+				Result string `json:"result"`
+			}
 			_ = json.Unmarshal(ev.Payload, &p)
 			if p.Result != "resolved" {
 				t.Errorf("retry result: got %q, want resolved (AC-002)", p.Result)
@@ -1943,7 +2100,9 @@ func TestRunMergePhase_ConflictAgentNonZeroExit_AC003(t *testing.T) { //nolint:c
 	for _, ev := range *eventsPtr {
 		if ev.Type == eventlog.EventAutomergeConflictRetry {
 			retryFound = true
-			var p struct{ Result string `json:"result"` }
+			var p struct {
+				Result string `json:"result"`
+			}
 			_ = json.Unmarshal(ev.Payload, &p)
 			if p.Result != "unresolved" {
 				t.Errorf("retry result: got %q, want unresolved (AC-003)", p.Result)
@@ -1984,7 +2143,9 @@ func TestRunMergePhase_ConflictPostVerificationFails_RebaseInProgress_AC004(t *t
 	for _, ev := range *eventsPtr {
 		if ev.Type == eventlog.EventAutomergeConflictRetry {
 			retryFound = true
-			var p struct{ Result string `json:"result"` }
+			var p struct {
+				Result string `json:"result"`
+			}
 			_ = json.Unmarshal(ev.Payload, &p)
 			if p.Result != "unresolved" {
 				t.Errorf("retry result: got %q, want unresolved (AC-004)", p.Result)
@@ -2017,7 +2178,9 @@ func TestRunMergePhase_ConflictPostVerificationFails_TreeDirty_AC004b(t *testing
 
 	for _, ev := range *eventsPtr {
 		if ev.Type == eventlog.EventAutomergeConflictRetry {
-			var p struct{ Result string `json:"result"` }
+			var p struct {
+				Result string `json:"result"`
+			}
 			_ = json.Unmarshal(ev.Payload, &p)
 			if p.Result != "unresolved" {
 				t.Errorf("retry result: got %q, want unresolved (AC-004b)", p.Result)
