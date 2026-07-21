@@ -89,6 +89,28 @@ func setupFakeHelpFetch(t *testing.T, tools []toolEntry) {
 	t.Cleanup(func() { cbmFetchToolsListDirectFn = orig })
 }
 
+func completeHelpToolSet(t *testing.T, overrides map[string]toolEntry) []toolEntry {
+	t.Helper()
+	tools := make([]toolEntry, 0, len(cbmAllowedSubs))
+	for _, sub := range cbmAllowedSubs {
+		if override, ok := overrides[sub]; ok {
+			tools = append(tools, override)
+			continue
+		}
+		tools = append(tools, toolEntry{
+			Name:        sub,
+			Description: "desc for " + sub,
+			InputSchema: inputSchema{
+				Properties: map[string]propSchema{
+					"project": {Type: "string"},
+				},
+				Required: []string{"project"},
+			},
+		})
+	}
+	return tools
+}
+
 // ---- Guard tests ----
 
 func TestCBM_NoArgs_PrintsUsage(t *testing.T) {
@@ -457,27 +479,7 @@ func TestCBM_Help_RendersAllSubsWithProjectID(t *testing.T) {
 	t.Setenv("CBM_PROJECT", project)
 	t.Setenv("CBM_SOCK", "")
 
-	fakeTool := func(name string) map[string]interface{} {
-		return map[string]interface{}{
-			"name":        name,
-			"description": "desc for " + name,
-			"inputSchema": map[string]interface{}{
-				"properties": map[string]interface{}{
-					"project": map[string]interface{}{"type": "string"},
-					"query":   map[string]interface{}{"type": "string"},
-				},
-				"required": []string{"project", "query"},
-			},
-		}
-	}
-
-	var tools []toolEntry
-	for _, sub := range cbmAllowedSubs {
-		raw, _ := json.Marshal(fakeTool(sub))
-		var te toolEntry
-		json.Unmarshal(raw, &te) //nolint:errcheck
-		tools = append(tools, te)
-	}
+	tools := completeHelpToolSet(t, nil)
 	setupFakeHelpFetch(t, tools)
 	toolsListCache = nil
 	t.Cleanup(func() { toolsListCache = nil })
@@ -505,12 +507,42 @@ func TestCBM_Help_RendersAllSubsWithProjectID(t *testing.T) {
 	}
 }
 
+func TestCBM_Help_MissingWhitelistedTool_Exit1(t *testing.T) {
+	t.Setenv("CBM_SOCK", "")
+	t.Setenv("CBM_PROJECT", "")
+
+	setupFakeHelpFetch(t, []toolEntry{{
+		Name:        cbmAllowedSubs[0],
+		Description: "desc for " + cbmAllowedSubs[0],
+		InputSchema: inputSchema{
+			Properties: map[string]propSchema{
+				"project": {Type: "string"},
+			},
+			Required: []string{"project"},
+		},
+	}})
+	toolsListCache = nil
+	t.Cleanup(func() { toolsListCache = nil })
+
+	var stdout, stderr bytes.Buffer
+	code := runCBM([]string{"golemic", "cbm", "help"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit 1 for missing whitelist entry; got %d", code)
+	}
+	if !strings.Contains(stderr.String(), "missing whitelisted tool") {
+		t.Fatalf("stderr missing missing-tool message; got: %s", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout on missing tool; got %q", stdout.String())
+	}
+}
+
 func TestCBM_HelpSub_RendersParameterTable(t *testing.T) {
 	t.Setenv("CBM_SOCK", "")
 	t.Setenv("CBM_PROJECT", "")
 
-	tools := []toolEntry{
-		{
+	tools := completeHelpToolSet(t, map[string]toolEntry{
+		"search_graph": {
 			Name:        "search_graph",
 			Description: "Search the graph.\n\nFull description.",
 			InputSchema: inputSchema{
@@ -523,7 +555,7 @@ func TestCBM_HelpSub_RendersParameterTable(t *testing.T) {
 				Required: []string{"project", "query"},
 			},
 		},
-	}
+	})
 	setupFakeHelpFetch(t, tools)
 	toolsListCache = nil
 	t.Cleanup(func() { toolsListCache = nil })
@@ -550,7 +582,7 @@ func TestCBM_Help_WithoutSock_UsesOnDemandFetch(t *testing.T) {
 	orig := cbmFetchToolsListDirectFn
 	cbmFetchToolsListDirectFn = func() ([]toolEntry, error) {
 		called = true
-		return []toolEntry{{Name: "get_architecture", Description: "arch"}}, nil
+		return completeHelpToolSet(t, nil), nil
 	}
 	t.Cleanup(func() { cbmFetchToolsListDirectFn = orig })
 	toolsListCache = nil
@@ -572,15 +604,19 @@ func TestCBM_NewWhitelistEntry_AppearsInHelp(t *testing.T) {
 	cbmAllowedSubs = append(cbmAllowedSubs, "foo_tool")
 	t.Cleanup(func() { cbmAllowedSubs = origList })
 
-	tools := []toolEntry{
-		{Name: "foo_tool", Description: "Foo does foo things.", InputSchema: inputSchema{
-			Properties: map[string]propSchema{
-				"project": {Type: "string"},
-				"x":       {Type: "integer"},
+	tools := completeHelpToolSet(t, map[string]toolEntry{
+		"foo_tool": {
+			Name:        "foo_tool",
+			Description: "Foo does foo things.",
+			InputSchema: inputSchema{
+				Properties: map[string]propSchema{
+					"project": {Type: "string"},
+					"x":       {Type: "integer"},
+				},
+				Required: []string{"project", "x"},
 			},
-			Required: []string{"project", "x"},
-		}},
-	}
+		},
+	})
 	setupFakeHelpFetch(t, tools)
 	toolsListCache = nil
 	t.Cleanup(func() { toolsListCache = nil })

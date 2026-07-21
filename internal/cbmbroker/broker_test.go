@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -178,6 +179,26 @@ func TestBroker_InitializeHandshake(t *testing.T) {
 	// If socket exists, handshake succeeded.
 	if _, err := os.Stat(sockPath); err != nil {
 		t.Fatalf("socket not created after handshake: %v", err)
+	}
+}
+
+func TestBroker_SocketPermissionsPrivate(t *testing.T) {
+	_, sockPath := startTestBroker(t)
+
+	dirInfo, err := os.Stat(filepath.Dir(sockPath))
+	if err != nil {
+		t.Fatalf("stat socket dir: %v", err)
+	}
+	if got, want := dirInfo.Mode().Perm(), os.FileMode(0700); got != want {
+		t.Fatalf("socket dir perms = %v, want %v", got, want)
+	}
+
+	sockInfo, err := os.Stat(sockPath)
+	if err != nil {
+		t.Fatalf("stat socket: %v", err)
+	}
+	if got, want := sockInfo.Mode().Perm(), os.FileMode(0600); got != want {
+		t.Fatalf("socket perms = %v, want %v", got, want)
 	}
 }
 

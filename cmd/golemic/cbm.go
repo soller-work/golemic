@@ -148,19 +148,18 @@ func runCBMHelp(stdout, stderr io.Writer) int {
 
 	for _, sub := range cbmAllowedSubs {
 		entry := findEntry(tools, sub)
-		desc := "(description not available)"
-		if entry != nil {
-			desc = firstLine(entry.Description)
+		if entry == nil {
+			fmt.Fprintf(stderr, "cbm: upstream tools/list missing whitelisted tool %q\n", sub)
+			return 1
 		}
+		desc := firstLine(entry.Description)
 		// Build example call with required args.
 		var exampleArgs []string
-		if entry != nil {
-			for _, req := range entry.InputSchema.Required {
-				if req == "project" {
-					continue // injected automatically
-				}
-				exampleArgs = append(exampleArgs, fmt.Sprintf("--%s=<value>", req))
+		for _, req := range entry.InputSchema.Required {
+			if req == "project" {
+				continue // injected automatically
 			}
+			exampleArgs = append(exampleArgs, fmt.Sprintf("--%s=<value>", req))
 		}
 		example := "golemic cbm " + sub
 		if len(exampleArgs) > 0 {
@@ -185,7 +184,7 @@ func runCBMHelpSub(sub string, stdout, stderr io.Writer) int {
 
 	entry := findEntry(tools, sub)
 	if entry == nil {
-		fmt.Fprintf(stderr, "cbm: tool %q not found in upstream tools/list\n", sub)
+		fmt.Fprintf(stderr, "cbm: upstream tools/list missing whitelisted tool %q\n", sub)
 		return 1
 	}
 
@@ -214,6 +213,10 @@ func runCBMHelpSub(sub string, stdout, stderr io.Writer) int {
 // CBM_SOCK is set) or by spawning a temporary npx MCP process (BR-C3).
 func fetchToolsListForHelp(stderr io.Writer) ([]toolEntry, error) {
 	if toolsListCache != nil {
+		if err := validateCompleteToolset(toolsListCache); err != nil {
+			fmt.Fprintf(stderr, "cbm: %v\n", err)
+			return nil, err
+		}
 		return toolsListCache, nil
 	}
 	sockPath := os.Getenv("CBM_SOCK")
@@ -223,6 +226,10 @@ func fetchToolsListForHelp(stderr io.Writer) ([]toolEntry, error) {
 			fmt.Fprintf(stderr, "cbm: broker unreachable at %s: %v\n", sockPath, err)
 			return nil, err
 		}
+		if err := validateCompleteToolset(tools); err != nil {
+			fmt.Fprintf(stderr, "cbm: %v\n", err)
+			return nil, err
+		}
 		toolsListCache = tools
 		return tools, nil
 	}
@@ -230,6 +237,10 @@ func fetchToolsListForHelp(stderr io.Writer) ([]toolEntry, error) {
 	tools, err := cbmFetchToolsListDirect()
 	if err != nil {
 		fmt.Fprintf(stderr, "cbm: failed to fetch tool list: %v\n", err)
+		return nil, err
+	}
+	if err := validateCompleteToolset(tools); err != nil {
+		fmt.Fprintf(stderr, "cbm: %v\n", err)
 		return nil, err
 	}
 	return tools, nil
@@ -607,6 +618,19 @@ func findEntry(tools []toolEntry, name string) *toolEntry {
 		if tools[i].Name == name {
 			return &tools[i]
 		}
+	}
+	return nil
+}
+
+func validateCompleteToolset(tools []toolEntry) error {
+	missing := make([]string, 0, len(cbmAllowedSubs))
+	for _, sub := range cbmAllowedSubs {
+		if findEntry(tools, sub) == nil {
+			missing = append(missing, sub)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("upstream tools/list missing whitelisted tool(s): %s", strings.Join(missing, ", "))
 	}
 	return nil
 }

@@ -128,10 +128,16 @@ func StartWithIO(
 		return nil, fmt.Errorf("cbmbroker: initialize: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(sockPath), 0755); err != nil {
+	sockDir := filepath.Dir(sockPath)
+	if err := os.MkdirAll(sockDir, 0700); err != nil {
 		b.stdin.Close() //nolint:errcheck
 		b.terminateChild()
 		return nil, fmt.Errorf("cbmbroker: mkdir socket dir: %w", err)
+	}
+	if err := os.Chmod(sockDir, 0700); err != nil {
+		b.stdin.Close() //nolint:errcheck
+		b.terminateChild()
+		return nil, fmt.Errorf("cbmbroker: chmod socket dir: %w", err)
 	}
 	os.Remove(sockPath) //nolint:errcheck
 	ln, err := net.Listen("unix", sockPath)
@@ -139,6 +145,13 @@ func StartWithIO(
 		b.stdin.Close() //nolint:errcheck
 		b.terminateChild()
 		return nil, fmt.Errorf("cbmbroker: listen %s: %w", sockPath, err)
+	}
+	if err := os.Chmod(sockPath, 0600); err != nil {
+		ln.Close()          //nolint:errcheck
+		os.Remove(sockPath) //nolint:errcheck
+		b.stdin.Close()     //nolint:errcheck
+		b.terminateChild()
+		return nil, fmt.Errorf("cbmbroker: chmod socket: %w", err)
 	}
 	b.listener = ln
 

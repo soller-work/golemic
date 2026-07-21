@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,6 +128,81 @@ func startFakeBroker(t *testing.T, sockPath string) *cbmbroker.Broker {
 		t.Fatalf("startFakeBroker: %v", err)
 	}
 	return b
+}
+
+type brokerCleanupProbe struct {
+	mu          sync.Mutex
+	sigCount    int
+	hardKillCnt int
+	childDone   chan struct{}
+	childClosed bool
+}
+
+func (p *brokerCleanupProbe) signalCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.sigCount
+}
+
+func (p *brokerCleanupProbe) markChildClosed() {
+	p.mu.Lock()
+	p.childClosed = true
+	p.mu.Unlock()
+}
+
+func startObservedBroker(t *testing.T, sockPath string) (*cbmbroker.Broker, *brokerCleanupProbe) {
+	t.Helper()
+
+	childInR, childInW := io.Pipe()
+	childOutR, childOutW := io.Pipe()
+	probe := &brokerCleanupProbe{childDone: make(chan struct{})}
+
+	go func() {
+		defer close(probe.childDone)
+		reader := bufio.NewReaderSize(childInR, 4<<20)
+		for {
+			line, err := reader.ReadBytes('\n')
+			if err != nil {
+				probe.markChildClosed()
+				return
+			}
+			var msg struct {
+				ID     *int64 `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(line, &msg) != nil || msg.ID == nil {
+				continue
+			}
+			resp, _ := json.Marshal(map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      *msg.ID,
+				"result":  map[string]interface{}{},
+			})
+			childOutW.Write(append(resp, '\n')) //nolint:errcheck
+		}
+	}()
+
+	b, err := cbmbroker.StartWithIO(sockPath, childInW, bufio.NewReaderSize(childOutR, 4<<20),
+		func(os.Signal) error {
+			probe.mu.Lock()
+			probe.sigCount++
+			probe.mu.Unlock()
+			childInW.Close()
+			childOutW.Close()
+			return nil
+		},
+		func() error {
+			probe.mu.Lock()
+			probe.hardKillCnt++
+			probe.mu.Unlock()
+			return nil
+		},
+		probe.childDone,
+	)
+	if err != nil {
+		t.Fatalf("startObservedBroker: %v", err)
+	}
+	return b, probe
 }
 
 // cbmGitExecutor handles git commands needed by the CBM runner and records npx calls.
@@ -393,6 +469,141 @@ func TestCBMBrokerSocketCleanup(t *testing.T) {
 	// After runDevAgent returns, the defer Shutdown() must have removed the socket.
 	if _, err := os.Stat(capturedSock); !os.IsNotExist(err) {
 		t.Errorf("socket file still exists after runDevAgent returned; path: %s", capturedSock)
+	}
+}
+
+func TestCBMBrokerCleanupOnRunDevAgentError(t *testing.T) {
+	exec := makePassthroughGitExec()
+	r, golemicDir := setupCBMRunner(t, exec, true)
+	r.homeDir = "/tmp"
+	r.project = "p"
+	r.runID = "r"
+
+	orig := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = orig })
+	var probe *brokerCleanupProbe
+	var capturedSock string
+	startCBMBrokerFn = func(sp string, env map[string]string) (*cbmbroker.Broker, error) {
+		capturedSock = sp
+		broker, p := startObservedBroker(t, sp)
+		probe = p
+		return broker, nil
+	}
+
+	setupDevWTWithGit(t, golemicDir)
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 1, agent.TranscriptPaths{}, fmt.Errorf("agent failed")
+	})
+	outcome := r.runDevAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, "", 1)
+	if outcome != outcomeDevFailed {
+		t.Fatalf("expected dev_failed outcome, got %q", outcome)
+	}
+	if capturedSock == "" {
+		t.Fatal("startCBMBrokerFn was not called")
+	}
+	if _, err := os.Stat(capturedSock); !os.IsNotExist(err) {
+		t.Fatalf("socket file still exists after error path; path: %s", capturedSock)
+	}
+	select {
+	case <-probe.childDone:
+	case <-time.After(time.Second):
+		t.Fatal("broker child did not terminate after error path")
+	}
+	if got := probe.signalCount(); got == 0 {
+		t.Fatal("expected broker shutdown to send SIGTERM")
+	}
+}
+
+func TestCBMBrokerCleanupOnRunDevAgentTimeout(t *testing.T) {
+	exec := makePassthroughGitExec()
+	r, golemicDir := setupCBMRunner(t, exec, true)
+	r.homeDir = "/tmp"
+	r.project = "p"
+	r.runID = "r"
+
+	orig := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = orig })
+	var probe *brokerCleanupProbe
+	var capturedSock string
+	startCBMBrokerFn = func(sp string, env map[string]string) (*cbmbroker.Broker, error) {
+		capturedSock = sp
+		broker, p := startObservedBroker(t, sp)
+		probe = p
+		return broker, nil
+	}
+
+	setupDevWTWithGit(t, golemicDir)
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 0, agent.TranscriptPaths{}, agent.ErrTimeout
+	})
+	outcome := r.runDevAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, "", 1)
+	if outcome != outcomeTimeout {
+		t.Fatalf("expected timeout outcome, got %q", outcome)
+	}
+	if capturedSock == "" {
+		t.Fatal("startCBMBrokerFn was not called")
+	}
+	if _, err := os.Stat(capturedSock); !os.IsNotExist(err) {
+		t.Fatalf("socket file still exists after timeout path; path: %s", capturedSock)
+	}
+	select {
+	case <-probe.childDone:
+	case <-time.After(time.Second):
+		t.Fatal("broker child did not terminate after timeout path")
+	}
+	if got := probe.signalCount(); got == 0 {
+		t.Fatal("expected broker shutdown to send SIGTERM")
+	}
+}
+
+func TestCBMBrokerCleanupOnRunDevAgentPanic(t *testing.T) {
+	exec := makePassthroughGitExec()
+	r, golemicDir := setupCBMRunner(t, exec, true)
+	r.homeDir = "/tmp"
+	r.project = "p"
+	r.runID = "r"
+
+	orig := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = orig })
+	var probe *brokerCleanupProbe
+	var capturedSock string
+	startCBMBrokerFn = func(sp string, env map[string]string) (*cbmbroker.Broker, error) {
+		capturedSock = sp
+		broker, p := startObservedBroker(t, sp)
+		probe = p
+		return broker, nil
+	}
+
+	setupDevWTWithGit(t, golemicDir)
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		panic("agent panicked")
+	})
+
+	didPanic := false
+	func() {
+		defer func() {
+			if recover() != nil {
+				didPanic = true
+			}
+		}()
+		r.runDevAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, "", 1)
+	}()
+	if !didPanic {
+		t.Fatal("expected runDevAgent to panic")
+	}
+	if capturedSock == "" {
+		t.Fatal("startCBMBrokerFn was not called")
+	}
+	if _, err := os.Stat(capturedSock); !os.IsNotExist(err) {
+		t.Fatalf("socket file still exists after panic path; path: %s", capturedSock)
+	}
+	select {
+	case <-probe.childDone:
+	case <-time.After(time.Second):
+		t.Fatal("broker child did not terminate after panic path")
+	}
+	if got := probe.signalCount(); got == 0 {
+		t.Fatal("expected broker shutdown to send SIGTERM")
 	}
 }
 
