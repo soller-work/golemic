@@ -242,15 +242,21 @@ func telemetryGhHandler(args []string) (string, error) {
 		switch args[1] {
 		case "comment", "edit":
 			return "", nil
-		case "checks":
-			return `[{"name":"verify","bucket":"pass","link":""}]`, nil
+		case "view":
+			return ciTestHeadSHA + "\n", nil
 		case "merge":
 			return "sha-tel\n", nil
 		}
 		return "[]", nil // pr list → no collision
 	case "repo":
+		if len(args) >= 5 && args[1] == "view" && args[2] == "--json" && strings.Contains(strings.Join(args, " "), "nameWithOwner") {
+			return ciTestNWO + "\n", nil
+		}
 		return `{"owner":{"login":"testowner"},"name":"testrepo"}`, nil
 	case "api":
+		if len(args) >= 2 && strings.Contains(args[1], "check-runs") {
+			return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}), nil
+		}
 		if len(args) >= 2 && args[1] == "graphql" {
 			return `{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[]}}}}}`, nil
 		}

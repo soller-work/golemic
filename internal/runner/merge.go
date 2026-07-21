@@ -438,11 +438,20 @@ func (r *Runner) verifyAndPush(writer worktree.EventWriter, prNumber int, devWT 
 		return r.doSquashMerge(writer, prNumber)
 	}
 
-	// CI checks exist: push first, then wait for green
+	// CI checks exist: push first, then wait for green using the exact pushed SHA
+	// to avoid trusting stale completed checks from a superseded commit.
 	if err := r.forcePushBranch(devWT); err != nil {
 		return r.failMerge(writer, prNumber, err.Error())
 	}
-	result, failedChecks, err := r.pollCIChecks(prNumber, ciTimeout)
+	pushedSHA, err := r.getLocalHeadSHA(devWT)
+	if err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("failed to read pushed SHA: %v", err))
+	}
+	nwo, err := r.getRepoNWO()
+	if err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("failed to get repo: %v", err))
+	}
+	result, failedChecks, err := r.pollCheckRunsForSHA(pushedSHA, nwo, ciTimeout)
 	if err != nil {
 		return r.failMerge(writer, prNumber, fmt.Sprintf("CI poll failed: %v", err))
 	}

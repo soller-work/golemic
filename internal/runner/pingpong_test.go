@@ -111,15 +111,26 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 			if len(args) >= 1 && args[0] == "issue" {
 				return `{"title":"T","body":"B","state":"OPEN","labels":[]}`, nil
 			}
-			// gh repo view: return stub owner/name for repoNWO()
+			// gh pr view: return the current head SHA.
+			if len(args) >= 2 && args[0] == "pr" && args[1] == "view" {
+				return ciTestHeadSHA + "\n", nil
+			}
+			// gh repo view for reviewer.go returns JSON; CI code asks for nameWithOwner + jq.
 			if len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+				if len(args) >= 5 && args[2] == "--json" && strings.Contains(strings.Join(args, " "), "nameWithOwner") {
+					return ciTestNWO + "\n", nil
+				}
 				return `{"owner":{"login":"testowner"},"name":"testrepo"}`, nil
 			}
-			// gh api graphql: stub sweep (no pending reviews) and any other graphql
+			// gh api graphql: stub sweep (no pending reviews) and any other graphql.
 			if len(args) >= 2 && args[0] == "api" && args[1] == "graphql" {
 				return `{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[]}}}}}`, nil
 			}
-			// gh api repos/.../reviews/.../comments: no inline comments
+			// gh api repos/.../check-runs: current head SHA has a passing check.
+			if len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "/check-runs") {
+				return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}), nil
+			}
+			// gh api repos/.../reviews/.../comments: no inline comments.
 			if len(args) >= 2 && args[0] == "api" && strings.HasPrefix(args[1], "repos/") {
 				return "[]", nil
 			}
@@ -127,8 +138,6 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 				return "[]", nil
 			}
 			switch args[1] {
-			case "checks":
-				return `[{"name":"verify","bucket":"pass","link":""}]`, nil
 			case "merge":
 				return "sha-pp\n", nil
 			case "edit":

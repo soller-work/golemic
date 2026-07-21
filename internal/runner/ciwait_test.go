@@ -14,29 +14,68 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/eventlog"
-	"golemic/internal/preflight"
 )
 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
-// ghChecksJSON builds a JSON array of gh check items for use in fake executors.
-func ghChecksJSON(items []ghCheckItem) string {
-	b, _ := json.Marshal(items)
+// ciTestHeadSHA is the PR head SHA returned by gh pr view mocks in CI tests.
+const ciTestHeadSHA = "deadbeef12345678"
+
+// ciTestNWO is the repo name-with-owner returned by gh repo view mocks in CI tests.
+const ciTestNWO = "owner/test-repo"
+
+// ghCheckRunsJSON builds a GitHub check-runs API response JSON.
+func ghCheckRunsJSON(items []ghCheckRunItem) string {
+	resp := struct {
+		TotalCount int              `json:"total_count"`
+		CheckRuns  []ghCheckRunItem `json:"check_runs"`
+	}{TotalCount: len(items), CheckRuns: items}
+	b, _ := json.Marshal(resp)
 	return string(b)
 }
+
+// emptyCheckRunsJSON is the API response when no check runs exist for a SHA.
+const emptyCheckRunsJSON = `{"total_count":0,"check_runs":[]}`
 
 // ghArgsMatch checks if gh args match the given subcommand pair.
 func ghArgsMatch(args []string, sub1, sub2 string) bool {
 	return len(args) >= 2 && args[0] == sub1 && args[1] == sub2
 }
 
+// isGHPRViewHeadSHA returns true if args represent a `gh pr view --json headRefOid` call.
+func isGHPRViewHeadSHA(args []string) bool {
+	if !ghArgsMatch(args, "pr", "view") {
+		return false
+	}
+	for _, a := range args {
+		if a == "headRefOid" {
+			return true
+		}
+	}
+	return false
+}
+
+// isGHRepoViewNWO returns true if args represent a `gh repo view --json nameWithOwner` call.
+func isGHRepoViewNWO(args []string) bool {
+	return ghArgsMatch(args, "repo", "view")
+}
+
+// isGHCheckRunsAPI returns true if args represent a `gh api .../check-runs` call.
+func isGHCheckRunsAPI(args []string) bool {
+	return len(args) >= 2 && args[0] == "api" && strings.Contains(args[1], "check-runs")
+}
+
 // dispatchCIWaitGh handles gh calls for ciWaitExecutor.
-func dispatchCIWaitGh(args []string, checksJSON string, checksErr error, commentCalls *[]string) (string, error) {
+func dispatchCIWaitGh(args []string, checkRunsJSON string, checkRunsErr error, commentCalls *[]string) (string, error) {
 	switch {
-	case ghArgsMatch(args, "pr", "checks"):
-		return checksJSON, checksErr
+	case isGHPRViewHeadSHA(args):
+		return ciTestHeadSHA + "\n", nil
+	case isGHRepoViewNWO(args):
+		return ciTestNWO + "\n", nil
+	case isGHCheckRunsAPI(args):
+		return checkRunsJSON, checkRunsErr
 	case ghArgsMatch(args, "pr", "comment"):
 		if commentCalls != nil {
 			*commentCalls = append(*commentCalls, extractBodyArg(args))
@@ -49,8 +88,8 @@ func dispatchCIWaitGh(args []string, checksJSON string, checksErr error, comment
 	}
 }
 
-// ciWaitExecutor builds a fakeExecutor whose gh pr checks call returns the given JSON.
-func ciWaitExecutor(checksJSON string, checksErr error, commentCalls *[]string) *fakeExecutor {
+// ciWaitExecutor builds a fakeExecutor whose check-runs API call returns the given JSON.
+func ciWaitExecutor(checkRunsJSON string, checkRunsErr error, commentCalls *[]string) *fakeExecutor {
 	return &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" {
@@ -62,7 +101,7 @@ func ciWaitExecutor(checksJSON string, checksErr error, commentCalls *[]string) 
 			if name != "gh" {
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			}
-			return dispatchCIWaitGh(args, checksJSON, checksErr, commentCalls)
+			return dispatchCIWaitGh(args, checkRunsJSON, checkRunsErr, commentCalls)
 		},
 	}
 }
@@ -137,10 +176,15 @@ func seqResponse(resps []string, idx *int) string {
 }
 
 // dispatchCIGateGh handles gh calls for ciGateExecutor.
-func dispatchCIGateGh(args []string, checksResponses []string, checksIdx *int, commentCalls *[]string) (string, error) {
+// checkRunsResponses are the sequential check-runs API JSON responses.
+func dispatchCIGateGh(args []string, checkRunsResponses []string, checkRunsIdx *int, commentCalls *[]string) (string, error) {
 	switch {
-	case ghArgsMatch(args, "pr", "checks"):
-		return seqResponse(checksResponses, checksIdx), nil
+	case isGHPRViewHeadSHA(args):
+		return ciTestHeadSHA + "\n", nil
+	case isGHRepoViewNWO(args):
+		return ciTestNWO + "\n", nil
+	case isGHCheckRunsAPI(args):
+		return seqResponse(checkRunsResponses, checkRunsIdx), nil
 	case ghArgsMatch(args, "pr", "comment"):
 		if commentCalls != nil {
 			*commentCalls = append(*commentCalls, extractBodyArg(args))
@@ -170,11 +214,11 @@ func dispatchCIGateGit(args []string, lsRemoteResponses []string, lsRemoteIdx *i
 	return handleGitCmd(args)
 }
 
-// ciGateExecutor creates an executor that answers gh pr checks with the given
+// ciGateExecutor creates an executor that answers the check-runs API with the given
 // JSON responses in sequence. After exhausting the list it returns the last one.
 // Also handles ls-remote for push detection and gh pr comment.
-func ciGateExecutor(checksResponses []string, lsRemoteResponses []string, commentCalls *[]string) *fakeExecutor {
-	checksIdx := 0
+func ciGateExecutor(checkRunsResponses []string, lsRemoteResponses []string, commentCalls *[]string) *fakeExecutor {
+	checkRunsIdx := 0
 	lsRemoteIdx := 0
 	return &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
@@ -187,7 +231,7 @@ func ciGateExecutor(checksResponses []string, lsRemoteResponses []string, commen
 			if name != "gh" {
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			}
-			return dispatchCIGateGh(args, checksResponses, &checksIdx, commentCalls)
+			return dispatchCIGateGh(args, checkRunsResponses, &checkRunsIdx, commentCalls)
 		},
 	}
 }
@@ -225,9 +269,9 @@ func ciWaitResult(t *testing.T, ev eventlog.Event) string {
 // queryCIChecks unit tests
 // ---------------------------------------------------------------------------
 
-// AC-002: no checks configured → no_checks
+// AC-002: no check runs for current SHA → no_checks
 func TestQueryCIChecks_NoChecks_AC002(t *testing.T) {
-	r, logPath, _ := buildCIGateRunner(t, ciWaitExecutor("[]", nil, nil))
+	r, logPath, _ := buildCIGateRunner(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 	_ = logPath
 
 	result, failed, err := r.queryCIChecks(99)
@@ -242,11 +286,11 @@ func TestQueryCIChecks_NoChecks_AC002(t *testing.T) {
 	}
 }
 
-// AC-001: all-pass → green
+// AC-001: all check runs completed successfully → green
 func TestQueryCIChecks_AllPassed_AC001(t *testing.T) {
-	checks := ghChecksJSON([]ghCheckItem{
-		{Name: "build", Bucket: "pass"},
-		{Name: "lint", Bucket: "skipping"},
+	checks := ghCheckRunsJSON([]ghCheckRunItem{
+		{Name: "build", Status: "completed", Conclusion: "success"},
+		{Name: "lint", Status: "completed", Conclusion: "skipped"},
 	})
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 
@@ -259,11 +303,11 @@ func TestQueryCIChecks_AllPassed_AC001(t *testing.T) {
 	}
 }
 
-// AC-003, AC-005: any fail → red with failed items
+// AC-003, AC-005: any failed check run → red with failed items
 func TestQueryCIChecks_HasFailed_AC003(t *testing.T) {
-	checks := ghChecksJSON([]ghCheckItem{
-		{Name: "build", Bucket: "pass"},
-		{Name: "test", Bucket: "fail", Link: "https://github.com/o/r/actions/runs/12345/jobs/1"},
+	checks := ghCheckRunsJSON([]ghCheckRunItem{
+		{Name: "build", Status: "completed", Conclusion: "success"},
+		{Name: "test", Status: "completed", Conclusion: "failure", HTMLURL: "https://github.com/o/r/actions/runs/12345/jobs/1"},
 	})
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 
@@ -281,9 +325,9 @@ func TestQueryCIChecks_HasFailed_AC003(t *testing.T) {
 
 // still pending → "pending"
 func TestQueryCIChecks_StillPending(t *testing.T) {
-	checks := ghChecksJSON([]ghCheckItem{
-		{Name: "build", Bucket: "pass"},
-		{Name: "test", Bucket: "pending"},
+	checks := ghCheckRunsJSON([]ghCheckRunItem{
+		{Name: "build", Status: "completed", Conclusion: "success"},
+		{Name: "test", Status: "in_progress"},
 	})
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 
@@ -296,28 +340,23 @@ func TestQueryCIChecks_StillPending(t *testing.T) {
 	}
 }
 
-// AC-002 (real-error shape): gh exits non-zero with "no checks reported" → no_checks, not CHECKS_QUERY_FAILED.
-// Reproduces the actual gh CLI behavior for a PR on a branch with no CI checks.
-func TestQueryCIChecks_NoChecksRealGhError_AC002(t *testing.T) {
-	stderr := "no checks reported on the 'golemic/issue-42' branch"
-	ghErr := &preflight.ErrExit{ExitCode: 1, Stderr: stderr}
-	r, _, _ := buildCIGateRunner(t, ciWaitExecutor("", ghErr, nil))
-
-	result, failed, err := r.queryCIChecks(99)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result != "no_checks" {
-		t.Errorf("result: got %q, want %q (gh 'no checks reported' must map to no_checks, not CHECKS_QUERY_FAILED)", result, "no_checks")
-	}
-	if len(failed) != 0 {
-		t.Errorf("failed items: got %d, want 0", len(failed))
-	}
-}
-
-// AC-007: gh error → CHECKS_QUERY_FAILED
+// AC-007: gh pr view error → CHECKS_QUERY_FAILED
 func TestQueryCIChecks_GhError_AC007(t *testing.T) {
-	r, _, _ := buildCIGateRunner(t, ciWaitExecutor("", fmt.Errorf("network error"), nil))
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" {
+				return handleGitCmd(args)
+			}
+			return "", fmt.Errorf("not mocked: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && isGHPRViewHeadSHA(args) {
+				return "", fmt.Errorf("network error")
+			}
+			return "", fmt.Errorf("not mocked: %s %v", name, args)
+		},
+	}
+	r, _, _ := buildCIGateRunner(t, exec)
 
 	_, _, err := r.queryCIChecks(99)
 	if err == nil {
@@ -328,29 +367,66 @@ func TestQueryCIChecks_GhError_AC007(t *testing.T) {
 	}
 }
 
-// TestQueryCIChecks_FailClosed_AC007 proves the no-checks detector is fail-closed:
-// only ErrExit{ExitCode:1} with the exact gh message maps to no_checks;
-// any other error shape must return CHECKS_QUERY_FAILED.
+// TestQueryCIChecks_FailClosed_AC007 proves the check-runs API failure path is fail-closed:
+// any API error must return CHECKS_QUERY_FAILED.
 func TestQueryCIChecks_FailClosed_AC007(t *testing.T) {
-	noChecksMsg := "no checks reported on the 'x' branch"
 	cases := []struct {
-		name  string
-		ghErr error
+		name   string
+		failAt string // "pr_view", "repo_view", "api"
+		ghErr  error
 	}{
 		{
-			name:  "ErrExit_401_bad_credentials",
-			ghErr: &preflight.ErrExit{ExitCode: 1, Stderr: "HTTP 401: Bad credentials"},
+			name:   "pr_view_auth_failure",
+			failAt: "pr_view",
+			ghErr:  fmt.Errorf("HTTP 401: Bad credentials"),
 		},
 		{
-			// Right message, wrong exit code — must NOT be treated as no_checks.
-			name:  "ErrExit_exitcode2_no_checks_message",
-			ghErr: &preflight.ErrExit{ExitCode: 2, Stderr: noChecksMsg},
+			name:   "repo_view_network_error",
+			failAt: "repo_view",
+			ghErr:  fmt.Errorf("network timeout"),
+		},
+		{
+			name:   "check_runs_api_error",
+			failAt: "api",
+			ghErr:  fmt.Errorf("API rate limit exceeded"),
 		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			r, _, _ := buildCIGateRunner(t, ciWaitExecutor("", tc.ghErr, nil))
+			exec := &fakeExecutor{
+				runFunc: func(name string, args ...string) (string, error) {
+					if name == "git" {
+						return handleGitCmd(args)
+					}
+					return "", fmt.Errorf("not mocked: %s %v", name, args)
+				},
+				runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+					if name != "gh" {
+						return "", fmt.Errorf("not mocked: %s %v", name, args)
+					}
+					if tc.failAt == "pr_view" && isGHPRViewHeadSHA(args) {
+						return "", tc.ghErr
+					}
+					if tc.failAt == "repo_view" && isGHRepoViewNWO(args) {
+						if isGHPRViewHeadSHA(args) {
+							return ciTestHeadSHA + "\n", nil
+						}
+						return "", tc.ghErr
+					}
+					if tc.failAt == "api" && isGHCheckRunsAPI(args) {
+						if isGHPRViewHeadSHA(args) {
+							return ciTestHeadSHA + "\n", nil
+						}
+						if isGHRepoViewNWO(args) {
+							return ciTestNWO + "\n", nil
+						}
+						return "", tc.ghErr
+					}
+					return dispatchCIWaitGh(args, emptyCheckRunsJSON, nil, nil)
+				},
+			}
+			r, _, _ := buildCIGateRunner(t, exec)
 			result, _, err := r.queryCIChecks(99)
 			if err == nil {
 				t.Fatalf("want CHECKS_QUERY_FAILED error, got nil (result=%q)", result)
@@ -368,7 +444,7 @@ func TestQueryCIChecks_FailClosed_AC007(t *testing.T) {
 
 // AC-001: immediate green → no wait
 func TestPollCIChecks_ImmediateGreen_AC001(t *testing.T) {
-	checks := ghChecksJSON([]ghCheckItem{{Name: "build", Bucket: "pass"}})
+	checks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 
 	result, _, err := r.pollCIChecks(99, 5*time.Second)
@@ -382,7 +458,7 @@ func TestPollCIChecks_ImmediateGreen_AC001(t *testing.T) {
 
 // AC-005: pending checks time out
 func TestPollCIChecks_TimeoutWhilePending_AC005(t *testing.T) {
-	checks := ghChecksJSON([]ghCheckItem{{Name: "build", Bucket: "pending"}})
+	checks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "in_progress"}})
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 	r.SetCIPollInterval(1 * time.Millisecond)
 
@@ -395,16 +471,17 @@ func TestPollCIChecks_TimeoutWhilePending_AC005(t *testing.T) {
 	}
 }
 
-// AC-002: no checks → immediate pass
+// AC-002: no check runs for current SHA are treated as pending until timeout.
 func TestPollCIChecks_NoChecksPassThrough_AC002(t *testing.T) {
-	r, _, _ := buildCIGateRunner(t, ciWaitExecutor("[]", nil, nil))
+	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
+	r.SetCIPollInterval(1 * time.Millisecond)
 
-	result, _, err := r.pollCIChecks(99, 5*time.Second)
+	result, _, err := r.pollCIChecks(99, 5*time.Millisecond)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "no_checks" {
-		t.Errorf("result: got %q, want %q", result, "no_checks")
+	if result != "timeout" {
+		t.Errorf("result: got %q, want %q", result, "timeout")
 	}
 }
 
@@ -431,7 +508,7 @@ func TestWriteCIWaitFinished_WritesCorrectEvent(t *testing.T) {
 
 // AC-001: green checks release the reviewer
 func TestRunCIGate_GreenPassThrough_AC001(t *testing.T) {
-	greenChecks := ghChecksJSON([]ghCheckItem{{Name: "build", Bucket: "pass"}})
+	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
 	exec := ciGateExecutor([]string{greenChecks}, nil, nil)
 	r, logPath, _ := buildCIGateRunner(t, exec)
 
@@ -451,7 +528,8 @@ func TestRunCIGate_GreenPassThrough_AC001(t *testing.T) {
 
 // AC-002: no checks → immediate pass-through
 func TestRunCIGate_NoChecksPassThrough_AC002(t *testing.T) {
-	exec := ciGateExecutor([]string{"[]"}, nil, nil)
+	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
+	exec := ciGateExecutor([]string{emptyCheckRunsJSON, greenChecks}, nil, nil)
 	r, logPath, _ := buildCIGateRunner(t, exec)
 
 	outcome := r.runCIGate(99, logPath, 5*time.Second)
@@ -463,15 +541,15 @@ func TestRunCIGate_NoChecksPassThrough_AC002(t *testing.T) {
 	if len(ciEvents) == 0 {
 		t.Fatal("ci_wait_finished event not written")
 	}
-	if got := ciWaitResult(t, ciEvents[0]); got != "no_checks" {
-		t.Errorf("ci_wait_finished result: got %q, want %q", got, "no_checks")
+	if got := ciWaitResult(t, ciEvents[0]); got != "green" {
+		t.Errorf("ci_wait_finished result: got %q, want %q", got, "green")
 	}
 }
 
 // AC-003: red build triggers dev retry that heals the PR
 func TestRunCIGate_RedThenGreen_AC003(t *testing.T) {
-	redChecks := ghChecksJSON([]ghCheckItem{{Name: "test", Bucket: "fail"}})
-	greenChecks := ghChecksJSON([]ghCheckItem{{Name: "test", Bucket: "pass"}})
+	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
+	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "success"}})
 
 	lsRemoteResps := []string{
 		"sha1abc\trefs/heads/golemic/issue-42\n",
@@ -507,7 +585,7 @@ func TestRunCIGate_RedThenGreen_AC003(t *testing.T) {
 
 // AC-004: retries exhausted → escalate with PR comment mentioning 3 attempts
 func TestRunCIGate_ExhaustedRetries_AC004(t *testing.T) {
-	redChecks := ghChecksJSON([]ghCheckItem{{Name: "test", Bucket: "fail"}})
+	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
 	lsRemoteResps := []string{
 		"sha1\trefs/heads/golemic/issue-42\n",
 		"sha2\trefs/heads/golemic/issue-42\n",
@@ -542,8 +620,8 @@ func TestRunCIGate_ExhaustedRetries_AC004(t *testing.T) {
 
 // AC-005: CI timeout is treated as red → triggers retry
 func TestRunCIGate_TimeoutTreatedAsRed_AC005(t *testing.T) {
-	pendingChecks := ghChecksJSON([]ghCheckItem{{Name: "test", Bucket: "pending"}})
-	greenChecks := ghChecksJSON([]ghCheckItem{{Name: "test", Bucket: "pass"}})
+	pendingChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "in_progress"}})
+	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "success"}})
 
 	lsRemoteResps := []string{
 		"sha1\trefs/heads/golemic/issue-42\n",
@@ -584,7 +662,7 @@ func TestRunCIGate_TimeoutTreatedAsRed_AC005(t *testing.T) {
 
 // AC-006: failed retry round escalates immediately (non-zero exit)
 func TestRunCIGate_FailedRetryEscalates_AC006(t *testing.T) {
-	redChecks := ghChecksJSON([]ghCheckItem{{Name: "test", Bucket: "fail"}})
+	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
 	lsRemoteResps := []string{
 		"sha1\trefs/heads/golemic/issue-42\n",
 		"sha2\trefs/heads/golemic/issue-42\n",
@@ -608,7 +686,7 @@ func TestRunCIGate_FailedRetryEscalates_AC006(t *testing.T) {
 
 // AC-006: dev pushes nothing → escalate
 func TestRunCIGate_NoPushEscalates_AC006b(t *testing.T) {
-	redChecks := ghChecksJSON([]ghCheckItem{{Name: "test", Bucket: "fail"}})
+	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
 	// Both ls-remote calls return the same SHA → no push detected
 	sameSHA := "abc123\trefs/heads/golemic/issue-42\n"
 	var commentCalls []string
@@ -782,7 +860,7 @@ func buildCIGateRunnerWithRequireCIChecks(t *testing.T, exec *fakeExecutor) (*Ru
 
 // AC-001/AC-002 regression guard: require_ci_checks=false with no_checks returns no_checks immediately.
 func TestQueryCIChecks_RequireCIChecksFalse_NoChecksPassThrough(t *testing.T) {
-	r, _, _ := buildCIGateRunner(t, ciWaitExecutor("[]", nil, nil))
+	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 	// RequireCIChecks defaults to false
 
 	result, _, err := r.queryCIChecks(99)
@@ -796,24 +874,23 @@ func TestQueryCIChecks_RequireCIChecksFalse_NoChecksPassThrough(t *testing.T) {
 
 // AC-003: require_ci_checks=true maps no_checks to pending in queryCIChecks.
 func TestQueryCIChecks_RequireCIChecksTrue_NoChecksMappedToPending(t *testing.T) {
-	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor("[]", nil, nil))
+	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 
 	result, _, err := r.queryCIChecks(99)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != "pending" {
-		t.Errorf("result: got %q, want %q (require_ci_checks=true must map no_checks to pending)", result, "pending")
+		t.Errorf("result: got %q, want %q (require_ci_checks=true must map empty results to pending)", result, "pending")
 	}
 }
 
 // AC-003: require_ci_checks=true, no_checks then green → pollCIChecks returns green.
 func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenGreen_AC003(t *testing.T) {
-	noChecks := "[]"
-	greenChecks := ghChecksJSON([]ghCheckItem{{Name: "verify", Bucket: "pass"}})
+	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})
 
 	callIdx := 0
-	responses := []string{noChecks, greenChecks}
+	responses := []string{emptyCheckRunsJSON, greenChecks}
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" {
@@ -825,11 +902,11 @@ func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenGreen_AC003(t *testing.T) 
 			if name != "gh" {
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			}
-			if ghArgsMatch(args, "pr", "checks") {
+			if isGHCheckRunsAPI(args) {
 				resp := seqResponse(responses, &callIdx)
 				return resp, nil
 			}
-			return "", fmt.Errorf("not mocked: gh %v", args)
+			return dispatchCIWaitGh(args, emptyCheckRunsJSON, nil, nil)
 		},
 	}
 
@@ -843,17 +920,16 @@ func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenGreen_AC003(t *testing.T) 
 		t.Errorf("result: got %q, want %q", result, "green")
 	}
 	if callIdx < 2 {
-		t.Errorf("expected at least 2 gh pr checks calls, got %d", callIdx)
+		t.Errorf("expected at least 2 gh api check-runs calls, got %d", callIdx)
 	}
 }
 
 // AC-004: require_ci_checks=true, no_checks then red → pollCIChecks returns red.
 func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenRed_AC004(t *testing.T) {
-	noChecks := "[]"
-	redChecks := ghChecksJSON([]ghCheckItem{{Name: "verify", Bucket: "fail"}})
+	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "failure"}})
 
 	callIdx := 0
-	responses := []string{noChecks, redChecks}
+	responses := []string{emptyCheckRunsJSON, redChecks}
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" {
@@ -865,11 +941,11 @@ func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenRed_AC004(t *testing.T) {
 			if name != "gh" {
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			}
-			if ghArgsMatch(args, "pr", "checks") {
+			if isGHCheckRunsAPI(args) {
 				resp := seqResponse(responses, &callIdx)
 				return resp, nil
 			}
-			return "", fmt.Errorf("not mocked: gh %v", args)
+			return dispatchCIWaitGh(args, emptyCheckRunsJSON, nil, nil)
 		},
 	}
 
@@ -889,7 +965,7 @@ func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenRed_AC004(t *testing.T) {
 
 // AC-005: require_ci_checks=true, no_checks throughout until ciTimeout → returns timeout.
 func TestPollCIChecks_RequireCIChecksTrue_AlwaysNoChecksTimesOut_AC005(t *testing.T) {
-	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor("[]", nil, nil))
+	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 	r.SetCIPollInterval(1 * time.Millisecond)
 
 	result, _, err := r.pollCIChecks(99, 5*time.Millisecond)
@@ -897,6 +973,6 @@ func TestPollCIChecks_RequireCIChecksTrue_AlwaysNoChecksTimesOut_AC005(t *testin
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result != "timeout" {
-		t.Errorf("result: got %q, want %q (no_checks must timeout when require_ci_checks=true)", result, "timeout")
+		t.Errorf("result: got %q, want %q (empty results must timeout when require_ci_checks=true)", result, "timeout")
 	}
 }

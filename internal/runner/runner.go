@@ -4,12 +4,12 @@
 // run_finished writing, and cleanup.
 //
 // Process steps (PS-001–PS-006 per spec):
-//   1. Resolve host repo (git root; if under tools/golemic, find enclosing repo)
-//   2. Load config and credentials (fail-closed before any GitHub access)
-//   3. Generate runId, create event log, write run_started
-//   4. Load issue from GitHub via gh issue view
-//   5. Collision check (worktree, local/remote branch, open PR)
-//   6. Full orchestration: dev worktree → dev agent → pr_opened → reviewer worktree → reviewer agent → dirty check → review_submitted → outcome determination → run_finished → cleanup
+//  1. Resolve host repo (git root; if under tools/golemic, find enclosing repo)
+//  2. Load config and credentials (fail-closed before any GitHub access)
+//  3. Generate runId, create event log, write run_started
+//  4. Load issue from GitHub via gh issue view
+//  5. Collision check (worktree, local/remote branch, open PR)
+//  6. Full orchestration: dev worktree → dev agent → pr_opened → reviewer worktree → reviewer agent → dirty check → review_submitted → outcome determination → run_finished → cleanup
 package runner
 
 import (
@@ -60,14 +60,16 @@ type Runner struct {
 	ciTimeoutOverride      time.Duration
 
 	// Resolved during Run
-	repoRoot     string
-	project      string
-	runID        string
-	branchName   string
-	cfg          *config.Config
-	creds        *credentials.Credentials
-	issue        *issueData
-	turnCounter  int // monotonic, incremented once per agent turn; 0 before first turn
+	repoRoot    string
+	project     string
+	runID       string
+	branchName  string
+	cfg         *config.Config
+	creds       *credentials.Credentials
+	issue       *issueData
+	turnCounter int // monotonic, incremented once per agent turn; 0 before first turn
+
+	cachedNWO string // cached repo "owner/name" for check-runs API calls
 
 	// Telemetry
 	sink         telemetry.Sink
