@@ -1,23 +1,23 @@
 # Reviewer Guidelines
 
 ## Stack
-Go 1.21, nur Standardbibliothek — keine Frameworks. Module `golemic`; nicht-öffentliche Pakete unter `internal/`.
+Go 1.21, standard library only — no frameworks. Module `golemic`; non-public packages under `internal/`.
 
-## Verifikation
-- `go build ./... && go test ./...` muss grün sein — sonst `changes_requested`.
-- `gofmt`, `go vet`, `golangci-lint` (depguard-Layering) müssen sauber sein.
-- Diff muss das Issue erfüllen — nicht mehr (kein Scope-Creep), nicht weniger.
-- Commits: Conventional Commits mit Slice-Nummer `type(scope): summary (NNN)`.
+## Verification
+- `go build ./... && go test ./...` must be green — otherwise `changes_requested`.
+- `gofmt`, `go vet`, `golangci-lint` (depguard layering) must be clean.
+- Diff must satisfy the issue — no more (no scope creep), no less.
+- Commits: Conventional Commits with slice number `type(scope): summary (NNN)`.
 
-## Prüfe gegen — Do's
-- KISS/YAGNI/DRY eingehalten; kleine, klar benannte Pakete; ein Typ / eine Funktion → eine Verantwortung (SRP je Struct und Paket).
-- Kleine Interfaces beim Konsumenten; konkrete Rückgabetypen; Abhängigkeiten explizit injiziert; Zero Values nutzbar.
-- Fehler mit `%w` gewrappt; `context.Context` als erster Parameter; Geschäftslogik von HTTP/DB/Infra getrennt.
+## Check against — Do's
+- KISS/YAGNI/DRY respected; small, clearly named packages; one type / one function → one responsibility (SRP per struct and package).
+- Small interfaces at the consumer; concrete return types; dependencies explicitly injected; zero values usable.
+- Errors wrapped with `%w`; `context.Context` as the first parameter; business logic separated from HTTP/DB/infra.
 
-## Prüfe gegen — Don'ts
-- Abstraktionen/Factories/Manager/Wrapper ohne Bedarf; „God Interfaces"; `utils`/`common`/`helpers`; tiefe Paketstrukturen; zyklische Abhängigkeiten.
-- Globaler veränderlicher Zustand; versteckte Seiteneffekte; Panics für normale Fehler; ignorierte Fehler; `%v` in Fehlerketten.
-- `context.Context` in Structs; Premature Optimization; clevere Einzeiler auf Kosten der Lesbarkeit.
+## Check against — Don'ts
+- Abstractions/factories/managers/wrappers without need; "God Interfaces"; `utils`/`common`/`helpers`; deep package structures; cyclic dependencies.
+- Global mutable state; hidden side effects; panics for normal errors; ignored errors; `%v` in error chains.
+- `context.Context` stored in structs; premature optimization; clever one-liners at the cost of readability.
 
-## Verdikt
-Genau ein `golemic submit-review --verdict approved|changes_requested`. Bei `changes_requested` konkrete, umsetzbare Punkte nennen.
+## Verdict
+Exactly one `golemic submit-review --verdict approved|changes_requested`. When `changes_requested`, list concrete, actionable points.
