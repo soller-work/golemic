@@ -334,3 +334,143 @@ class TestChangeTypeToIssueType:
             assert f"--type {expected_type!r}" in stdout
 
 
+
+
+# German function words used as a proxy for non-English prose in artifact fields.
+_GERMAN_PROSE_MARKERS = [
+    " der ", " die ", " das ", " ein ", " eine ", " ist ", " sind ",
+    " und ", " oder ", " aber ", " nicht ", " mit ", " für ", " von ",
+    " wird ", " werden ", " kann ", " soll ", " muss ", " beim ",
+]
+
+
+def _contains_german_prose(text: str) -> bool:
+    """Return True if text contains German function-word patterns."""
+    lower = text.lower()
+    return any(marker in lower for marker in _GERMAN_PROSE_MARKERS)
+
+
+SKILL_MD_PATH = Path(__file__).parent.parent.parent / "SKILL.md"
+
+
+class TestLanguagePolicy:
+    """Regression coverage: German interview → English issue artifacts (issue #149)."""
+
+    def test_skill_md_defines_artifact_language_as_english(self):
+        """SKILL.md must explicitly state that generated artifact fields are authored in English."""
+        text = SKILL_MD_PATH.read_text(encoding="utf-8")
+        assert "Language Policy" in text, "SKILL.md must contain a Language Policy section"
+        assert "English" in text, "SKILL.md must reference English as the artifact language"
+        # The policy section must cover both interview and artifact sides.
+        assert "artifact" in text.lower() or "issue" in text.lower(), (
+            "SKILL.md language policy must address artifact / issue language"
+        )
+
+    def test_skill_md_allows_non_english_interview(self):
+        """SKILL.md must retain German question framing (Frage N) to allow non-English interviews."""
+        text = SKILL_MD_PATH.read_text(encoding="utf-8")
+        assert "Frage" in text, (
+            "SKILL.md must keep the German question format example (Frage N) "
+            "to signal that the interview follows the user's session language"
+        )
+
+    def test_english_slice_renders_without_german_prose(self):
+        """A correctly authored English slice (from any-language interview) renders no German prose."""
+        english_slice = {
+            "slice_type": "command",
+            "change_type": "bug",
+            "title": "Fix missing null check in authentication middleware",
+            "stakeholder": "Backend developers who maintain the authentication layer.",
+            "trigger": "A request arrives without an Authorization header.",
+            "success_outcome": "The middleware returns 401 with a structured error body.",
+            "tldr": "Add a null-guard for the Authorization header in the auth middleware.",
+            "scope": {
+                "in": ["Auth middleware null check", "Structured 401 error response"],
+                "out": ["Token validation logic", "Session management"],
+            },
+            "reproduction": (
+                "Send a POST /api/login without the Authorization header. "
+                "Observed: 500 Internal Server Error. Expected: 401 Unauthorized."
+            ),
+            "root_cause": "The middleware accesses the header value without checking for its absence.",
+            "regression_scenarios": [
+                "Given a request without Authorization header, when the middleware processes it, "
+                "then the response status is 401 and the body contains an error field."
+            ],
+            "proof": {
+                "how": (
+                    "We send a request without the Authorization header and assert the response "
+                    "status is 401 with a structured JSON error body."
+                ),
+                "why": (
+                    "This reproduces the exact failure mode and confirms the guard is in place."
+                ),
+                "checks": [
+                    {
+                        "functional": "Missing Authorization header returns 401",
+                        "technical": "A test sends a request without the header and asserts status 401 and error body",
+                    }
+                ],
+            },
+            "verify_commands": ["go test ./internal/middleware/..."],
+            "definition_of_done": [
+                "Null check added to auth middleware",
+                "Regression test passes",
+                "go vet and golangci-lint clean",
+            ],
+            "readiness": "ready",
+            "blockers": [],
+            "security_relevant": False,
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            slice_path = Path(tmpdir) / "slice.json"
+            slice_path.write_text(json.dumps(english_slice))
+
+            code, stdout, stderr = run_create_issue_py(str(slice_path), "--dry-run")
+            assert code == 0, f"dry-run failed: {stderr}"
+
+            # Verify that no agent-authored prose field contains German function words.
+            prose_fields = [
+                english_slice["title"],
+                english_slice["stakeholder"],
+                english_slice["trigger"],
+                english_slice["success_outcome"],
+                english_slice["tldr"],
+                english_slice["reproduction"],
+                english_slice["root_cause"],
+                english_slice["proof"]["how"],
+                english_slice["proof"]["why"],
+            ] + english_slice["regression_scenarios"] + english_slice["definition_of_done"]
+
+            for field_text in prose_fields:
+                assert not _contains_german_prose(field_text), (
+                    f"English artifact field contains German prose: {field_text!r}"
+                )
+
+    def test_denglish_slice_detected_by_language_check(self):
+        """A Denglish slice (German prose in artifact fields) is caught by the language check helper."""
+        denglish_fields = [
+            "Authentifizierungs-Middleware: Null-Prüfung fehlt beim Authorization-Header",
+            "Backend-Entwickler, die die Authentifizierungsschicht pflegen.",
+            "Eine Anfrage kommt ohne Authorization-Header an.",
+            "Die Middleware gibt einen 401-Fehler zurück.",
+        ]
+        detected = [f for f in denglish_fields if _contains_german_prose(f)]
+        assert len(detected) > 0, (
+            "Language check helper must detect German prose in Denglish artifact fields"
+        )
+
+    def test_technical_identifiers_survive_english_policy(self):
+        """Technical identifiers (paths, commands, symbols) are unchanged under the English policy."""
+        technical_tokens = [
+            "internal/middleware/auth.go",
+            "go test ./...",
+            "Authorization",
+            "#149",
+            "`ctx context.Context`",
+        ]
+        for token in technical_tokens:
+            assert not _contains_german_prose(token), (
+                f"Technical identifier wrongly flagged as German prose: {token!r}"
+            )
