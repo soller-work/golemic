@@ -14,8 +14,10 @@ import (
 
 // fakeExecutor implements preflight.Executor for testing.
 type fakeExecutor struct {
-	runFunc        func(name string, args ...string) (string, error)
-	runWithEnvFunc func(env map[string]string, name string, args ...string) (string, error)
+	runFunc             func(name string, args ...string) (string, error)
+	runWithEnvFunc      func(env map[string]string, name string, args ...string) (string, error)
+	runInDirFunc        func(dir string, name string, args ...string) (string, error)
+	runWithEnvInDirFunc func(env map[string]string, dir string, name string, args ...string) (string, error)
 }
 
 func (f fakeExecutor) Run(name string, args ...string) (string, error) {
@@ -35,11 +37,17 @@ func (f fakeExecutor) RunWithEnv(env map[string]string, name string, args ...str
 	return "", fmt.Errorf("not mocked: %s %v", name, args)
 }
 
-func (f fakeExecutor) RunInDir(_ string, name string, args ...string) (string, error) {
+func (f fakeExecutor) RunInDir(dir string, name string, args ...string) (string, error) {
+	if f.runInDirFunc != nil {
+		return f.runInDirFunc(dir, name, args...)
+	}
 	return f.Run(name, args...)
 }
 
-func (f fakeExecutor) RunWithEnvInDir(env map[string]string, _ string, name string, args ...string) (string, error) {
+func (f fakeExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
+	if f.runWithEnvInDirFunc != nil {
+		return f.runWithEnvInDirFunc(env, dir, name, args...)
+	}
 	return f.RunWithEnv(env, name, args...)
 }
 
@@ -71,7 +79,7 @@ func TestRun(t *testing.T) {
 			name:           "no arguments prints usage to stderr",
 			args:           []string{"golemic"},
 			wantExit:       1,
-			wantStderrSubs: []string{"Usage: golemic"},
+			wantStderrSubs: []string{"Usage: golemic", "pr-view"},
 		},
 		{
 			name:           "unknown command prints error to stderr",
@@ -106,6 +114,13 @@ func TestRun(t *testing.T) {
 			name:     "submit-review without flags fails with validation error",
 			args:     []string{"golemic", "submit-review"},
 			wantExit: 1,
+		},
+		{
+			// Dispatch reached runPRView; validation should fail before any gh call.
+			name:           "pr-view without flags fails with validation error",
+			args:           []string{"golemic", "pr-view"},
+			wantExit:       1,
+			wantStderrSubs: []string{"--pr must be a positive integer"},
 		},
 	}
 
@@ -405,4 +420,3 @@ func TestRunOpenPR_AC005_MissingEnvVar(t *testing.T) {
 		t.Errorf("stderr missing env var name; got %q", stderr.String())
 	}
 }
-

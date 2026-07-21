@@ -61,6 +61,7 @@ var knownCommands = []struct {
 	{"run", "Run the main process (golemic run --issue N)"},
 	{"emit", "Emit an event to the run log"},
 	{"open-pr", "Open a pull request"},
+	{"pr-view", "Show pull request context (golemic pr-view --pr N)"},
 	{"review-comment", "Add an inline review comment to the pending review (reviewer agent)"},
 	{"submit-review", "Submit a review"},
 	{"status", "Show run health status"},
@@ -150,7 +151,7 @@ func dispatchPreflight(args []string, stdout, stderr io.Writer) int {
 	return runPreflight(osExecutor{}, homeDir, repoRoot, stdout, stderr, checkFlag)
 }
 
-// dispatchCoreCommands handles the five most common subcommands.
+// dispatchCoreCommands handles the most common subcommands.
 func dispatchCoreCommands(command string, args []string, stdout, stderr io.Writer) (int, bool) {
 	switch command {
 	case "run":
@@ -165,6 +166,8 @@ func dispatchCoreCommands(command string, args []string, stdout, stderr io.Write
 		return runReviewComment(args, stdout, stderr, os.Getenv, osExecutor{}), true
 	case "submit-review":
 		return runSubmitReview(args, stdout, stderr, os.Getenv, osExecutor{}), true
+	case "pr-view":
+		return runPRView(args, stdout, stderr, osExecutor{}, config.Load), true
 	}
 	return 0, false
 }
