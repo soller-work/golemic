@@ -17,6 +17,7 @@ import (
 	"golemic/internal/cbmbroker"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
+	"golemic/internal/eventlog"
 )
 
 // setupCBMRunner creates a runner with the given CodebaseMemory.Enabled value for CBM tests.
@@ -166,7 +167,9 @@ func TestIndexWorktree_CallsNPX(t *testing.T) {
 	wtPath := t.TempDir()
 	cbmCacheDir := filepath.Join(golemicDir, "cbm", "issue-42")
 
-	r.indexWorktree(wtPath, cbmCacheDir, "golemic-issue-42-dev")
+	if !r.indexWorktree(wtPath, cbmCacheDir, "golemic-issue-42-dev") {
+		t.Fatal("expected indexing to succeed")
+	}
 
 	if len(exec.npxCalls) == 0 {
 		t.Fatal("expected npx to be called, got none")
@@ -191,7 +194,9 @@ func TestIndexWorktree_FailSoft(t *testing.T) {
 	r.executor = failExec
 	r.stderr = &stderr
 
-	r.indexWorktree(t.TempDir(), filepath.Join(golemicDir, "cbm", "issue-42"), "golemic-issue-42-dev")
+	if r.indexWorktree(t.TempDir(), filepath.Join(golemicDir, "cbm", "issue-42"), "golemic-issue-42-dev") {
+		t.Error("expected indexing to report failure")
+	}
 
 	if !strings.Contains(stderr.String(), "Warning") {
 		t.Error("expected a warning on stderr when indexing fails")
@@ -224,6 +229,39 @@ func runDevAgentCapture(t *testing.T, r *Runner, golemicDir string) []agent.Role
 	eventLogPath := filepath.Join(t.TempDir(), "events.jsonl")
 	r.runDevAgent(golemicDir, eventLogPath, 30*time.Second, "", 1)
 	return captured
+}
+
+func writeReviewerEventLog(t *testing.T, runID string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	w, err := eventlog.NewWriter(path)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	t.Cleanup(func() { w.Close() })
+	payload, err := json.Marshal(map[string]string{"prNumber": "123"})
+	if err != nil {
+		t.Fatalf("marshal pr_opened payload: %v", err)
+	}
+	if err := w.Write(eventlog.Event{Type: eventlog.EventPROpened, Ts: time.Now().Format(time.RFC3339), RunID: runID, TurnID: 1, Payload: payload}); err != nil {
+		t.Fatalf("write pr_opened event: %v", err)
+	}
+	return path
+}
+
+func makeIndexFailExecutor() *fakeExecutor {
+	return &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			switch name {
+			case "npx":
+				return "", fmt.Errorf("index failed")
+			case "git":
+				return handleGitCmd(args)
+			default:
+				return "", fmt.Errorf("not mocked: %s %v", name, args)
+			}
+		},
+	}
 }
 
 // TestCBMDevTools_FlagOff verifies that the dev allowlist is exactly read,bash,write,edit when CBM is off.
@@ -355,5 +393,109 @@ func TestCBMBrokerSocketCleanup(t *testing.T) {
 	// After runDevAgent returns, the defer Shutdown() must have removed the socket.
 	if _, err := os.Stat(capturedSock); !os.IsNotExist(err) {
 		t.Errorf("socket file still exists after runDevAgent returned; path: %s", capturedSock)
+	}
+}
+
+func TestCBMBrokerSkippedWhenIndexingFailsDev(t *testing.T) {
+	r, golemicDir := setupCBMRunner(t, makeIndexFailExecutor(), true)
+	r.homeDir = "/tmp"
+	r.project = "p"
+	r.runID = "r"
+	r.stderr = &bytes.Buffer{}
+
+	orig := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = orig })
+	startCBMBrokerFn = func(string, map[string]string) (*cbmbroker.Broker, error) {
+		t.Fatal("broker must not start when indexing fails")
+		return nil, nil
+	}
+
+	setupDevWTWithGit(t, golemicDir)
+	captured := runDevAgentCapture(t, r, golemicDir)
+	if len(captured) == 0 {
+		t.Fatal("agent was not called")
+	}
+	cfg := captured[0]
+	if len(cfg.Env) != 0 {
+		t.Fatalf("expected no CBM env on indexing failure, got %v", cfg.Env)
+	}
+	if strings.Contains(cfg.UserPrompt, "golemic cbm help") {
+		t.Fatalf("prompt should not mention CBM when indexing fails:\n%s", cfg.UserPrompt)
+	}
+}
+
+func TestCBMBrokerSkippedWhenIndexingFailsRetry(t *testing.T) {
+	r, golemicDir := setupCBMRunner(t, makeIndexFailExecutor(), true)
+	r.homeDir = "/tmp"
+	r.project = "p"
+	r.runID = "r"
+	r.stderr = &bytes.Buffer{}
+
+	orig := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = orig })
+	startCBMBrokerFn = func(string, map[string]string) (*cbmbroker.Broker, error) {
+		t.Fatal("broker must not start when indexing fails")
+		return nil, nil
+	}
+
+	setupDevWTWithGit(t, golemicDir)
+	captured := []agent.RoleConfig{}
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		captured = append(captured, cfg)
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	findings := "The reviewer requested changes."
+	r.runDevRetryAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, findings, "", "", 1)
+	if len(captured) == 0 {
+		t.Fatal("agent was not called")
+	}
+	cfg := captured[0]
+	if len(cfg.Env) != 0 {
+		t.Fatalf("expected no CBM env on indexing failure, got %v", cfg.Env)
+	}
+	if strings.Contains(cfg.UserPrompt, "golemic cbm help") {
+		t.Fatalf("prompt should not mention CBM when indexing fails:\n%s", cfg.UserPrompt)
+	}
+}
+
+func TestCBMBrokerSkippedWhenIndexingFailsReviewer(t *testing.T) {
+	r, golemicDir := setupCBMRunner(t, makeIndexFailExecutor(), true)
+	r.homeDir = "/tmp"
+	r.project = "p"
+	r.runID = "r"
+	r.stderr = &bytes.Buffer{}
+
+	eventLogPath := writeReviewerEventLog(t, r.runID)
+
+	orig := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = orig })
+	startCBMBrokerFn = func(string, map[string]string) (*cbmbroker.Broker, error) {
+		t.Fatal("broker must not start when indexing fails")
+		return nil, nil
+	}
+
+	reviewerWT := filepath.Join(golemicDir, "worktrees", "issue-42-review")
+	if err := os.MkdirAll(reviewerWT, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	captured := []agent.RoleConfig{}
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		captured = append(captured, cfg)
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	outcome := r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1)
+	if outcome != outcomeSuccess {
+		t.Fatalf("expected success outcome without CBM, got %q", outcome)
+	}
+	if len(captured) == 0 {
+		t.Fatal("agent was not called")
+	}
+	cfg := captured[0]
+	if len(cfg.Env) != 0 {
+		t.Fatalf("expected no CBM env on indexing failure, got %v", cfg.Env)
+	}
+	if strings.Contains(cfg.UserPrompt, "golemic cbm help") {
+		t.Fatalf("prompt should not mention CBM when indexing fails:\n%s", cfg.UserPrompt)
 	}
 }

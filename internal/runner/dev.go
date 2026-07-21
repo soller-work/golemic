@@ -28,22 +28,16 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	}
 	defer cleanupPrompt()
 
-	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	cbmEnabled := false
 	var brokerEnv []string
-	if cbmEnabled {
+	if r.cfg.CodebaseMemory.Enabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
 		projectName := fmt.Sprintf("golemic-issue-%d-dev", r.issueNum)
-		r.indexWorktree(devWorktreePath, cbmCacheDir, projectName)
-
 		sockPath := filepath.Join(runsDir, r.runID, "cbm-dev-retry.sock")
-		if b, brokerErr := r.startCBMBroker(sockPath, cbmCacheDir); brokerErr != nil {
-			fmt.Fprintf(r.stderr, "Warning: failed to start CBM broker: %v\n", brokerErr)
-		} else {
+		if b, env, ok := r.startCBMForRole(devWorktreePath, cbmCacheDir, sockPath, projectName); ok {
 			defer b.Shutdown()
-			brokerEnv = []string{
-				"CBM_SOCK=" + sockPath,
-				"CBM_PROJECT=" + projectName,
-			}
+			brokerEnv = env
+			cbmEnabled = true
 		}
 	}
 
@@ -110,22 +104,16 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	}
 	defer cleanupPrompt()
 
-	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	cbmEnabled := false
 	var brokerEnv []string
-	if cbmEnabled {
+	if r.cfg.CodebaseMemory.Enabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
 		projectName := fmt.Sprintf("golemic-issue-%d-dev", r.issueNum)
-		r.indexWorktree(devWorktreePath, cbmCacheDir, projectName)
-
 		sockPath := filepath.Join(runsDir, r.runID, "cbm-dev.sock")
-		if b, brokerErr := r.startCBMBroker(sockPath, cbmCacheDir); brokerErr != nil {
-			fmt.Fprintf(r.stderr, "Warning: failed to start CBM broker: %v\n", brokerErr)
-		} else {
+		if b, env, ok := r.startCBMForRole(devWorktreePath, cbmCacheDir, sockPath, projectName); ok {
 			defer b.Shutdown()
-			brokerEnv = []string{
-				"CBM_SOCK=" + sockPath,
-				"CBM_PROJECT=" + projectName,
-			}
+			brokerEnv = env
+			cbmEnabled = true
 		}
 	}
 
@@ -217,7 +205,21 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	return outcomeSuccess
 }
 
-// buildDevAgentConfig creates the agent.RoleConfig for the dev retry agent.
+// startCBMForRole indexes the worktree and starts the CBM broker.
+func (r *Runner) startCBMForRole(wtPath, cbmCacheDir, sockPath, projectName string) (*cbmbroker.Broker, []string, bool) {
+	if !r.indexWorktree(wtPath, cbmCacheDir, projectName) {
+		return nil, nil, false
+	}
+
+	b, err := r.startCBMBroker(sockPath, cbmCacheDir)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to start CBM broker: %v\n", err)
+		return nil, nil, false
+	}
+
+	return b, []string{"CBM_SOCK=" + sockPath, "CBM_PROJECT=" + projectName}, true
+}
+
 func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, brokerEnv []string) agent.RoleConfig {
 	return agent.RoleConfig{
 		Role:              "dev",
@@ -252,10 +254,10 @@ func (r *Runner) startCBMBroker(sockPath, cbmCacheDir string) (*cbmbroker.Broker
 
 // indexWorktree runs codebase-memory-mcp to index wtPath with the given project name.
 // Failure is logged and does not abort the run (BR-7).
-func (r *Runner) indexWorktree(wtPath, cbmCacheDir, projectName string) {
+func (r *Runner) indexWorktree(wtPath, cbmCacheDir, projectName string) bool {
 	if err := os.MkdirAll(cbmCacheDir, 0755); err != nil {
 		fmt.Fprintf(r.stderr, "Warning: failed to create CBM cache dir %s: %v\n", cbmCacheDir, err)
-		return
+		return false
 	}
 	_, err := r.executor.RunWithEnvInDir(
 		map[string]string{"CBM_CACHE_DIR": cbmCacheDir, "CBM_LOG_LEVEL": "warn"},
@@ -265,7 +267,9 @@ func (r *Runner) indexWorktree(wtPath, cbmCacheDir, projectName string) {
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Warning: codebase-memory indexing failed (proceeding without code intelligence): %v\n", err)
+		return false
 	}
+	return true
 }
 
 // handleDevAgentErrorWithLog processes agent errors, writes agent_completed for chain

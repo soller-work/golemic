@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-const (
+var (
 	mcpVersion           = "2024-11-05"
 	initHandshakeTimeout = 30 * time.Second
 	roundtripTimeout     = 60 * time.Second
@@ -50,6 +50,7 @@ type Broker struct {
 // preserved; keys in env override duplicates).
 func Start(sockPath string, env map[string]string) (*Broker, error) {
 	cmd := exec.Command("npx", "-y", "codebase-memory-mcp@0.9.0")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Env = os.Environ()
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
@@ -77,14 +78,20 @@ func Start(sockPath string, env map[string]string) (*Broker, error) {
 
 	stdout := bufio.NewReaderSize(stdoutPipe, readerBufSize)
 
+	signalGroup := func(sig os.Signal) error {
+		s, ok := sig.(syscall.Signal)
+		if !ok {
+			return fmt.Errorf("unsupported signal type %T", sig)
+		}
+		return syscall.Kill(-cmd.Process.Pid, s)
+	}
+
 	b, err := StartWithIO(sockPath, stdin, stdout,
-		func(sig os.Signal) error { return cmd.Process.Signal(sig) },
+		signalGroup,
 		func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) },
 		childDone,
 	)
 	if err != nil {
-		cmd.Process.Kill() //nolint:errcheck
-		<-childDone
 		return nil, err
 	}
 	return b, nil
@@ -117,16 +124,20 @@ func StartWithIO(
 
 	if err := b.initialize(); err != nil {
 		b.stdin.Close() //nolint:errcheck
-		<-b.dead
+		b.terminateChild()
 		return nil, fmt.Errorf("cbmbroker: initialize: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0755); err != nil {
+		b.stdin.Close() //nolint:errcheck
+		b.terminateChild()
 		return nil, fmt.Errorf("cbmbroker: mkdir socket dir: %w", err)
 	}
 	os.Remove(sockPath) //nolint:errcheck
 	ln, err := net.Listen("unix", sockPath)
 	if err != nil {
+		b.stdin.Close() //nolint:errcheck
+		b.terminateChild()
 		return nil, fmt.Errorf("cbmbroker: listen %s: %w", sockPath, err)
 	}
 	b.listener = ln
@@ -141,19 +152,7 @@ func (b *Broker) Shutdown() {
 	if b.listener != nil {
 		b.listener.Close() //nolint:errcheck
 	}
-
-	b.sigSend(syscall.SIGTERM) //nolint:errcheck
-
-	select {
-	case <-b.childDone:
-	case <-time.After(graceShutdown):
-		b.hardKill() //nolint:errcheck
-		select {
-		case <-b.childDone:
-		case <-time.After(graceShutdown):
-		}
-	}
-
+	b.terminateChild()
 	os.Remove(b.sockPath) //nolint:errcheck
 }
 
@@ -198,6 +197,37 @@ func (b *Broker) failPending() {
 		delete(b.pending, id)
 	}
 	close(b.dead)
+}
+
+func (b *Broker) terminateChild() {
+	if b == nil {
+		return
+	}
+	if b.stdin != nil {
+		b.stdin.Close() //nolint:errcheck
+	}
+	if b.sigSend != nil {
+		b.sigSend(syscall.SIGTERM) //nolint:errcheck
+	}
+	if waitForDone(b.childDone, graceShutdown) {
+		return
+	}
+	if b.hardKill != nil {
+		b.hardKill() //nolint:errcheck
+	}
+	waitForDone(b.childDone, graceShutdown)
+}
+
+func waitForDone(done <-chan struct{}, timeout time.Duration) bool {
+	if done == nil {
+		return false
+	}
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 func responseID(line []byte) (int64, bool) {

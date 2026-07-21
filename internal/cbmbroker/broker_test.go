@@ -181,6 +181,71 @@ func TestBroker_InitializeHandshake(t *testing.T) {
 	}
 }
 
+func TestBroker_InitializeTimeout_TerminatesChild(t *testing.T) { //nolint:funlen
+	oldInit := initHandshakeTimeout
+	oldGrace := graceShutdown
+	initHandshakeTimeout = 25 * time.Millisecond
+	graceShutdown = 10 * time.Millisecond
+	t.Cleanup(func() {
+		initHandshakeTimeout = oldInit
+		graceShutdown = oldGrace
+	})
+
+	sockPath := shortSockPath(t)
+	childInR, childInW := io.Pipe()
+	childOutR, childOutW := io.Pipe()
+	t.Cleanup(func() {
+		childInW.Close()
+		childOutW.Close()
+	})
+
+	go func() {
+		reader := bufio.NewReaderSize(childInR, readerBufSize)
+		for {
+			if _, err := reader.ReadBytes('\n'); err != nil {
+				return
+			}
+		}
+	}()
+
+	childDone := make(chan struct{})
+	var mu sync.Mutex
+	sigCount := 0
+	killCount := 0
+
+	start := time.Now()
+	_, err := StartWithIO(sockPath, childInW, bufio.NewReaderSize(childOutR, readerBufSize),
+		func(os.Signal) error {
+			mu.Lock()
+			sigCount++
+			mu.Unlock()
+			return nil
+		},
+		func() error {
+			mu.Lock()
+			killCount++
+			mu.Unlock()
+			return nil
+		},
+		childDone,
+	)
+	if err == nil {
+		t.Fatal("expected initialize timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > 300*time.Millisecond {
+		t.Fatalf("StartWithIO took %v, want bounded timeout", elapsed)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if sigCount == 0 {
+		t.Error("expected SIGTERM to be sent on initialize timeout")
+	}
+	if killCount == 0 {
+		t.Error("expected hard kill fallback on initialize timeout")
+	}
+}
+
 func TestBroker_SingleRequest(t *testing.T) {
 	b, sockPath := startTestBroker(t)
 	_ = b

@@ -182,22 +182,16 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	}
 	defer cleanupPrompt()
 
-	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	cbmEnabled := false
 	var brokerEnv []string
-	if cbmEnabled {
+	if r.cfg.CodebaseMemory.Enabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
 		projectName := fmt.Sprintf("golemic-issue-%d-reviewer", r.issueNum)
-		r.indexWorktree(reviewerWorktreePath, cbmCacheDir, projectName)
-
 		sockPath := filepath.Join(runsDir, r.runID, "cbm-reviewer.sock")
-		if b, brokerErr := r.startCBMBroker(sockPath, cbmCacheDir); brokerErr != nil {
-			fmt.Fprintf(r.stderr, "Warning: failed to start CBM broker: %v\n", brokerErr) //nolint:errcheck
-		} else {
+		if b, env, ok := r.startCBMForRole(reviewerWorktreePath, cbmCacheDir, sockPath, projectName); ok {
 			defer b.Shutdown()
-			brokerEnv = []string{
-				"CBM_SOCK=" + sockPath,
-				"CBM_PROJECT=" + projectName,
-			}
+			brokerEnv = env
+			cbmEnabled = true
 		}
 	}
 
