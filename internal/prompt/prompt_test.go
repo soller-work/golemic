@@ -636,8 +636,17 @@ func TestRenderDev_CodebaseMemoryOn_HasDevTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"Code Intelligence", "search_graph", "trace_call_path", "query_graph",
-		"get_architecture", "get_graph_schema", "get_code_snippet", "search_code"})
+	mustContain(t, p, []string{
+		"Code Intelligence",
+		"golemic cbm search_graph",
+		"golemic cbm search_code",
+		"golemic cbm get_code_snippet",
+		"golemic cbm trace_call_path",
+		"golemic cbm query_graph",
+		"golemic cbm get_architecture",
+		"golemic cbm get_graph_schema",
+		"Prefer",
+	})
 	if strings.Contains(p, "detect_changes") {
 		t.Error("dev prompt must not contain detect_changes (reviewer-only per BR-4)")
 	}
@@ -662,7 +671,18 @@ func TestRenderReviewer_CodebaseMemoryOn_HasReviewerTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"Code Intelligence", "search_graph", "trace_call_path", "detect_changes"})
+	mustContain(t, p, []string{
+		"Code Intelligence",
+		"golemic cbm search_graph",
+		"golemic cbm search_code",
+		"golemic cbm get_code_snippet",
+		"golemic cbm trace_call_path",
+		"golemic cbm query_graph",
+		"golemic cbm get_architecture",
+		"golemic cbm get_graph_schema",
+		"golemic cbm detect_changes",
+		"Prefer",
+	})
 }
 
 func TestRenderDevRetry_CodebaseMemoryOn_HasDevTools(t *testing.T) {
@@ -671,7 +691,15 @@ func TestRenderDevRetry_CodebaseMemoryOn_HasDevTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"Code Intelligence", "search_graph"})
+	mustContain(t, p, []string{
+		"Code Intelligence",
+		"golemic cbm search_graph",
+		"golemic cbm search_code",
+		"golemic cbm get_code_snippet",
+		"golemic cbm trace_call_path",
+		"golemic cbm get_graph_schema",
+		"Prefer",
+	})
 	if strings.Contains(p, "detect_changes") {
 		t.Error("dev retry prompt must not contain detect_changes")
 	}

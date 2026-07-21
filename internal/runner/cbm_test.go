@@ -164,7 +164,7 @@ func runDevAgentCapture(t *testing.T, r *Runner, golemicDir string) []agent.Role
 	return captured
 }
 
-// TestCBMDevTools_FlagOff verifies that CBM tools and Approve are absent when flag is off.
+// TestCBMDevTools_FlagOff verifies that the dev allowlist is exactly read,bash,write,edit when CBM is off.
 func TestCBMDevTools_FlagOff(t *testing.T) {
 	exec := makePassthroughGitExec()
 	r, golemicDir := setupCBMRunner(t, exec, false)
@@ -179,14 +179,10 @@ func TestCBMDevTools_FlagOff(t *testing.T) {
 		t.Fatal("agent was not called")
 	}
 	cfg := captured[0]
-	if cfg.Approve {
-		t.Error("Approve must be false when CBM is disabled")
-	}
-	tools := strings.Join(cfg.ToolAllowlist, ",")
-	for _, forbidden := range cbmDevTools {
-		if strings.Contains(tools, forbidden) {
-			t.Errorf("CBM tool %q must not appear when disabled; tools: %s", forbidden, tools)
-		}
+	wantTools := "read,bash,write,edit"
+	gotTools := strings.Join(cfg.ToolAllowlist, ",")
+	if gotTools != wantTools {
+		t.Errorf("ToolAllowlist = %q, want %q", gotTools, wantTools)
 	}
 }
 
@@ -199,7 +195,7 @@ func setupDevWTWithGit(t *testing.T, golemicDir string) string {
 	return devWT
 }
 
-// TestCBMDevTools_FlagOn verifies that CBM tools and Approve=true are present when flag is on.
+// TestCBMDevTools_FlagOn verifies that the dev allowlist is exactly read,bash,write,edit even when CBM is on (BR-C7).
 func TestCBMDevTools_FlagOn(t *testing.T) {
 	exec := makePassthroughGitExec()
 	r, golemicDir := setupCBMRunner(t, exec, true)
@@ -210,16 +206,15 @@ func TestCBMDevTools_FlagOn(t *testing.T) {
 		t.Fatal("agent was not called")
 	}
 	cfg := captured[0]
-	if !cfg.Approve {
-		t.Error("Approve must be true when CBM is enabled")
+	wantTools := "read,bash,write,edit"
+	gotTools := strings.Join(cfg.ToolAllowlist, ",")
+	if gotTools != wantTools {
+		t.Errorf("ToolAllowlist = %q, want %q", gotTools, wantTools)
 	}
-	tools := strings.Join(cfg.ToolAllowlist, ",")
-	for _, expected := range cbmDevTools {
-		if !strings.Contains(tools, expected) {
-			t.Errorf("expected CBM tool %q in ToolAllowlist; got: %s", expected, tools)
+	// CBM tools are no longer appended — agents access codebase-memory via golemic cbm <sub>.
+	for _, cbmTool := range []string{"search_graph", "trace_call_path", "detect_changes"} {
+		if strings.Contains(gotTools, cbmTool) {
+			t.Errorf("CBM tool name %q must not appear in ToolAllowlist (BR-C7); got: %s", cbmTool, gotTools)
 		}
-	}
-	if strings.Contains(tools, "detect_changes") {
-		t.Error("detect_changes must not be in dev ToolAllowlist (reviewer-only per BR-4)")
 	}
 }

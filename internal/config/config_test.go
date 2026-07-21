@@ -484,10 +484,10 @@ func writeAndLoad(t *testing.T, dir, configJSON string) *Config {
 // CodebaseMemory config tests (issue-92)
 // ---------------------------------------------------------------------------
 
-func TestCodebaseMemory_AbsentDefaultsFalse(t *testing.T) {
+func TestCodebaseMemory_AbsentDefaultsTrue(t *testing.T) {
 	cfg := writeAndLoad(t, t.TempDir(), `{"project":"p","verify_command":"v"}`)
-	if cfg.CodebaseMemory.Enabled {
-		t.Error("CodebaseMemory.Enabled must default to false when block is absent")
+	if !cfg.CodebaseMemory.Enabled {
+		t.Error("CodebaseMemory.Enabled must default to true when block is absent")
 	}
 }
 

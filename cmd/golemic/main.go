@@ -70,6 +70,7 @@ var knownCommands = []struct {
 	{"claim-issue", "Claim an issue as in-progress for the dev-bot (golemic claim-issue --number N)"},
 	{"release-issue", "Release a claimed issue lock with reason-driven label handoff (golemic release-issue --number N --reason done|failed|abandoned)"},
 	{"run-loop", "Run the autonomous 60-second polling loop for takeable issues"},
+	{"cbm", "Invoke a codebase-memory subcommand (golemic cbm <sub> [args…])"},
 }
 
 func usage(w io.Writer) {
@@ -100,6 +101,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if code, ok := dispatchExtendedCommands(command, args, stdout, stderr); ok {
 		return code
+	}
+
+	if command == "cbm" {
+		return runCBM(args, stdout, stderr)
 	}
 
 	if command == "run-loop" {

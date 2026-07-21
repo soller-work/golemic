@@ -67,6 +67,7 @@ func DefaultConfig(project string) *Config {
 		TimeoutMinutes:   30,
 		CITimeoutMinutes: 15,
 		Telemetry:        TelemetryConfig{Enabled: true},
+		CodebaseMemory:   CodebaseMemoryConfig{Enabled: true},
 	}
 }
 
@@ -169,9 +170,11 @@ func Load(repoRoot string) (*Config, error) {
 		config.Telemetry.Enabled = true
 	}
 
-	// Extract codebase_memory.enabled (optional; default false per BR-2)
+	// Extract codebase_memory.enabled (optional; default true per BR-C4)
 	if raw.CodebaseMemory != nil && raw.CodebaseMemory.Enabled != nil {
 		config.CodebaseMemory.Enabled = *raw.CodebaseMemory.Enabled
+	} else {
+		config.CodebaseMemory.Enabled = true
 	}
 
 	// Extract require_ci_checks (optional; default false)
