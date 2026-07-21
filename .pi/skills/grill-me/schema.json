@@ -17,6 +17,7 @@
     "business_rules",
     "acceptance_scenarios",
     "inputs_outputs_errors",
+    "proof",
     "verify_commands",
     "definition_of_done",
     "readiness"
@@ -107,6 +108,37 @@
       "type": "string",
       "minLength": 1,
       "description": "Free-form Markdown: contract, validation, error handling."
+    },
+    "proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["how", "why", "checks"],
+      "description": "Proof-of-delivery plan the reviewer uses to confirm the change does what the stakeholder expects. how/why are plain-language (no jargon); checks pair a functional statement with an implementation-agnostic technical criterion.",
+      "properties": {
+        "how": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Plain-language: how it will be shown the change does what is expected."
+        },
+        "why": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Plain-language: why this constitutes sufficient proof."
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["functional", "technical"],
+            "properties": {
+              "functional": {"type": "string", "minLength": 1},
+              "technical": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
     },
     "verify_commands": {
       "type": "array",

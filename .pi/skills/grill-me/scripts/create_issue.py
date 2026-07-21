@@ -118,6 +118,30 @@ def render_body(data: dict) -> str:
     else:
         parts.append("_None_")
 
+    # Proof of Delivery (always present)
+    proof = data.get("proof", {})
+    parts.append("## Proof of Delivery")
+    parts.append("**How we show it works (plain language):**")
+    how = proof.get("how", "").strip()
+    parts.append(how if how else "_None_")
+    parts.append("**Why this is convincing:**")
+    why = proof.get("why", "").strip()
+    parts.append(why if why else "_None_")
+    checks = proof.get("checks", [])
+    parts.append("**Reviewer checklist:**")
+    if checks:
+        table = [
+            "| Functional (stakeholder) | Technical evidence (reviewer confirms) |",
+            "| --- | --- |",
+        ]
+        for c in checks:
+            functional = c.get("functional", "").replace("|", "\\|")
+            technical = c.get("technical", "").replace("|", "\\|")
+            table.append(f"| {functional} | {technical} |")
+        parts.append("\n".join(table))
+    else:
+        parts.append("_None_")
+
     # Inputs / Outputs / Errors (always present)
     parts.append("## Inputs / Outputs / Errors")
     io_errors = data.get("inputs_outputs_errors", "").strip()

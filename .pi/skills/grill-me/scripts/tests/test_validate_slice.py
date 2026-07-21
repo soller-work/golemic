@@ -39,6 +39,11 @@ def load_minimal_slice():
         "business_rules": "",
         "acceptance_scenarios": [],
         "inputs_outputs_errors": "Input: X. Output: Y.",
+        "proof": {
+            "how": "We run it and observe Y.",
+            "why": "Y is the promised result.",
+            "checks": [{"functional": "Produces Y", "technical": "A test asserts Y"}],
+        },
         "verify_commands": [],
         "definition_of_done": [],
         "readiness": "blocked",

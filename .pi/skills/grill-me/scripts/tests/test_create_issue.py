@@ -30,6 +30,11 @@ def load_minimal_slice():
         "business_rules": "",
         "acceptance_scenarios": ["Given X, when Y, then Z"],
         "inputs_outputs_errors": "Input: event. Output: state.",
+        "proof": {
+            "how": "We run the action and see the state change.",
+            "why": "The observed change is exactly the promised outcome.",
+            "checks": [{"functional": "Action updates state", "technical": "A test asserts the state mutation"}],
+        },
         "verify_commands": ["pytest"],
         "definition_of_done": ["Tests pass"],
         "readiness": "ready",
@@ -93,6 +98,7 @@ class TestCreateIssueRender:
                 "Behavior",
                 "Business Rules",
                 "Acceptance Scenarios",
+                "Proof of Delivery",
                 "Inputs / Outputs / Errors",
                 "Codebase Evidence",
                 "Verify",
@@ -103,6 +109,30 @@ class TestCreateIssueRender:
             # Security and Blockers should NOT be present
             assert "Security" not in section_names
             assert "Blockers / Open Questions" not in section_names
+
+    def test_proof_section_renders_how_why_and_checklist(self):
+        """Proof of Delivery renders how, why, and a functional/technical checklist table."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            slice_path = tmpdir / "slice.json"
+
+            data = load_minimal_slice()
+            data["proof"] = {
+                "how": "We run the action and watch the result.",
+                "why": "The result is exactly the promise.",
+                "checks": [
+                    {"functional": "Order is cancelled", "technical": "A test asserts status becomes cancelled"},
+                ],
+            }
+            slice_path.write_text(json.dumps(data))
+
+            code, stdout, stderr = run_create_issue_py(str(slice_path), "--dry-run")
+            assert code == 0, stderr
+            assert "## Proof of Delivery" in stdout
+            assert "We run the action and watch the result." in stdout
+            assert "The result is exactly the promise." in stdout
+            assert "| Functional (stakeholder) | Technical evidence (reviewer confirms) |" in stdout
+            assert "| Order is cancelled | A test asserts status becomes cancelled |" in stdout
 
     def test_fixed_section_order_with_security_and_blockers(self):
         """Test all sections present when security_relevant=true and blockers non-empty."""
@@ -130,6 +160,7 @@ class TestCreateIssueRender:
                 "Behavior",
                 "Business Rules",
                 "Acceptance Scenarios",
+                "Proof of Delivery",
                 "Inputs / Outputs / Errors",
                 "Codebase Evidence",
                 "Security",

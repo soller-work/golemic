@@ -32,10 +32,10 @@ The **only** writes you ever perform are the slice JSON scratch files (via `slic
 
 ## Core Principles
 
-1. **Ask only what you can't find out yourself.** Classification (`command`/`query`/`process`/`integration`) and change type (`feature`/`bug`/`refactoring`), scope boundaries, behavior, business rules, acceptance scenarios, I/O contract, verify commands, and codebase evidence are *your* job to derive — never a question to the user. Inspect the code first; the user's time is for product intent, not form-filling.
+1. **Ask only what you can't find out yourself.** Classification (`command`/`query`/`process`/`integration`) and change type (`feature`/`bug`/`refactoring`), scope boundaries, behavior, business rules, acceptance scenarios, I/O contract, the proof-of-delivery plan, verify commands, and codebase evidence are *your* job to derive — never a question to the user. Inspect the code first; the user's time is for product intent, not form-filling.
 2. **Adaptive question count.** Ask as many questions as you genuinely need and no more. Some plans need one question; some need ten. Don't announce a count or estimate.
 3. **Every question is multiple choice.** Offer **max 4 options**, then a clear recommendation with reasoning. See format below.
-4. **Confirm before filing.** When you have everything, just ask whether you're done and may create the issue. Don't dump the full filled-out slice for review — a simple go/no-go is enough.
+4. **Confirm before filing.** When you have everything, just ask whether you're done and may create the issue. Don't dump the full filled-out slice for review — a simple go/no-go is enough. The one thing you *do* spell out at this point is the **proof plan**: in plain language, tell the user how you intend to prove the change does what they asked and why that convinces you (the `proof.how` / `proof.why` you filled). This is your obligation to the non-technical stakeholder — they approve the standard of proof before the issue is filed.
 
 ## Question Format
 
@@ -70,6 +70,11 @@ Rules: max 4 options. Fewer is fine if fewer are real. Always name the recommend
    - `bug` — defect/regression fix; proof should include a regression test that reproduces the bug.
    - `refactoring` — internal technical improvement with no intended behavior change; proof must show preserved behavior plus the intended structural improvement.
    Derive scope, behavior, rules, I/O, acceptance, and verify commands as far as the code allows. Note what you settled and what remains a genuine product decision.
+
+   **Design the proof-of-delivery plan (`proof`).** Once you understand what the user wants, *think through* how it would be proven that the implementation actually does it — this is a first-class part of the slice, not an afterthought. Use your reasoning budget here. Fill three things:
+   - `proof.how` — plain language, no jargon: how it will be shown the change does what is expected. The stakeholder is not a techie; describe it the way you'd narrate a walk-through to them.
+   - `proof.why` — plain language: why this constitutes sufficient proof (i.e. why, if these things hold, the promise is kept).
+   - `proof.checks[]` — one entry per verifiable claim, each a **translation pair**: `functional` (the plain-language statement the stakeholder ticks off) and `technical` (the implementation-agnostic evidence criterion the reviewer confirms — e.g. "an automated test drives X and asserts Y", *not* a concrete test name or file path, because the code does not exist yet). You author the technical side in full; the reviewer only checks that the delivered implementation satisfies each criterion. This is the contract of what "done and proven" means, fixed before any code is written.
 2. **Similarity scan.** Run `gh_issue_index.py --with-body`. If something looks related, that's a legitimate question (offer the candidate issues as options + a recommendation).
 3. **Interview.** Ask only the open product decisions, one at a time, in the multiple-choice format above.
 4. **Fill the slice.** Use `slice.py write` (or `new` + `set`) to populate every field from intent + code + answers. Record each non-trivial assumption in `blockers` as `kind: assumption`.
