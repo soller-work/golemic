@@ -111,7 +111,7 @@ Use ` + "`" + `detect_changes` + "`" + ` to understand the blast radius of the P
 ## Instructions
 
 1. **First, fetch the authoritative task specification:** run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The output is the source of truth for what the PR is supposed to do — do not rely on any summary rendered in the issue's web UI.
-2. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `gh pr view {{.PRNumber}}` + "`" + `
+2. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `golemic pr-view --pr {{.PRNumber}}` + "`" + `
 3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Review the changes against the spec and the guidelines above.
 5. For each finding that can be anchored to a specific file and line, call:

@@ -153,8 +153,11 @@ func TestRenderReviewer_StepList(t *testing.T) {
 	if !strings.Contains(userPrompt, "git diff origin/main...HEAD") {
 		t.Error("reviewer prompt missing 'git diff origin/main...HEAD' step")
 	}
-	if !strings.Contains(userPrompt, "gh pr view 123") {
-		t.Error("reviewer prompt missing 'gh pr view <PR>' step")
+	if !strings.Contains(userPrompt, "golemic pr-view --pr 123") {
+		t.Error("reviewer prompt missing 'golemic pr-view --pr <PR>' step")
+	}
+	if strings.Contains(userPrompt, "gh pr view") {
+		t.Error("reviewer prompt must not contain raw 'gh pr view' instruction")
 	}
 	if !strings.Contains(userPrompt, "go test ./...") {
 		t.Error("reviewer prompt missing verify command step")
