@@ -723,38 +723,38 @@ func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
 // CodebaseMemory prompt tests (issue-92)
 // ---------------------------------------------------------------------------
 
+var oldCBMSubNames = []string{
+	"search_graph", "search_code", "get_code_snippet", "trace_call_path",
+	"query_graph", "get_architecture", "get_graph_schema", "detect_changes",
+}
+
 func TestRenderDev_CodebaseMemoryOff_NoSection(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 	p, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, tool := range []string{"search_graph", "trace_call_path", "detect_changes", "Code Intelligence"} {
-		if strings.Contains(p, tool) {
-			t.Errorf("flag-off dev prompt must not contain %q", tool)
+	for _, word := range append(oldCBMSubNames, "Code Intelligence") {
+		if strings.Contains(p, word) {
+			t.Errorf("flag-off dev prompt must not contain %q", word)
 		}
 	}
 }
 
-func TestRenderDev_CodebaseMemoryOn_HasDevTools(t *testing.T) {
+func TestRenderDev_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 	p, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{
-		"Code Intelligence",
-		"golemic cbm search_graph",
-		"golemic cbm search_code",
-		"golemic cbm get_code_snippet",
-		"golemic cbm trace_call_path",
-		"golemic cbm query_graph",
-		"golemic cbm get_architecture",
-		"golemic cbm get_graph_schema",
-		"Prefer",
-	})
-	if strings.Contains(p, "detect_changes") {
-		t.Error("dev prompt must not contain detect_changes (reviewer-only per BR-4)")
+	mustContain(t, p, []string{"Code Intelligence", "golemic cbm help"})
+	if strings.Count(p, "golemic cbm help") != 1 {
+		t.Error("dev prompt must contain 'golemic cbm help' exactly once")
+	}
+	for _, sub := range oldCBMSubNames {
+		if strings.Contains(p, sub) {
+			t.Errorf("dev prompt must not mention old sub %q; use 'golemic cbm help' instead", sub)
+		}
 	}
 }
 
@@ -764,50 +764,44 @@ func TestRenderReviewer_CodebaseMemoryOff_NoSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, tool := range []string{"search_graph", "detect_changes", "Code Intelligence"} {
-		if strings.Contains(p, tool) {
-			t.Errorf("flag-off reviewer prompt must not contain %q", tool)
+	for _, word := range append(oldCBMSubNames, "Code Intelligence") {
+		if strings.Contains(p, word) {
+			t.Errorf("flag-off reviewer prompt must not contain %q", word)
 		}
 	}
 }
 
-func TestRenderReviewer_CodebaseMemoryOn_HasReviewerTools(t *testing.T) {
+func TestRenderReviewer_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
 	p, err := RenderReviewer(42, testIssue, "go test ./...", guidelinesPath, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{
-		"Code Intelligence",
-		"golemic cbm search_graph",
-		"golemic cbm search_code",
-		"golemic cbm get_code_snippet",
-		"golemic cbm trace_call_path",
-		"golemic cbm query_graph",
-		"golemic cbm get_architecture",
-		"golemic cbm get_graph_schema",
-		"golemic cbm detect_changes",
-		"Prefer",
-	})
+	mustContain(t, p, []string{"Code Intelligence", "golemic cbm help"})
+	if strings.Count(p, "golemic cbm help") != 1 {
+		t.Error("reviewer prompt must contain 'golemic cbm help' exactly once")
+	}
+	for _, sub := range oldCBMSubNames {
+		if strings.Contains(p, sub) {
+			t.Errorf("reviewer prompt must not mention old sub %q", sub)
+		}
+	}
 }
 
-func TestRenderDevRetry_CodebaseMemoryOn_HasDevTools(t *testing.T) {
+func TestRenderDevRetry_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 	p, err := RenderDevRetry("fix null ptr", "", testIssue, "golemic/issue-42", "go test", guidelinesPath, true)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{
-		"Code Intelligence",
-		"golemic cbm search_graph",
-		"golemic cbm search_code",
-		"golemic cbm get_code_snippet",
-		"golemic cbm trace_call_path",
-		"golemic cbm get_graph_schema",
-		"Prefer",
-	})
-	if strings.Contains(p, "detect_changes") {
-		t.Error("dev retry prompt must not contain detect_changes")
+	mustContain(t, p, []string{"Code Intelligence", "golemic cbm help"})
+	if strings.Count(p, "golemic cbm help") != 1 {
+		t.Error("dev retry prompt must contain 'golemic cbm help' exactly once")
+	}
+	for _, sub := range oldCBMSubNames {
+		if strings.Contains(p, sub) {
+			t.Errorf("dev retry prompt must not mention old sub %q", sub)
+		}
 	}
 }
 
@@ -817,7 +811,9 @@ func TestRenderDevRetry_CodebaseMemoryOff_NoSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Contains(p, "Code Intelligence") || strings.Contains(p, "search_graph") {
-		t.Error("flag-off dev retry prompt must not contain Code Intelligence section")
+	for _, word := range append(oldCBMSubNames, "Code Intelligence") {
+		if strings.Contains(p, word) {
+			t.Errorf("flag-off dev retry prompt must not contain %q", word)
+		}
 	}
 }

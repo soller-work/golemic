@@ -183,9 +183,22 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	defer cleanupPrompt()
 
 	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	var brokerEnv []string
 	if cbmEnabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
-		r.indexWorktree(reviewerWorktreePath, cbmCacheDir)
+		projectName := fmt.Sprintf("golemic-issue-%d-reviewer", r.issueNum)
+		r.indexWorktree(reviewerWorktreePath, cbmCacheDir, projectName)
+
+		sockPath := filepath.Join(runsDir, r.runID, "cbm-reviewer.sock")
+		if b, brokerErr := r.startCBMBroker(sockPath, cbmCacheDir); brokerErr != nil {
+			fmt.Fprintf(r.stderr, "Warning: failed to start CBM broker: %v\n", brokerErr) //nolint:errcheck
+		} else {
+			defer b.Shutdown()
+			brokerEnv = []string{
+				"CBM_SOCK=" + sockPath,
+				"CBM_PROJECT=" + projectName,
+			}
+		}
 	}
 
 	// Get PR number from pr_opened event
@@ -236,6 +249,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		Timeout:           timeout,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
+		Env:               brokerEnv,
 	})
 	stopFollow()
 

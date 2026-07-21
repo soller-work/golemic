@@ -65,17 +65,7 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 ## Code Intelligence
 
-Your worktree has been indexed into a code-intelligence graph. Prefer these commands over ` + "`" + `grep` + "`" + `, ` + "`" + `find` + "`" + `, and broad ` + "`" + `read` + "`" + ` when exploring the codebase — they answer structural questions in one call instead of many:
-
-- ` + "`" + `golemic cbm search_graph …` + "`" + ` — semantic/keyword search across the graph.
-- ` + "`" + `golemic cbm search_code …` + "`" + ` — code-level search that returns snippets with context.
-- ` + "`" + `golemic cbm get_code_snippet …` + "`" + ` — retrieve a specific symbol/range by identifier.
-- ` + "`" + `golemic cbm trace_call_path …` + "`" + ` — trace who calls whom.
-- ` + "`" + `golemic cbm query_graph …` + "`" + ` — targeted graph queries.
-- ` + "`" + `golemic cbm get_architecture …` + "`" + ` — high-level architectural view.
-- ` + "`" + `golemic cbm get_graph_schema` + "`" + ` — discover the graph schema before writing queries.
-
-Reach for ` + "`" + `grep` + "`" + `/` + "`" + `find` + "`" + ` only when CBM cannot answer (e.g. inspecting comments, non-source files, or scratch output).
+Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intelligence tools and their arguments.
 {{end}}
 ---
 
@@ -114,18 +104,7 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 
 ## Code Intelligence
 
-Your worktree has been indexed into a code-intelligence graph. Prefer these commands over ` + "`" + `grep` + "`" + `, ` + "`" + `find` + "`" + `, and broad ` + "`" + `read` + "`" + ` when exploring the codebase — they answer structural questions in one call instead of many:
-
-- ` + "`" + `golemic cbm search_graph …` + "`" + ` — semantic/keyword search across the graph.
-- ` + "`" + `golemic cbm search_code …` + "`" + ` — code-level search that returns snippets with context.
-- ` + "`" + `golemic cbm get_code_snippet …` + "`" + ` — retrieve a specific symbol/range by identifier.
-- ` + "`" + `golemic cbm trace_call_path …` + "`" + ` — trace who calls whom.
-- ` + "`" + `golemic cbm query_graph …` + "`" + ` — targeted graph queries.
-- ` + "`" + `golemic cbm get_architecture …` + "`" + ` — high-level architectural view.
-- ` + "`" + `golemic cbm get_graph_schema` + "`" + ` — discover the graph schema before writing queries.
-- ` + "`" + `golemic cbm detect_changes …` + "`" + ` — understand the blast radius of the PR's modifications before reading files.
-
-Reach for ` + "`" + `grep` + "`" + `/` + "`" + `find` + "`" + ` only when CBM cannot answer (e.g. inspecting comments, non-source files, or scratch output).
+Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intelligence tools and their arguments.
 {{end}}
 ---
 
@@ -266,17 +245,7 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 
 ## Code Intelligence
 
-Your worktree has been indexed into a code-intelligence graph. Prefer these commands over ` + "`" + `grep` + "`" + `, ` + "`" + `find` + "`" + `, and broad ` + "`" + `read` + "`" + ` when exploring the codebase — they answer structural questions in one call instead of many:
-
-- ` + "`" + `golemic cbm search_graph …` + "`" + ` — semantic/keyword search across the graph.
-- ` + "`" + `golemic cbm search_code …` + "`" + ` — code-level search that returns snippets with context.
-- ` + "`" + `golemic cbm get_code_snippet …` + "`" + ` — retrieve a specific symbol/range by identifier.
-- ` + "`" + `golemic cbm trace_call_path …` + "`" + ` — trace who calls whom.
-- ` + "`" + `golemic cbm query_graph …` + "`" + ` — targeted graph queries.
-- ` + "`" + `golemic cbm get_architecture …` + "`" + ` — high-level architectural view.
-- ` + "`" + `golemic cbm get_graph_schema` + "`" + ` — discover the graph schema before writing queries.
-
-Reach for ` + "`" + `grep` + "`" + `/` + "`" + `find` + "`" + ` only when CBM cannot answer (e.g. inspecting comments, non-source files, or scratch output).
+Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intelligence tools and their arguments.
 {{end}}
 ---
 

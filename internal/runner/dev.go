@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"golemic/internal/agent"
+	"golemic/internal/cbmbroker"
 	"golemic/internal/prompt"
 	"golemic/internal/telemetry"
 )
@@ -28,9 +29,22 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	defer cleanupPrompt()
 
 	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	var brokerEnv []string
 	if cbmEnabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
-		r.indexWorktree(devWorktreePath, cbmCacheDir)
+		projectName := fmt.Sprintf("golemic-issue-%d-dev", r.issueNum)
+		r.indexWorktree(devWorktreePath, cbmCacheDir, projectName)
+
+		sockPath := filepath.Join(runsDir, r.runID, "cbm-dev-retry.sock")
+		if b, brokerErr := r.startCBMBroker(sockPath, cbmCacheDir); brokerErr != nil {
+			fmt.Fprintf(r.stderr, "Warning: failed to start CBM broker: %v\n", brokerErr)
+		} else {
+			defer b.Shutdown()
+			brokerEnv = []string{
+				"CBM_SOCK=" + sockPath,
+				"CBM_PROJECT=" + projectName,
+			}
+		}
 	}
 
 	userPrompt, err := prompt.RenderDevRetry(
@@ -62,7 +76,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		runFn = agent.RunRole
 	}
 
-	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, r.cfg.CodebaseMemory.Enabled)
+	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, brokerEnv)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 	stopFollow()
 
@@ -83,6 +97,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	endSpan(telemetry.StatusOK, nil)
 	return outcomeSuccess
 }
+
 func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int) string {
 	golemicBinaryPath, _ := os.Executable()
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
@@ -96,9 +111,22 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	defer cleanupPrompt()
 
 	cbmEnabled := r.cfg.CodebaseMemory.Enabled
+	var brokerEnv []string
 	if cbmEnabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
-		r.indexWorktree(devWorktreePath, cbmCacheDir)
+		projectName := fmt.Sprintf("golemic-issue-%d-dev", r.issueNum)
+		r.indexWorktree(devWorktreePath, cbmCacheDir, projectName)
+
+		sockPath := filepath.Join(runsDir, r.runID, "cbm-dev.sock")
+		if b, brokerErr := r.startCBMBroker(sockPath, cbmCacheDir); brokerErr != nil {
+			fmt.Fprintf(r.stderr, "Warning: failed to start CBM broker: %v\n", brokerErr)
+		} else {
+			defer b.Shutdown()
+			brokerEnv = []string{
+				"CBM_SOCK=" + sockPath,
+				"CBM_PROJECT=" + projectName,
+			}
+		}
 	}
 
 	// Render dev prompt
@@ -143,6 +171,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		Timeout:           timeout,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
+		Env:               brokerEnv,
 	})
 	stopFollow()
 
@@ -189,7 +218,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 }
 
 // buildDevAgentConfig creates the agent.RoleConfig for the dev retry agent.
-func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, cbmEnabled bool) agent.RoleConfig {
+func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, brokerEnv []string) agent.RoleConfig {
 	return agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  systemPromptFile,
@@ -204,12 +233,26 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 		Timeout:           timeout,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
+		Env:               brokerEnv,
 	}
 }
 
-// indexWorktree runs codebase-memory-mcp to index wtPath into cbmCacheDir.
+// startCBMBroker is a variable so tests can replace it without spawning a real npx process.
+var startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.Broker, error) {
+	return cbmbroker.Start(sockPath, env)
+}
+
+// startCBMBroker starts a CBM broker and returns it.
+func (r *Runner) startCBMBroker(sockPath, cbmCacheDir string) (*cbmbroker.Broker, error) {
+	return startCBMBrokerFn(sockPath, map[string]string{
+		"CBM_CACHE_DIR": cbmCacheDir,
+		"CBM_LOG_LEVEL": "warn",
+	})
+}
+
+// indexWorktree runs codebase-memory-mcp to index wtPath with the given project name.
 // Failure is logged and does not abort the run (BR-7).
-func (r *Runner) indexWorktree(wtPath, cbmCacheDir string) {
+func (r *Runner) indexWorktree(wtPath, cbmCacheDir, projectName string) {
 	if err := os.MkdirAll(cbmCacheDir, 0755); err != nil {
 		fmt.Fprintf(r.stderr, "Warning: failed to create CBM cache dir %s: %v\n", cbmCacheDir, err)
 		return
@@ -218,7 +261,7 @@ func (r *Runner) indexWorktree(wtPath, cbmCacheDir string) {
 		map[string]string{"CBM_CACHE_DIR": cbmCacheDir, "CBM_LOG_LEVEL": "warn"},
 		wtPath,
 		"npx", "-y", "codebase-memory-mcp@0.9.0", "cli", "index_repository",
-		"--repo-path", wtPath, "--mode", "fast",
+		"--repo-path", wtPath, "--name", projectName, "--mode", "fast",
 	)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Warning: codebase-memory indexing failed (proceeding without code intelligence): %v\n", err)
