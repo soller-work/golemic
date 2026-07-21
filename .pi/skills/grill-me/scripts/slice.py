@@ -28,32 +28,26 @@ def _load_validate_module():
 
 _validate_mod = _load_validate_module()
 
-# Type-specific N/A sections (not created by 'new')
-TYPE_SECTIONS = {
-    "command": ["behavior", "business_rules", "inputs_outputs_errors"],
-    "query": ["behavior", "business_rules", "inputs_outputs_errors"],
-    "process": ["behavior", "business_rules", "inputs_outputs_errors"],
-    "integration": ["behavior", "business_rules", "inputs_outputs_errors"],
-}
 
-PLAN_ORDER = [
-    "change_type", "stakeholder", "trigger", "success_outcome", "tldr", "scope",
-    "behavior", "business_rules", "acceptance_scenarios", "inputs_outputs_errors",
-    "proof", "codebase_evidence", "verify_commands", "definition_of_done",
-    "security_relevant", "security", "blockers", "readiness",
-]
+def _load_detail_blocks():
+    mod_path = Path(__file__).parent / "detail_blocks.py"
+    spec = importlib.util.spec_from_file_location("_detail_blocks", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
-PLAN_HINTS = {
-    "change_type": "Enum: 'feature', 'bug', or 'refactoring' — intent/proof category.",
+_detail_blocks = _load_detail_blocks()
+
+# Plan order / hints. The gattung-specific detail fields (spliced after 'scope',
+# before 'proof') come from the registry, so the field-to-gattung map lives in
+# exactly one place (detail_blocks.py).
+_CORE_HINTS = {
+    "change_type": "Enum: 'feature', 'bug', or 'refactoring' — intent/proof category; detail fields depend on this.",
     "stakeholder": "String: who is the primary stakeholder.",
     "trigger": "String: what triggers this capability.",
     "success_outcome": "String: the desired outcome.",
     "tldr": "String (≤140 chars): concise summary.",
     "scope": "Object: {in: [...], out: [...]} — at least 1 in-scope item.",
-    "behavior": "String (Markdown): type-specific behavior (mutations/read-model/steps/contract).",
-    "business_rules": "String (Markdown): decision logic, constraints.",
-    "acceptance_scenarios": "Array of strings: 'Given...When...Then...' proton.",
-    "inputs_outputs_errors": "String (Markdown): I/O contract, validation, errors.",
     "proof": "Object: {how, why, checks:[{functional, technical}]} — plain-language proof-of-delivery plan; functional=stakeholder ticks off, technical=implementation-agnostic criterion the reviewer confirms.",
     "codebase_evidence": "Array of {location: 'path:line', note: '...'} — findings from repo.",
     "verify_commands": "Array of strings: test, lint, deploy commands.",
@@ -63,6 +57,23 @@ PLAN_HINTS = {
     "blockers": "Array of {kind: 'question'|'assumption'|'blocker', text: '...'} — empty when ready.",
     "readiness": "Enum: 'ready' or 'blocked' (set by finalize).",
 }
+
+
+def plan_order(change_type: str) -> list[str]:
+    """Fill order with the detail fields for change_type spliced after 'scope'."""
+    return [
+        "change_type", "stakeholder", "trigger", "success_outcome", "tldr", "scope",
+        *[f.key for f in _detail_blocks.detail_fields(change_type)],
+        "proof", "codebase_evidence", "verify_commands", "definition_of_done",
+        "security_relevant", "security", "blockers", "readiness",
+    ]
+
+
+def plan_hints(change_type: str) -> dict[str, str]:
+    hints = dict(_CORE_HINTS)
+    for f in _detail_blocks.detail_fields(change_type):
+        hints[f.key] = f.hint
+    return hints
 
 
 def load_schema() -> dict:
@@ -101,27 +112,32 @@ def validate_full(data: dict, schema: dict = None) -> tuple[bool, list[str]]:
 
 
 def cmd_new(args: argparse.Namespace) -> None:
-    """Create a skeleton slice without N/A sections for the type."""
+    """Create a skeleton slice seeded with the detail fields for its change_type."""
     slice_type = args.type.lower()
     if slice_type not in ["command", "query", "process", "integration"]:
         print(f"❌ Unknown slice_type: {slice_type}. Must be: command|query|process|integration", file=sys.stderr)
+        sys.exit(1)
+
+    change_type = args.change_type.lower()
+    if change_type not in _detail_blocks.DETAIL_BLOCKS:
+        print(f"❌ Unknown change_type: {change_type}. Must be: feature|bug|refactoring", file=sys.stderr)
         sys.exit(1)
 
     path = Path(args.file) if args.file else Path(".pi/skills/grill-me/.tmp/slice.json")
 
     skeleton = {
         "slice_type": slice_type,
-        "change_type": "feature",
+        "change_type": change_type,
         "title": "",
         "stakeholder": "",
         "trigger": "",
         "success_outcome": "",
         "tldr": "",
         "scope": {"in": [], "out": []},
-        "behavior": "",
-        "business_rules": "",
-        "acceptance_scenarios": [],
-        "inputs_outputs_errors": "",
+    }
+    for field in _detail_blocks.detail_fields(change_type):
+        skeleton[field.key] = [] if field.kind == "scenarios" else ""
+    skeleton.update({
         "proof": {"how": "", "why": "", "checks": []},
         "codebase_evidence": [],
         "verify_commands": [],
@@ -129,7 +145,7 @@ def cmd_new(args: argparse.Namespace) -> None:
         "security_relevant": False,
         "blockers": [],
         "readiness": "blocked",
-    }
+    })
 
     save_slice(path, skeleton)
     print(f"✓ Created skeleton at {path}")
@@ -256,21 +272,35 @@ def cmd_finalize(args: argparse.Namespace) -> None:
 
 
 def cmd_plan(args: argparse.Namespace) -> None:
-    """Show section names in fill order with one-line hints. --verbose shows sub-schemas."""
-    path = Path(args.path)
+    """Show section names in fill order with one-line hints. --verbose shows sub-schemas.
+
+    Detail fields follow the slice's change_type: taken from --change-type if given,
+    else read from the slice at the provided path, else defaulting to 'feature'.
+    """
     schema = load_schema()
+
+    change_type = args.change_type
+    if change_type is None and args.path:
+        candidate = Path(args.path)
+        if candidate.exists():
+            change_type = load_slice(candidate).get("change_type")
+    if change_type not in _detail_blocks.DETAIL_BLOCKS:
+        change_type = "feature"
+
+    order = plan_order(change_type)
+    hints = plan_hints(change_type)
 
     if args.verbose:
         # Dump section sub-schemas
         props = schema.get("properties", {})
-        for section in PLAN_ORDER:
+        for section in order:
             if section in props:
                 print(f"\n## {section}")
                 print(json.dumps(props[section], indent=2))
     else:
-        print("Fill order:")
-        for i, section in enumerate(PLAN_ORDER, 1):
-            hint = PLAN_HINTS.get(section, "")
+        print(f"Fill order (change_type={change_type}):")
+        for i, section in enumerate(order, 1):
+            hint = hints.get(section, "")
             print(f"{i:2d}. {section:30s} — {hint}")
 
 
@@ -285,6 +315,7 @@ def main() -> None:
     # new <type> [--file PATH]
     new_parser = subparsers.add_parser("new", help="Create skeleton (no N/A sections for type)")
     new_parser.add_argument("type", help="Slice type: command|query|process|integration")
+    new_parser.add_argument("--change-type", dest="change_type", default="feature", help="Change type: feature|bug|refactoring (default: feature)")
     new_parser.add_argument("--file", help="Output path (default: .pi/skills/grill-me/.tmp/slice.json)")
     new_parser.set_defaults(func=cmd_new)
 
@@ -314,7 +345,8 @@ def main() -> None:
 
     # plan <path> [--verbose]
     plan_parser = subparsers.add_parser("plan", help="Show fill order and hints")
-    plan_parser.add_argument("path", nargs="?", help="Path (optional, not used)")
+    plan_parser.add_argument("path", nargs="?", help="Slice path; its change_type selects the detail fields")
+    plan_parser.add_argument("--change-type", dest="change_type", default=None, help="Override change_type: feature|bug|refactoring")
     plan_parser.add_argument("--verbose", action="store_true", help="Show sub-schemas")
     plan_parser.set_defaults(func=cmd_plan)
 

@@ -13,10 +13,6 @@
     "success_outcome",
     "tldr",
     "scope",
-    "behavior",
-    "business_rules",
-    "acceptance_scenarios",
-    "inputs_outputs_errors",
     "proof",
     "verify_commands",
     "definition_of_done",
@@ -108,6 +104,39 @@
       "type": "string",
       "minLength": 1,
       "description": "Free-form Markdown: contract, validation, error handling."
+    },
+    "reproduction": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Bug detail: steps to reproduce, observed vs expected behavior."
+    },
+    "root_cause": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Bug detail: hypothesis and suspected location of the defect."
+    },
+    "regression_scenarios": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Bug detail: 'Given...When...Then...' scenarios that fail today and must pass after the fix."
+    },
+    "current_structure": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Refactoring detail: today's shape / the smell being removed."
+    },
+    "target_structure": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Refactoring detail: the intended structure after the change."
+    },
+    "behavior_preservation": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Refactoring detail: the observable invariant that must stay identical."
     },
     "proof": {
       "type": "object",
