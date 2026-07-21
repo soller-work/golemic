@@ -27,6 +27,7 @@ import (
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
+	"golemic/internal/progress"
 	"golemic/internal/telemetry"
 	"golemic/internal/worktree"
 )
@@ -55,6 +56,10 @@ type Runner struct {
 
 	clean bool
 	quiet bool
+
+	// Progress rendering (nil when --quiet)
+	progressRenderer *progress.Renderer
+	progressScanIndex int // next events.jsonl index to scan in emitAgentWrittenEvents
 
 	ciPollIntervalOverride time.Duration
 	ciTimeoutOverride      time.Duration
@@ -204,12 +209,19 @@ func (r *Runner) Run() int {
 	}
 	defer writer.Close()
 
+	// Wrap writer with progress renderer when not quiet (BR-P2).
+	var ew worktree.EventWriter = writer
+	if !r.quiet {
+		r.progressRenderer = progress.New(r.stderr)
+		ew = &progressEventWriter{inner: writer, renderer: r.progressRenderer}
+	}
+
 	// Write run_started (BR-007: must be written before any GitHub access)
 	startPayload, _ := json.Marshal(runStartedPayload{
 		Issue: r.issueNum,
 		RunID: r.runID,
 	})
-	if err := writer.Write(eventlog.Event{
+	if err := ew.Write(eventlog.Event{
 		Type:    eventlog.EventRunStarted,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
@@ -241,7 +253,7 @@ func (r *Runner) Run() int {
 			}
 		}
 		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeSkipped})
-		_ = writer.Write(eventlog.Event{
+		_ = ew.Write(eventlog.Event{
 			Type:    eventlog.EventRunFinished,
 			Ts:      time.Now().Format(time.RFC3339),
 			RunID:   r.runID,
@@ -257,7 +269,7 @@ func (r *Runner) Run() int {
 		if err := r.cleanArtifacts(); err != nil {
 			fmt.Fprintln(r.stderr, err.Error()) //nolint:errcheck
 			finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-			_ = writer.Write(eventlog.Event{
+			_ = ew.Write(eventlog.Event{
 				Type:    eventlog.EventRunFinished,
 				Ts:      time.Now().Format(time.RFC3339),
 				RunID:   r.runID,
@@ -275,7 +287,7 @@ func (r *Runner) Run() int {
 		fmt.Fprintln(r.stderr, err.Error())
 		// Write run_finished with outcome aborted
 		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-		_ = writer.Write(eventlog.Event{
+		_ = ew.Write(eventlog.Event{
 			Type:    eventlog.EventRunFinished,
 			Ts:      time.Now().Format(time.RFC3339),
 			RunID:   r.runID,
@@ -289,7 +301,7 @@ func (r *Runner) Run() int {
 		fmt.Fprintln(r.stderr, collision.Message)
 		// Write run_finished with outcome aborted
 		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-		_ = writer.Write(eventlog.Event{
+		_ = ew.Write(eventlog.Event{
 			Type:    eventlog.EventRunFinished,
 			Ts:      time.Now().Format(time.RFC3339),
 			RunID:   r.runID,
@@ -322,7 +334,7 @@ func (r *Runner) Run() int {
 		"pid":          os.Getpid(),
 	})
 
-	finalOutcome := r.orchestrate(writer, eventLogPath, runSpanID)
+	finalOutcome := r.orchestrate(ew, eventLogPath, runSpanID)
 
 	// Worktree cleanup spans (children of run span, only on success)
 	golemicDir2 := filepath.Join(r.homeDir, ".golemic", r.project)
@@ -362,7 +374,7 @@ func (r *Runner) Run() int {
 
 	// Write run_finished with final outcome (BR-001: always the last event)
 	finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: finalOutcome})
-	_ = writer.Write(eventlog.Event{
+	_ = ew.Write(eventlog.Event{
 		Type:    eventlog.EventRunFinished,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
@@ -380,8 +392,8 @@ func (r *Runner) Run() int {
 	return 1
 }
 
-// writeAgentCompleted appends an agent_completed event to the event log.
-// Errors are silently dropped; a log write failure must not change the run outcome.
+// writeAgentCompleted appends an agent_completed event to the event log and
+// emits a progress line. Errors are silently dropped per BR-P3.
 func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
@@ -393,13 +405,16 @@ func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
 	if err != nil {
 		return
 	}
-	_ = w.Write(eventlog.Event{
+	ev := eventlog.Event{
 		Type:    eventlog.EventAgentCompleted,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
 		TurnID:  r.turnCounter,
 		Payload: payload,
-	})
+	}
+	if w.Write(ev) == nil && r.progressRenderer != nil {
+		r.progressRenderer.EmitLifecycle(ev)
+	}
 }
 
 // cleanupReviewerWorktree emits a worktree.cleanup span and cleans up the reviewer worktree.
