@@ -750,12 +750,16 @@ func TestVerifyAndPush_StaleGreenIgnoredUntilPushedGreen_AC009(t *testing.T) { /
 	}
 }
 
-// AC-008 (success): no CI configured → verify_command passes → push → squash merge.
-func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) { //nolint:cyclop
+// AC-008 regression: empty current-head checks stay pending and must not fall back
+// to local verify_command + immediate squash merge.
+func TestVerifyAndPush_NoCI_TimesOutWithoutMerging_AC008(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
-			// verify_command runs via sh -c (P1-1)
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-local\n", nil
+			}
 			if name == "sh" && len(args) == 2 && args[0] == "-c" {
+				t.Error("verify_command must not be used as a no-CI fallback after issue #125")
 				return "ok", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -770,7 +774,7 @@ func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) 
 				return "", nil
 			}
 			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "merge" {
-				return "sha-abc", nil
+				t.Fatal("squash merge must not be called while the required check is absent")
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
@@ -780,17 +784,13 @@ func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) 
 	var written []eventlog.Event
 	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
 
-	if outcome != outcomeSuccess {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
 	}
-	found := false
 	for _, ev := range written {
 		if ev.Type == eventlog.EventPRMerged {
-			found = true
+			t.Error("pr_merged must not be written while the required check is absent")
 		}
-	}
-	if !found {
-		t.Error("pr_merged event not written")
 	}
 }
 
@@ -1667,7 +1667,7 @@ func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nol
 }
 
 // AC-006: behind branch (isBranchUpToDate=false after fetch) → rebaseBranch + verifyAndPush flow,
-// and the existing AC-008 no_checks path in verifyAndPush still runs runVerifyCommand (BR-005 regression).
+// then force-pushes and waits for a current-head required check before merge.
 func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //nolint:cyclop,gocognit,funlen
 	logPath := newLogPath(t)
 
@@ -1676,7 +1676,7 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 	mkCredDir(t, homeDir, project)
 	creds := mustLoadCredsFromDir(t, homeDir, project)
 
-	var rebaseCalled, verifyCommandCalled, forcePushCalled bool
+	var rebaseCalled, forcePushCalled bool
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" && args[0] == "fetch" {
@@ -1689,16 +1689,18 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 				rebaseCalled = true
 				return "", nil
 			}
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-local\n", nil
+			}
 			if name == "sh" && args[0] == "-c" {
-				verifyCommandCalled = true
-				return "", nil // verify_command passes
+				t.Error("runVerifyCommand must not be used as a no-CI fallback after issue #125")
+				return "", nil
 			}
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			if name == "gh" {
-				// no_checks → verifyAndPush runs local verify_command (AC-008 / BR-005)
-				if resp, ok := dispatchMergeGh(args, []string{emptyCheckRunsJSON}, nil, nil, ""); ok {
+				if resp, ok := dispatchMergeGh(args, []string{requiredVerifyCheckRunsJSON()}, nil, nil, ""); ok {
 					return resp, nil
 				}
 			}
@@ -1742,11 +1744,8 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 	if !rebaseCalled {
 		t.Error("rebaseBranch must be called on behind-branch path (AC-006)")
 	}
-	if !verifyCommandCalled {
-		t.Error("runVerifyCommand must be called in verifyAndPush no_checks path (AC-006 / BR-005)")
-	}
 	if !forcePushCalled {
-		t.Error("forcePushBranch must be called after verify_command passes (AC-006 / BR-005)")
+		t.Error("forcePushBranch must be called before polling the pushed head (AC-006)")
 	}
 
 	var prMergedFound bool
@@ -1849,6 +1848,8 @@ type conflictRebaseExecConfig struct {
 	statusAfterAgent string
 	// whether merge-base --is-ancestor succeeds after agent
 	ancestorAfterAgent bool
+	// checkRunsResponses overrides the default green verify check-runs response.
+	checkRunsResponses []string
 	// extra handler called on any unrecognised call
 	fallback func(name string, args ...string) (string, error)
 }
@@ -1856,6 +1857,10 @@ type conflictRebaseExecConfig struct {
 func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeExecutor { //nolint:funlen,gocognit,cyclop
 	t.Helper()
 	statusCalls := 0
+	checkRunsResponses := cfg.checkRunsResponses
+	if len(checkRunsResponses) == 0 {
+		checkRunsResponses = []string{requiredVerifyCheckRunsJSON()}
+	}
 	return &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			// runVerifyCommand uses RunInDir with "sh -c" (no env).
@@ -1909,6 +1914,9 @@ func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeEx
 				if len(args) >= 3 && args[1] == "--verify" && args[2] == "REBASE_HEAD" {
 					return "", cfg.rebaseHeadError
 				}
+				if len(args) >= 2 && args[1] == "HEAD" {
+					return "sha-local\n", nil
+				}
 				return "", fmt.Errorf("unexpected rev-parse args: %v", args)
 			case "ls-remote":
 				return "", nil // branch gone, skip delete
@@ -1923,8 +1931,7 @@ func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeEx
 				return "", nil
 			}
 			if name == "gh" {
-				// no_checks → verifyAndPush runs local verify_command
-				if resp, ok := dispatchMergeGh(args, []string{emptyCheckRunsJSON}, nil, nil, ""); ok {
+				if resp, ok := dispatchMergeGh(args, checkRunsResponses, nil, nil, ""); ok {
 					return resp, nil
 				}
 			}
@@ -2013,20 +2020,21 @@ func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nol
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: conflict resolved but verify_command fails → merge_failed
+// AC-002: conflict resolved but the current-head required CI check fails → merge_failed
 // ---------------------------------------------------------------------------
 
-func TestRunMergePhase_ConflictResolved_VerifyFails_AC002(t *testing.T) { //nolint:cyclop
+func TestRunMergePhase_ConflictResolved_CIFails_AC002(t *testing.T) { //nolint:cyclop
 	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
 		statusOnConflict:   "UU bar.go\n",
 		conflictedFiles:    "bar.go\n",
 		rebaseHeadError:    fmt.Errorf("not found"),
 		statusAfterAgent:   "",
 		ancestorAfterAgent: true,
+		checkRunsResponses: []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "failure"}})},
 		fallback: func(name string, args ...string) (string, error) {
-			// override verify_command to fail
 			if name == "sh" && len(args) >= 2 && args[0] == "-c" {
-				return "", fmt.Errorf("verify_command failed")
+				t.Error("verify_command must not be used as a no-CI fallback after issue #125")
+				return "", nil
 			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},

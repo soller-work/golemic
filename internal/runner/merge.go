@@ -422,24 +422,9 @@ func (r *Runner) mergeIfCIGreen(writer worktree.EventWriter, prNumber int) strin
 // verifyAndPush handles PS-003: verify the rebased branch and push.
 func (r *Runner) verifyAndPush(writer worktree.EventWriter, prNumber int, devWT string) string {
 	ciTimeout := r.ciTimeout()
-	result, _, err := r.queryCIChecks(prNumber)
-	if err != nil {
-		return r.failMerge(writer, prNumber, fmt.Sprintf("CI check query failed: %v", err))
-	}
 
-	if result == "no_checks" {
-		// AC-008: local verification gates the merge when no CI is configured
-		if err := r.runVerifyCommand(devWT); err != nil {
-			return r.failMerge(writer, prNumber, err.Error())
-		}
-		if err := r.forcePushBranch(devWT); err != nil {
-			return r.failMerge(writer, prNumber, err.Error())
-		}
-		return r.doSquashMerge(writer, prNumber)
-	}
-
-	// CI checks exist: push first, then wait for green using the exact pushed SHA
-	// to avoid trusting stale completed checks from a superseded commit.
+	// Push first, then wait for green using the exact pushed SHA to avoid trusting
+	// stale completed checks from a superseded commit.
 	if err := r.forcePushBranch(devWT); err != nil {
 		return r.failMerge(writer, prNumber, err.Error())
 	}

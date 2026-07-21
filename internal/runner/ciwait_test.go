@@ -274,7 +274,7 @@ func ciWaitResult(t *testing.T, ev eventlog.Event) string {
 // queryCIChecks unit tests
 // ---------------------------------------------------------------------------
 
-// AC-002: no check runs for current SHA → no_checks
+// AC-002: no check runs for current SHA → pending
 func TestQueryCIChecks_NoChecks_AC002(t *testing.T) {
 	r, logPath, _ := buildCIGateRunner(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 	_ = logPath
@@ -283,8 +283,8 @@ func TestQueryCIChecks_NoChecks_AC002(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "no_checks" {
-		t.Errorf("result: got %q, want %q", result, "no_checks")
+	if result != "pending" {
+		t.Errorf("result: got %q, want %q", result, "pending")
 	}
 	if len(failed) != 0 {
 		t.Errorf("failed items: got %d, want 0", len(failed))
@@ -891,21 +891,23 @@ func buildCIGateRunnerWithRequireCIChecks(t *testing.T, exec *fakeExecutor) (*Ru
 	return r, logPath, stderr
 }
 
-// AC-001/AC-002 regression guard: require_ci_checks=false with no_checks returns no_checks immediately.
-func TestQueryCIChecks_RequireCIChecksFalse_NoChecksPassThrough(t *testing.T) {
+// AC-001/AC-002 regression guard: no checks for the current head are pending even
+// when require_ci_checks=false, so the runner cannot merge on a not-yet-reported
+// required check after a force-push.
+func TestQueryCIChecks_RequireCIChecksFalse_NoChecksArePending(t *testing.T) {
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
-	// RequireCIChecks defaults to false
+	// RequireCIChecks defaults to false.
 
 	result, _, err := r.queryCIChecks(99)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result != "no_checks" {
-		t.Errorf("result: got %q, want %q (require_ci_checks=false must pass through no_checks)", result, "no_checks")
+	if result != "pending" {
+		t.Errorf("result: got %q, want %q (empty current-head checks must stay pending)", result, "pending")
 	}
 }
 
-// AC-003: require_ci_checks=true maps no_checks to pending in queryCIChecks.
+// AC-003: require_ci_checks=true keeps empty current-head checks pending in queryCIChecks.
 func TestQueryCIChecks_RequireCIChecksTrue_NoChecksMappedToPending(t *testing.T) {
 	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 

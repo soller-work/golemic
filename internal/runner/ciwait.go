@@ -140,11 +140,11 @@ func (r *Runner) getLocalHeadSHA(worktreeDir string) (string, error) {
 }
 
 // queryCIChecks queries check runs for the PR's current head SHA and returns a result string.
-// Result is one of: "green", "red", "no_checks", "pending".
+// Result is one of: "green", "red", "pending".
 // Only checks reported for the PR's current head commit are trusted; this prevents
 // stale completed checks from a superseded SHA from causing a premature "green".
-// When RequireCIChecks is true, no_checks is mapped to pending so the poll loop
-// waits for the workflow to register rather than treating absence as success.
+// A missing required check for the current head is pending so the poll loop waits
+// for the workflow to register instead of falling back to a local merge path.
 // Returns error on gh invocation or parse failure (CHECKS_QUERY_FAILED).
 func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
 	headSHA, err := r.getPRHeadSHA(prNumber)
@@ -160,7 +160,7 @@ func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
 		return "", nil, err // already CHECKS_QUERY_FAILED prefixed
 	}
 	if len(checks) == 0 {
-		return r.noChecksResult(), nil, nil
+		return "pending", nil, nil
 	}
 	return classifyChecks(checks)
 }
@@ -208,16 +208,6 @@ func (r *Runner) pollCheckRunsForSHA(sha, nwo string, ciTimeout time.Duration) (
 			}
 		}
 	}
-}
-
-// noChecksResult returns the result string for a PR with no registered checks.
-// Returns "pending" when RequireCIChecks is true (waits for workflow registration),
-// otherwise returns "no_checks" (existing behaviour, treated as success by runCIGate).
-func (r *Runner) noChecksResult() string {
-	if r.cfg != nil && r.cfg.RequireCIChecks {
-		return "pending"
-	}
-	return "no_checks"
 }
 
 // classifyChecks inspects check items and returns the aggregate result.
@@ -313,7 +303,7 @@ func (r *Runner) ciTimeout() time.Duration {
 }
 
 // pollCIChecks polls gh pr checks until all complete or ciTimeout expires.
-// Returns result ("green"|"red"|"timeout"|"no_checks") and any failed items.
+// Returns result ("green"|"red"|"timeout") and any failed items.
 func (r *Runner) pollCIChecks(prNumber int, ciTimeout time.Duration) (string, []ghCheckItem, error) {
 	result, failed, err := r.queryCIChecks(prNumber)
 	if err != nil {
@@ -518,7 +508,7 @@ func (r *Runner) buildFailedCheckInfo(result string, failedChecks []ghCheckItem)
 
 // runCIGate implements the CI gate phase between pr_opened and reviewer creation.
 // It polls PR checks and retries the dev agent up to maxCIFixRounds times on failure.
-// Returns outcomeSuccess when checks are green or absent; outcomeDevFailed otherwise.
+// Returns outcomeSuccess when checks are green; outcomeDevFailed otherwise.
 func (r *Runner) runCIGate(prNumber int, eventLogPath string, agentTimeout time.Duration) string {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	ciTimeout := r.ciTimeout()
@@ -533,7 +523,7 @@ func (r *Runner) runCIGate(prNumber int, eventLogPath string, agentTimeout time.
 
 		r.writeCIWaitFinished(eventLogPath, result, fixRound)
 
-		if result == "green" || result == "no_checks" {
+		if result == "green" {
 			return outcomeSuccess
 		}
 
