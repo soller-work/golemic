@@ -26,7 +26,9 @@ func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner,
 		t.Fatalf("load credentials: %v", err)
 	}
 
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
+
+	guidelinesDir := filepath.Join(golemicCfgDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -35,6 +37,16 @@ func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner,
 	}
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("# Guidelines"), 0644); err != nil {
 		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(golemicCfgDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"dev", "reviewer"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	r := New(exec, homeDir, repoRoot, 42)
@@ -46,7 +58,6 @@ func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner,
 	r.cfg = &config.Config{
 		VerifyCommand:  "go test",
 		TimeoutMinutes: 30,
-		Models:         config.Models{Dev: "claude-3-5-sonnet-20241022", Reviewer: "claude-3-5-sonnet-20241022"},
 		CodebaseMemory: config.CodebaseMemoryConfig{Enabled: cbmEnabled},
 	}
 	r.issue = &issueData{Number: 42, Title: "CBM test issue"}

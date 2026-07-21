@@ -434,12 +434,6 @@ func assertScaffoldValues(t *testing.T, cfg config.Config, project string) {
 	if cfg.Label != "ready-for-agent" {
 		t.Errorf("Label = %q, want %q", cfg.Label, "ready-for-agent")
 	}
-	if cfg.Models.Dev != "z-ai/glm-4.6" {
-		t.Errorf("Models.Dev = %q, want %q", cfg.Models.Dev, "z-ai/glm-4.6")
-	}
-	if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
-		t.Errorf("Models.Reviewer = %q, want %q", cfg.Models.Reviewer, "deepseek/deepseek-v4-pro")
-	}
 }
 
 // TestCreateConfigNoTimeoutSecondsKey verifies AC-001: the scaffolded config.json

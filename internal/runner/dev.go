@@ -24,9 +24,15 @@ var cbmDevTools = []string{
 // findings must be non-empty (enforced by RenderDevRetry). findingsJSON may be empty.
 func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, findings, findingsJSON, parentSpanID string, round int) string {
 	golemicBinaryPath, _ := os.Executable()
-	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("dev")
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
+		return outcomeDevFailed
+	}
+	defer cleanupPrompt()
 
 	cbmEnabled := r.cfg.CodebaseMemory.Enabled
 	if cbmEnabled {
@@ -52,14 +58,14 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	}
 
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
-		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": r.cfg.Models.Dev})
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": model})
 
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
 
-	cfg := r.buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, r.cfg.CodebaseMemory.Enabled)
+	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, r.cfg.CodebaseMemory.Enabled)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 
 	if err != nil {
@@ -79,9 +85,15 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 }
 func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int) string {
 	golemicBinaryPath, _ := os.Executable()
-	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("dev")
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
+		return outcomeDevFailed
+	}
+	defer cleanupPrompt()
 
 	cbmEnabled := r.cfg.CodebaseMemory.Enabled
 	if cbmEnabled {
@@ -110,7 +122,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	}
 
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
-		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": r.cfg.Models.Dev})
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": model})
 
 	// Run dev agent
 	runFn := r.runAgentFn
@@ -123,7 +135,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "dev",
-		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
+		SystemPromptFile:  systemPromptFile,
 		UserPrompt:        userPrompt,
 		WorktreeDir:       devWorktreePath,
 		RunID:             r.runID,
@@ -131,7 +143,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		TurnID:            r.turnCounter,
 		GHToken:           r.creds.DevToken(),
 		GolemicBinaryPath: golemicBinaryPath,
-		Model:             r.cfg.Models.Dev,
+		Model:             model,
 		Timeout:           timeout,
 		ToolAllowlist:     devTools,
 		RunsDir:           runsDir,
@@ -179,14 +191,14 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 }
 
 // buildDevAgentConfig creates the agent.RoleConfig for the dev retry agent.
-func (r *Runner) buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, cbmEnabled bool) agent.RoleConfig {
+func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, cbmEnabled bool) agent.RoleConfig {
 	tools := []string{"read", "bash", "write", "edit"}
 	if cbmEnabled {
 		tools = append(tools, cbmDevTools...)
 	}
 	return agent.RoleConfig{
 		Role:              "dev",
-		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
+		SystemPromptFile:  systemPromptFile,
 		UserPrompt:        userPrompt,
 		WorktreeDir:       devWorktreePath,
 		RunID:             r.runID,
@@ -194,7 +206,7 @@ func (r *Runner) buildDevAgentConfig(binaryDir, devWorktreePath, eventLogPath, u
 		TurnID:            r.turnCounter,
 		GHToken:           r.creds.DevToken(),
 		GolemicBinaryPath: golemicBinaryPath,
-		Model:             r.cfg.Models.Dev,
+		Model:             model,
 		Timeout:           timeout,
 		ToolAllowlist:     tools,
 		RunsDir:           runsDir,

@@ -1651,6 +1651,15 @@ func makeConflictRetryRunner(t *testing.T, exec *fakeExecutor) (*Runner, string,
 		t.Fatal(err)
 	}
 
+	// agents
+	agentsDir := filepath.Join(repoRoot, ".golemic", "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 65)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
@@ -1668,7 +1677,6 @@ func makeConflictRetryRunner(t *testing.T, exec *fakeExecutor) (*Runner, string,
 			Project:        project,
 			VerifyCommand:  "go test ./...",
 			TimeoutMinutes: 30,
-			Models:         config.Models{Dev: "test/dev"},
 		},
 		creds:      creds,
 		branchName: "golemic/issue-65",

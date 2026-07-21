@@ -26,12 +26,24 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 	t.Helper()
 	homeDir, repoRoot, project := setupRunnerTest(t)
 
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"dev.md", "reviewer.md"} {
 		if err := os.WriteFile(filepath.Join(guidelinesDir, f), []byte("# guidelines"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"dev.md", "reviewer.md"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, f), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -82,7 +94,6 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 	runner.issue = &issueData{Number: 42, Title: "t"}
 	runner.cfg = &config.Config{
 		VerifyCommand: "go test",
-		Models:        config.Models{Dev: "test-model", Reviewer: "test-model"},
 	}
 	runner.branchName = "golemic/issue-42"
 

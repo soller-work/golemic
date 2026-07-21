@@ -270,9 +270,15 @@ func (r *Runner) getRemoteBranchSHA() (string, error) {
 // runDevCIRetryAgent runs the dev agent in the existing dev worktree to fix CI failures.
 func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, failedCheckInfo string) string {
 	golemicBinaryPath, _ := os.Executable()
-	binaryDir := filepath.Dir(golemicBinaryPath)
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("dev")
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err) //nolint:errcheck
+		return outcomeDevFailed
+	}
+	defer cleanupPrompt()
 
 	userPrompt, err := prompt.RenderDevCIRetry(
 		failedCheckInfo,
@@ -296,7 +302,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "dev",
-		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
+		SystemPromptFile:  systemPromptFile,
 		UserPrompt:        userPrompt,
 		WorktreeDir:       devWorktreePath,
 		RunID:             r.runID,
@@ -304,7 +310,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		TurnID:            r.turnCounter,
 		GHToken:           r.creds.DevToken(),
 		GolemicBinaryPath: golemicBinaryPath,
-		Model:             r.cfg.Models.Dev,
+		Model:             model,
 		Timeout:           timeout,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,

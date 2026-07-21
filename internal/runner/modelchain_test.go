@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -199,6 +200,66 @@ func TestRunDevAgent_ChainExhausted_DiagnosticsContainModels(t *testing.T) {
 	msg := stderr.String()
 	if !strings.Contains(msg, "model-a") || !strings.Contains(msg, "model-b") {
 		t.Errorf("stderr should contain attempted model IDs, got: %q", msg)
+	}
+}
+
+// TestRunDevAgent_ResolvesModelChainFromAgentFile verifies that the runner
+// correctly resolves the exact ordered model chain from .golemic/agents/dev.md
+// frontmatter and passes it as cfg.Model to the agent.
+func TestRunDevAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
+	r, logPath, _ := setupExitCodeRunner(t, "dev")
+
+	// Override agent file with multi-model chain to exercise order preservation
+	agentsDir := filepath.Join(r.repoRoot, ".golemic", "agents")
+	devAgentPath := filepath.Join(agentsDir, "dev.md")
+	multiModelContent := "---\nmodel: model-a, model-b, model-c\n---\npersona body\n"
+	if err := os.WriteFile(devAgentPath, []byte(multiModelContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedCfg agent.RoleConfig
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		capturedCfg = cfg
+		return 0, fakeTranscriptPaths("/tmp", "dev"), nil
+	})
+
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+
+	// Verify exact ordered chain is preserved in cfg.Model
+	expectedChain := "model-a, model-b, model-c"
+	if capturedCfg.Model != expectedChain {
+		t.Errorf("cfg.Model = %q, want %q (exact ordered chain not preserved)", capturedCfg.Model, expectedChain)
+	}
+}
+
+// TestRunReviewerAgent_ResolvesModelChainFromAgentFile verifies that the runner
+// correctly resolves the exact ordered model chain from .golemic/agents/reviewer.md
+// frontmatter and passes it as cfg.Model to the agent.
+func TestRunReviewerAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
+	r, logPath, _ := setupExitCodeRunner(t, "reviewer")
+
+	// Override agent file with multi-model chain to exercise order preservation
+	agentsDir := filepath.Join(r.repoRoot, ".golemic", "agents")
+	reviewer := filepath.Join(agentsDir, "reviewer.md")
+	multiModelContent := "---\nmodel: model-a, model-b, model-c\n---\npersona body\n"
+	if err := os.WriteFile(reviewer, []byte(multiModelContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var capturedCfg agent.RoleConfig
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		capturedCfg = cfg
+		return 0, fakeTranscriptPaths("/tmp", "reviewer"), nil
+	})
+
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+
+	// Verify exact ordered chain is preserved in cfg.Model
+	expectedChain := "model-a, model-b, model-c"
+	if capturedCfg.Model != expectedChain {
+		t.Errorf("cfg.Model = %q, want %q (exact ordered chain not preserved)", capturedCfg.Model, expectedChain)
 	}
 }
 

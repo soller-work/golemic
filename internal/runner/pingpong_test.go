@@ -161,7 +161,8 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 	}
 
 	// Write guidelines so RenderDev, RenderDevRetry, and RenderReviewer can read them
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -170,6 +171,17 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 	}
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("# Guidelines"), 0644); err != nil {
 		t.Fatal(err)
+	}
+
+	// Write agent files so resolveAgentFile can read model+persona
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"dev", "reviewer"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	r := New(exec, homeDir, repoRoot, 42)
@@ -181,7 +193,6 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 	r.cfg = &config.Config{
 		VerifyCommand:  "go test",
 		TimeoutMinutes: 30,
-		Models:         config.Models{Dev: "claude-3-5-sonnet-20241022", Reviewer: "claude-3-5-sonnet-20241022"},
 	}
 	r.issue = &issueData{Number: 42, Title: "Test Issue"}
 

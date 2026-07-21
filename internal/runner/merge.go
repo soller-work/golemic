@@ -204,15 +204,21 @@ func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, dev
 
 	r.turnCounter++
 	golemicBinaryPath, _ := os.Executable()
-	binaryDir := filepath.Dir(golemicBinaryPath)
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	systemPromptFile, model, cleanupPrompt, resolveErr := r.resolveAgentFile("dev")
+	if resolveErr != nil {
+		_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
+		return fmt.Errorf("conflict retry: %w", resolveErr)
+	}
+	defer cleanupPrompt()
 
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
 
-	cfg := r.buildRebaseConflictAgentConfig(binaryDir, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir)
+	cfg := r.buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir)
 	exitCode, _, agentErr := runFn(context.Background(), cfg)
 
 	result, failReason := r.determineConflictResolutionResult(devWT, agentErr, exitCode)
@@ -504,10 +510,10 @@ func (r *Runner) collectConflictedFilesForRebase(devWT string) ([]string, error)
 }
 
 // buildRebaseConflictAgentConfig creates the agent.RoleConfig for rebase conflict resolution.
-func (r *Runner) buildRebaseConflictAgentConfig(binaryDir, devWT, eventLogPath, userPrompt, golemicBinaryPath string, runsDir string) agent.RoleConfig {
+func (r *Runner) buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath string, runsDir string) agent.RoleConfig {
 	return agent.RoleConfig{
 		Role:              "dev",
-		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "dev.md"),
+		SystemPromptFile:  systemPromptFile,
 		UserPrompt:        userPrompt,
 		WorktreeDir:       devWT,
 		RunID:             r.runID,
@@ -515,7 +521,7 @@ func (r *Runner) buildRebaseConflictAgentConfig(binaryDir, devWT, eventLogPath, 
 		TurnID:            r.turnCounter,
 		GHToken:           r.creds.DevToken(),
 		GolemicBinaryPath: golemicBinaryPath,
-		Model:             r.cfg.Models.Dev,
+		Model:             model,
 		Timeout:           r.agentTimeout(),
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,

@@ -158,8 +158,6 @@ func toInvoke(t *testing.T, binary, workDir, binDir, homeDir string, extraEnv ma
 }
 
 // toSetupSandbox creates a hermetic git sandbox with a local bare origin.
-// prompts/dev.md and prompts/reviewer.md must exist next to the golemic binary
-// (BR-003: never in the fixture repo).
 func toSetupSandbox(t *testing.T, realGit string) (bareRepo, workDir string) {
 	t.Helper()
 
@@ -202,7 +200,8 @@ func toSetupSandbox(t *testing.T, realGit string) (bareRepo, workDir string) {
 	run(workDir, realGit, "push", "origin", "HEAD:refs/heads/main")
 	run(workDir, realGit, "fetch", "origin")
 
-	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
+	golemicDir := filepath.Join(workDir, ".golemic")
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -213,6 +212,16 @@ func toSetupSandbox(t *testing.T, realGit string) (bareRepo, workDir string) {
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"),
 		[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
 		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"dev", "reviewer"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"),
+			[]byte("---\nmodel: test/"+role+"-model\n---\nPersona.\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	return bareRepo, workDir

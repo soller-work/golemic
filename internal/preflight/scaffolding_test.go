@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golemic/internal/agentfile"
 )
 
 func TestCheckScaffolding(t *testing.T) { //nolint:cyclop,gocognit // moved verbatim; cyclomatic 12 and cognitive 32 exceed thresholds on the pre-existing table body
@@ -78,6 +80,22 @@ func TestCheckScaffolding(t *testing.T) { //nolint:cyclop,gocognit // moved verb
 				}
 				if _, err := os.Stat(revPath); err != nil {
 					t.Errorf("guidelines/reviewer.md should exist: %v", err)
+				}
+
+				// Check agents exist with model frontmatter and non-empty body
+				agentsDir := filepath.Join(golemicDir, "agents")
+				for _, role := range []string{"dev", "reviewer"} {
+					chain, body, readErr := agentfile.Read(filepath.Join(agentsDir, role+".md"))
+					if readErr != nil {
+						t.Errorf("agents/%s.md: %v", role, readErr)
+						continue
+					}
+					if len(chain) == 0 {
+						t.Errorf("agents/%s.md: model chain must not be empty", role)
+					}
+					if body == "" {
+						t.Errorf("agents/%s.md: body must not be empty", role)
+					}
 				}
 			}
 		})

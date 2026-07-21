@@ -167,9 +167,7 @@ func rfInvoke(t *testing.T, binary, workDir, binDir, homeDir string, extraEnv ma
 //   - a local bare git repo (the "origin")
 //   - a working git repo with origin pointing to the bare repo
 //   - .golemic/guidelines/dev.md and .golemic/guidelines/reviewer.md (required by the runner's prompt renderer)
-//
-// prompts/dev.md and prompts/reviewer.md must exist next to the golemic binary
-// (BR-003: never in the fixture repo).
+//   - .golemic/agents/dev.md and .golemic/agents/reviewer.md (required by the runner's agent-file resolver)
 //
 // Returns (bareRepoPath, sandboxRepoPath).
 func rfSetupSandbox(t *testing.T, realGit string) (string, string) {
@@ -215,7 +213,8 @@ func rfSetupSandbox(t *testing.T, realGit string) (string, string) {
 	run(workDir, realGit, "push", "origin", "HEAD:refs/heads/main")
 	run(workDir, realGit, "fetch", "origin")
 
-	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
+	golemicDir := filepath.Join(workDir, ".golemic")
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -226,6 +225,16 @@ func rfSetupSandbox(t *testing.T, realGit string) (string, string) {
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"),
 		[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
 		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"dev", "reviewer"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"),
+			[]byte("---\nmodel: test/"+role+"-model\n---\nPersona.\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	return bareRepo, workDir
