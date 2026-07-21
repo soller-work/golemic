@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -109,7 +110,12 @@ func runCBM(args []string, stdout, stderr io.Writer) int {
 	// Send tools/call.
 	result, isError, err := callTool(sockPath, sub, arguments)
 	if err != nil {
-		fmt.Fprintf(stderr, "cbm: broker unreachable at %s: %v\n", sockPath, err)
+		var brokerErr brokerResponseError
+		if errors.As(err, &brokerErr) {
+			fmt.Fprintf(stderr, "cbm: broker %s\n", brokerErr.Error())
+		} else {
+			fmt.Fprintf(stderr, "cbm: broker unreachable at %s: %v\n", sockPath, err)
+		}
 		return 1
 	}
 
@@ -396,9 +402,17 @@ func callTool(sockPath, name string, arguments map[string]interface{}) ([]conten
 		return nil, true, fmt.Errorf("parse tools/call response: %w", err)
 	}
 	if resp.Error != nil {
-		return []contentItem{{Text: resp.Error.Message}}, true, nil
+		return nil, false, brokerResponseError{message: resp.Error.Message}
 	}
 	return resp.Result.Content, resp.Result.IsError, nil
+}
+
+type brokerResponseError struct {
+	message string
+}
+
+func (e brokerResponseError) Error() string {
+	return e.message
 }
 
 type contentItem struct {

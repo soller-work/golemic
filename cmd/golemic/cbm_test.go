@@ -400,6 +400,56 @@ func TestCBM_IsErrorResponse_Exit1(t *testing.T) {
 	}
 }
 
+func TestCBM_BrokerJSONRPCError_Exit1(t *testing.T) {
+	sockPath := fakeSocketServer(t, func(req []byte) []byte {
+		var msg struct {
+			Method string `json:"method"`
+			ID     int64  `json:"id"`
+		}
+		json.Unmarshal(req, &msg) //nolint:errcheck
+		if msg.Method == "tools/list" {
+			return toolsListResponse(msg.ID, []map[string]interface{}{
+				{
+					"name":        "get_architecture",
+					"description": "arch",
+					"inputSchema": map[string]interface{}{
+						"properties": map[string]interface{}{
+							"project": map[string]interface{}{"type": "string"},
+						},
+						"required": []string{"project"},
+					},
+				},
+			})
+		}
+		resp, _ := json.Marshal(map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      msg.ID,
+			"error": map[string]interface{}{
+				"code":    -32000,
+				"message": "child-dead",
+			},
+		})
+		return resp
+	})
+
+	toolsListCache = nil
+	t.Setenv("CBM_SOCK", sockPath)
+	t.Setenv("CBM_PROJECT", "proj")
+	t.Cleanup(func() { toolsListCache = nil })
+
+	var stdout, stderr bytes.Buffer
+	code := runCBM([]string{"golemic", "cbm", "get_architecture"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("expected exit 1 for broker JSON-RPC error; got %d", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout for broker JSON-RPC error; got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "cbm: broker child-dead") {
+		t.Fatalf("stderr missing broker error; got: %s", stderr.String())
+	}
+}
+
 // ---- Help tests ----
 
 func TestCBM_Help_RendersAllSubsWithProjectID(t *testing.T) {
