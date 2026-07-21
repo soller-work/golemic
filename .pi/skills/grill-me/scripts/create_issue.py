@@ -65,6 +65,12 @@ def validate_full(data: dict, schema: dict = None) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+def _normalize_table_cell(text: str) -> str:
+    """Replace CR/LF sequences with spaces and escape pipes for Markdown table cells."""
+    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return text.replace("|", "\\|")
+
+
 def render_body(data: dict) -> str:
     """Render fixed Markdown body layout per v2 spec. All sections always present except conditional ones."""
     parts = []
@@ -135,8 +141,8 @@ def render_body(data: dict) -> str:
             "| --- | --- |",
         ]
         for c in checks:
-            functional = c.get("functional", "").replace("|", "\\|")
-            technical = c.get("technical", "").replace("|", "\\|")
+            functional = _normalize_table_cell(c.get("functional", ""))
+            technical = _normalize_table_cell(c.get("technical", ""))
             table.append(f"| {functional} | {technical} |")
         parts.append("\n".join(table))
     else:

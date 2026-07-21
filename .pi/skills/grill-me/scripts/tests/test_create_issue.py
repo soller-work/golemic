@@ -134,6 +134,48 @@ class TestCreateIssueRender:
             assert "| Functional (stakeholder) | Technical evidence (reviewer confirms) |" in stdout
             assert "| Order is cancelled | A test asserts status becomes cancelled |" in stdout
 
+    def test_proof_checklist_normalizes_newlines_in_cells(self):
+        """Test that multiline functional/technical text is normalized to spaces, keeping cells in single row."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            slice_path = tmpdir / "slice.json"
+
+            data = load_minimal_slice()
+            data["proof"] = {
+                "how": "Run test.",
+                "why": "Confirms behavior.",
+                "checks": [
+                    {
+                        "functional": "User action\nresults in\nstate change",
+                        "technical": "Test with\r\nmultiple\nlines should work",
+                    },
+                    {
+                        "functional": "Single-line\rCR normalized",
+                        "technical": "Pipe | char must be escaped",
+                    },
+                ],
+            }
+            slice_path.write_text(json.dumps(data))
+
+            code, stdout, stderr = run_create_issue_py(str(slice_path), "--dry-run")
+            assert code == 0, stderr
+
+            # Find all table rows (lines starting with |)
+            lines = stdout.split("\n")
+            table_rows = [line for line in lines if line.startswith("|")]
+
+            # Should have header, separator, and two data rows
+            assert len(table_rows) >= 4, f"Expected at least 4 table rows (header + sep + 2 data), got {len(table_rows)}: {table_rows}"
+
+            # Verify multiline content is normalized (all on one row, spaces replace newlines)
+            assert "User action results in state change" in table_rows[2], "Newlines should be converted to spaces"
+            assert "Test with multiple lines should work" in table_rows[2], "CR/LF should be converted to spaces"
+            assert "Single-line CR normalized" in table_rows[3], "CR should be converted to space"
+            assert "Pipe \\| char must be escaped" in table_rows[3], "Pipes should be escaped"
+            # Verify no actual newlines within the data rows
+            for row in table_rows[2:]:
+                assert "\n" not in row, f"Row contains actual newline (broken table cell): {repr(row)}"
+
     def test_fixed_section_order_with_security_and_blockers(self):
         """Test all sections present when security_relevant=true and blockers non-empty."""
         with tempfile.TemporaryDirectory() as tmpdir:
