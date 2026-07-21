@@ -1154,3 +1154,45 @@ func TestWriteMCPFiles_ExcludeIdempotent(t *testing.T) {
 		t.Errorf(".mcp.json appeared %d times in exclude, want 1", count)
 	}
 }
+
+// TestWriteMCPFiles_LinkedWorktreeMissingInfoDir simulates a linked worktree
+// whose git admin dir (.git/worktrees/<n>/) has no info/ subdirectory — the
+// exact condition git creates for linked worktrees. WriteMCPFiles must create
+// the directory and succeed.
+func TestWriteMCPFiles_LinkedWorktreeMissingInfoDir(t *testing.T) {
+	// Simulate a linked worktree: the worktree dir contains a .git file
+	// pointing at a git admin dir that has NO info/ subdirectory.
+	worktreeDir := t.TempDir()
+	adminDir := t.TempDir() // stands in for .git/worktrees/<name>/
+
+	// Write .git file pointing at admin dir (mimics linked worktree).
+	gitFile := filepath.Join(worktreeDir, ".git")
+	if err := os.WriteFile(gitFile, []byte("gitdir: "+adminDir+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately do NOT create adminDir/info/ — that is the bug scenario.
+
+	cbmCache := t.TempDir()
+	if err := WriteMCPFiles(worktreeDir, cbmCache); err != nil {
+		t.Fatalf("WriteMCPFiles: %v", err)
+	}
+
+	// info/exclude must have been created and contain the entry.
+	excludePath := filepath.Join(adminDir, "info", "exclude")
+	data, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("read exclude: %v", err)
+	}
+	if !strings.Contains(string(data), ".mcp.json") {
+		t.Errorf("exclude missing .mcp.json; content: %s", string(data))
+	}
+
+	// Second call must be idempotent.
+	if err := WriteMCPFiles(worktreeDir, cbmCache); err != nil {
+		t.Fatalf("second WriteMCPFiles: %v", err)
+	}
+	data2, _ := os.ReadFile(excludePath)
+	if count := strings.Count(string(data2), ".mcp.json"); count != 1 {
+		t.Errorf(".mcp.json appeared %d times in exclude, want 1", count)
+	}
+}
