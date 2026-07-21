@@ -13,7 +13,7 @@ The end product is a validated GitHub issue (an autonomously implementable verti
 
 ## Core Principles
 
-1. **Ask only what you can't find out yourself.** Classification (`command`/`query`/`process`/`integration`), scope boundaries, behavior, business rules, acceptance scenarios, I/O contract, verify commands, and codebase evidence are *your* job to derive — never a question to the user. Inspect the code first; the user's time is for product intent, not form-filling.
+1. **Ask only what you can't find out yourself.** Classification (`command`/`query`/`process`/`integration`) and change type (`feature`/`bug`/`refactoring`), scope boundaries, behavior, business rules, acceptance scenarios, I/O contract, verify commands, and codebase evidence are *your* job to derive — never a question to the user. Inspect the code first; the user's time is for product intent, not form-filling.
 2. **Adaptive question count.** Ask as many questions as you genuinely need and no more. Some plans need one question; some need ten. Don't announce a count or estimate.
 3. **Every question is multiple choice.** Offer **max 4 options**, then a clear recommendation with reasoning. See format below.
 4. **Confirm before filing.** When you have everything, just ask whether you're done and may create the issue. Don't dump the full filled-out slice for review — a simple go/no-go is enough.
@@ -46,7 +46,11 @@ Rules: max 4 options. Fewer is fine if fewer are real. Always name the recommend
 
 ## Workflow
 
-1. **Inspect first.** Read the relevant code: modules, routes, conventions, test/verify commands. Classify the slice yourself using `references/slice-types.md`. Derive scope, behavior, rules, I/O, acceptance, and verify commands as far as the code allows. Note what you settled and what remains a genuine product decision.
+1. **Inspect first.** Read the relevant code: modules, routes, conventions, test/verify commands. Classify the slice yourself using `references/slice-types.md` and set `change_type` yourself:
+   - `feature` — new or changed user-visible capability.
+   - `bug` — defect/regression fix; proof should include a regression test that reproduces the bug.
+   - `refactoring` — internal technical improvement with no intended behavior change; proof must show preserved behavior plus the intended structural improvement.
+   Derive scope, behavior, rules, I/O, acceptance, and verify commands as far as the code allows. Note what you settled and what remains a genuine product decision.
 2. **Similarity scan.** Run `gh_issue_index.py --with-body`. If something looks related, that's a legitimate question (offer the candidate issues as options + a recommendation).
 3. **Interview.** Ask only the open product decisions, one at a time, in the multiple-choice format above.
 4. **Fill the slice.** Use `slice.py write` (or `new` + `set`) to populate every field from intent + code + answers. Record each non-trivial assumption in `blockers` as `kind: assumption`.

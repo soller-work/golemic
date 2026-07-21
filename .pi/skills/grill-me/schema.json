@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": [
     "slice_type",
+    "change_type",
     "title",
     "stakeholder",
     "trigger",
@@ -29,6 +30,15 @@
         "process",
         "integration"
       ]
+    },
+    "change_type": {
+      "type": "string",
+      "enum": [
+        "feature",
+        "bug",
+        "refactoring"
+      ],
+      "description": "Intent/proof category: feature=new or changed user-visible capability, bug=regression/defect fix, refactoring=internal technical improvement without intended behavior change."
     },
     "title": {
       "type": "string",

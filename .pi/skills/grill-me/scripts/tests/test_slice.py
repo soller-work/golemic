@@ -34,6 +34,7 @@ def load_minimal_slice():
     """Create a minimal valid slice dict (ready, no blockers)."""
     return {
         "slice_type": "command",
+        "change_type": "feature",
         "title": "Test Slice",
         "stakeholder": "User",
         "trigger": "User clicks button",
@@ -67,6 +68,7 @@ class TestSliceNew:
 
             data = json.loads(slice_path.read_text(encoding="utf-8"))
             assert data["slice_type"] == "command"
+            assert data["change_type"] == "feature"
             assert data["title"] == ""
             assert data["readiness"] == "blocked"
             assert data["blockers"] == []
