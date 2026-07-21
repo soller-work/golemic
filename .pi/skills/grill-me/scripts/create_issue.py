@@ -225,6 +225,9 @@ def create_issue(
     title = data.get("title", "Untitled")
     body = render_body(data)
 
+    _CHANGE_TYPE_TO_ISSUE_TYPE = {"feature": "Feature", "bug": "Bug"}
+    issue_type = _CHANGE_TYPE_TO_ISSUE_TYPE.get(data.get("change_type", ""), "Task")
+
     # Size check
     if len(body) > GITHUB_BODY_LIMIT:
         print(f"❌ Body too large ({len(body)} > {GITHUB_BODY_LIMIT} chars)", file=sys.stderr)
@@ -235,7 +238,7 @@ def create_issue(
         print("=== Rendered Body ===\n")
         print(body)
         print("\n=== Planned Commands ===\n")
-        print(f"gh issue create --title {title!r} --body <rendered-body>")
+        print(f"gh issue create --title {title!r} --type {issue_type!r} --body <rendered-body>")
         for num in blocked_by:
             print(f"gh issue edit <N> --add-label ready-for-agent")
         return 0
@@ -248,7 +251,7 @@ def create_issue(
 
     # Create issue
     result = run_gh(
-        ["issue", "create", "--title", title, "--body", body],
+        ["issue", "create", "--title", title, "--type", issue_type, "--body", body],
         capture_output=True,
     )
     if result.returncode != 0:
