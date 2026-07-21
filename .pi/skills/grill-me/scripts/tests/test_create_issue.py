@@ -314,6 +314,19 @@ class TestChangeTypeToIssueType:
 
             data = load_minimal_slice()
             data["change_type"] = change_type
+            if change_type != "feature":
+                # Detail fields are gattung-specific; drop the feature ones and
+                # supply the correct block for the change_type.
+                for key in ("behavior", "business_rules", "acceptance_scenarios", "inputs_outputs_errors"):
+                    data.pop(key, None)
+            if change_type == "bug":
+                data["reproduction"] = "Do X. Observed: crash. Expected: ok."
+                data["root_cause"] = "Missing check."
+                data["regression_scenarios"] = ["Given X, When Y, Then no crash"]
+            elif change_type == "refactoring":
+                data["current_structure"] = "God object."
+                data["target_structure"] = "Split modules."
+                data["behavior_preservation"] = "Identical output for identical input."
             slice_path.write_text(json.dumps(data))
 
             code, stdout, stderr = run_create_issue_py(str(slice_path), "--dry-run")

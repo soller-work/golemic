@@ -31,6 +31,16 @@ def _load_validate_module():
 
 _validate_mod = _load_validate_module()
 
+
+def _load_detail_blocks_module():
+    mod_path = Path(__file__).parent / "detail_blocks.py"
+    spec = importlib.util.spec_from_file_location("_detail_blocks", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+_detail_blocks = _load_detail_blocks_module()
+
 GITHUB_BODY_LIMIT = 65536
 SCHEMA_PATH = Path(__file__).parent.parent / "schema.json"
 DEFAULT_LABEL = "ready-for-agent"
@@ -71,6 +81,21 @@ def _normalize_table_cell(text: str) -> str:
     return text.replace("|", "\\|")
 
 
+def _render_detail_field(parts: list, data: dict, field) -> None:
+    """Render one gattung detail field (markdown or scenarios), matching the legacy layout."""
+    parts.append(f"## {field.label}")
+    if field.kind == "scenarios":
+        items = data.get(field.key, [])
+        if items:
+            for item in items:
+                parts.append(f"- {item}")
+        else:
+            parts.append("_None_")
+    else:
+        value = data.get(field.key, "").strip()
+        parts.append(value if value else "_None_")
+
+
 def render_body(data: dict) -> str:
     """Render fixed Markdown body layout per v2 spec. All sections always present except conditional ones."""
     parts = []
@@ -105,24 +130,10 @@ def render_body(data: dict) -> str:
     if not scope_out:
         parts.append("- _None_")
 
-    # Behavior (always present)
-    parts.append("## Behavior")
-    behavior = data.get("behavior", "").strip()
-    parts.append(behavior if behavior else "_None_")
-
-    # Business Rules (always present, even if empty)
-    parts.append("## Business Rules")
-    business_rules = data.get("business_rules", "").strip()
-    parts.append(business_rules if business_rules else "_None_")
-
-    # Acceptance Scenarios (always present, even if empty)
-    parts.append("## Acceptance Scenarios")
-    acceptance = data.get("acceptance_scenarios", [])
-    if acceptance:
-        for scenario in acceptance:
-            parts.append(f"- {scenario}")
-    else:
-        parts.append("_None_")
+    # Gattung-specific detail block (pre-proof), driven by the registry
+    change_type = data.get("change_type", "")
+    for field in _detail_blocks.pre_proof_fields(change_type):
+        _render_detail_field(parts, data, field)
 
     # Proof of Delivery (always present)
     proof = data.get("proof", {})
@@ -148,10 +159,9 @@ def render_body(data: dict) -> str:
     else:
         parts.append("_None_")
 
-    # Inputs / Outputs / Errors (always present)
-    parts.append("## Inputs / Outputs / Errors")
-    io_errors = data.get("inputs_outputs_errors", "").strip()
-    parts.append(io_errors if io_errors else "_None_")
+    # Gattung-specific detail block (post-proof), driven by the registry
+    for field in _detail_blocks.post_proof_fields(change_type):
+        _render_detail_field(parts, data, field)
 
     # Codebase Evidence (always present, even if empty)
     parts.append("## Codebase Evidence")

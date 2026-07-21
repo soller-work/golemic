@@ -69,6 +69,8 @@ Rules: max 4 options. Fewer is fine if fewer are real. Always name the recommend
    - `feature` — new or changed user-visible capability.
    - `bug` — defect/regression fix; proof should include a regression test that reproduces the bug.
    - `refactoring` — internal technical improvement with no intended behavior change; proof must show preserved behavior plus the intended structural improvement.
+
+   The `change_type` also selects the slice's gattung-specific detail fields (mapping defined once in `scripts/detail_blocks.py`; see `references/slice-types.md`). Seed the right block with `slice.py new <slice_type> --change-type <feature|bug|refactoring>` and list its fields with `slice.py plan --change-type <…>`.
    Derive scope, behavior, rules, I/O, acceptance, and verify commands as far as the code allows. Note what you settled and what remains a genuine product decision.
 
    **Design the proof-of-delivery plan (`proof`).** Once you understand what the user wants, *think through* how it would be proven that the implementation actually does it — this is a first-class part of the slice, not an afterthought. Use your reasoning budget here. Fill three things:

@@ -34,6 +34,12 @@ Boundary behavior with external systems or independently deployed services.
 
 Examples: consume a webhook, sync inventory, send invoices to accounting.
 
+## Change-type detail blocks
+
+Orthogonal to `slice_type`, the `change_type` selects which **detail fields** the slice carries (feature/bug/refactoring each get their own block; the common core is shared). This mapping — field names, order, labels, hints and requiredness — is defined once in `scripts/detail_blocks.py`, the single source of truth from which schema requiredness, semantic validation, rendering and the `new` skeleton all derive. A slice must not carry detail fields belonging to another change_type.
+
+To see the exact fields (with hints) for a gattung, run `slice.py plan --change-type <feature|bug|refactoring>`; do not restate the list here.
+
 ## Classification Rule
 
 Classify by the stakeholder-visible primary outcome:

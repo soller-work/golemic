@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sys
@@ -13,6 +14,27 @@ try:
     from jsonschema import Draft202012Validator
 except ImportError as exc:
     raise SystemExit("Missing dependency 'jsonschema'. Install: pip install jsonschema") from exc
+
+def _load_detail_blocks():
+    mod_path = Path(__file__).parent / "detail_blocks.py"
+    spec = importlib.util.spec_from_file_location("_detail_blocks", mod_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+_detail_blocks = _load_detail_blocks()
+
+
+def _is_empty(value: Any) -> bool:
+    """Empty means: absent, blank string, or empty list."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, list):
+        return len(value) == 0
+    return False
+
 
 PLACEHOLDER_RE = re.compile(
     r"\b(?:tbd|todo|unknown|later|to be decided|not specified|fixme)\b",
@@ -97,6 +119,24 @@ def semantic_errors(document: dict[str, Any]) -> list[str]:
                 errors.append(
                     f"Unresolved placeholder token {token!r} in ready slice at {json_path(path)} "
                     f"(wrap verbatim quotes in backticks to ignore)"
+                )
+
+    # Rule: gattung-specific detail fields. Required fields for the slice's
+    # change_type must be present & non-empty; detail fields belonging to a
+    # different change_type must be absent/empty (no cross-gattung ballast).
+    change_type = document.get("change_type")
+    if change_type in _detail_blocks.DETAIL_BLOCKS:
+        own_fields = _detail_blocks.detail_fields(change_type)
+        own_keys = {f.key for f in own_fields}
+        for field in own_fields:
+            if field.required and _is_empty(document.get(field.key)):
+                errors.append(
+                    f"change_type '{change_type}' requires a non-empty $.{field.key}"
+                )
+        for key in _detail_blocks.all_detail_keys() - own_keys:
+            if not _is_empty(document.get(key)):
+                errors.append(
+                    f"$.{key} does not belong to change_type '{change_type}' and must be empty"
                 )
 
     # Rule 4: if security_relevant=true, security field must be present and non-empty
