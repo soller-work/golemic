@@ -214,6 +214,9 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": model})
 
+	activityPath := filepath.Join(runsDir, r.runID, "reviewer.activity.jsonl")
+	stopFollow := followActivity(r.progressRenderer, "reviewer", activityPath)
+
 	// Run reviewer agent
 	runFn := r.runAgentFn
 	if runFn == nil {
@@ -234,6 +237,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
 	})
+	stopFollow()
 
 	if err != nil {
 		if errors.Is(err, agent.ErrTimeout) {
@@ -249,6 +253,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		var chainErr *agent.ModelChainExhaustedError
 		if errors.As(err, &chainErr) {
 			r.writeAgentCompleted(eventLogPath, "reviewer", 1)
+			r.emitAgentWrittenEvents(eventLogPath)
 			endSpan(telemetry.StatusError, nil)
 			fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
 			if prNum, prErr := r.getPRNumber(eventLogPath); prErr == nil {
@@ -263,6 +268,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 
 	// Record agent exit code in event log (BR-004)
 	r.writeAgentCompleted(eventLogPath, "reviewer", exitCode)
+	r.emitAgentWrittenEvents(eventLogPath)
 
 	// Fail on non-zero exit (BR-001, BR-002)
 	if exitCode != 0 {

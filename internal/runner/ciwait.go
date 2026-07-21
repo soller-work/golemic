@@ -334,8 +334,8 @@ func (r *Runner) pollCIChecks(prNumber int, ciTimeout time.Duration) (string, []
 	}
 }
 
-// writeCIWaitFinished appends a ci_wait_finished event to the event log.
-// Errors are silently dropped; a log write failure must not change the run outcome.
+// writeCIWaitFinished appends a ci_wait_finished event to the event log and
+// emits a progress line. Errors are silently dropped per BR-P3.
 func (r *Runner) writeCIWaitFinished(eventLogPath, result string, round int) {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
@@ -347,13 +347,16 @@ func (r *Runner) writeCIWaitFinished(eventLogPath, result string, round int) {
 	if err != nil {
 		return
 	}
-	_ = w.Write(eventlog.Event{
+	ev := eventlog.Event{
 		Type:    eventlog.EventCIWaitFinished,
 		Ts:      time.Now().Format(time.RFC3339),
 		RunID:   r.runID,
 		TurnID:  r.turnCounter,
 		Payload: payload,
-	})
+	}
+	if w.Write(ev) == nil && r.progressRenderer != nil {
+		r.progressRenderer.EmitLifecycle(ev)
+	}
 }
 
 // postCIEscalationComment posts a PR comment explaining why the CI gate escalated.

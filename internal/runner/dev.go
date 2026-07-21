@@ -53,6 +53,10 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": model})
 
+	r.writeDevStarted(eventLogPath)
+	activityPath := filepath.Join(runsDir, r.runID, "dev.activity.jsonl")
+	stopFollow := followActivity(r.progressRenderer, "dev", activityPath)
+
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
@@ -60,12 +64,15 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 
 	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, r.cfg.CodebaseMemory.Enabled)
 	exitCode, paths, err := runFn(context.Background(), cfg)
+	stopFollow()
 
 	if err != nil {
+		r.emitAgentWrittenEvents(eventLogPath)
 		return r.handleDevAgentErrorWithLog(eventLogPath, err, endSpan)
 	}
 
 	r.writeAgentCompleted(eventLogPath, "dev", exitCode)
+	r.emitAgentWrittenEvents(eventLogPath)
 
 	if exitCode != 0 {
 		endSpan(telemetry.StatusError, nil)
@@ -113,6 +120,10 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "model": model})
 
+	r.writeDevStarted(eventLogPath)
+	activityPath := filepath.Join(runsDir, r.runID, "dev.activity.jsonl")
+	stopFollow := followActivity(r.progressRenderer, "dev", activityPath)
+
 	// Run dev agent
 	runFn := r.runAgentFn
 	if runFn == nil {
@@ -133,6 +144,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
 	})
+	stopFollow()
 
 	if err != nil {
 		if errors.Is(err, agent.ErrTimeout) {
@@ -148,6 +160,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		var chainErr *agent.ModelChainExhaustedError
 		if errors.As(err, &chainErr) {
 			r.writeAgentCompleted(eventLogPath, "dev", 1)
+			r.emitAgentWrittenEvents(eventLogPath)
 			endSpan(telemetry.StatusError, nil)
 			fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
 			if prNum, prErr := r.getPRNumber(eventLogPath); prErr == nil {
@@ -162,6 +175,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 
 	// Record agent exit code in event log (BR-004)
 	r.writeAgentCompleted(eventLogPath, "dev", exitCode)
+	r.emitAgentWrittenEvents(eventLogPath)
 
 	// Fail on non-zero exit (BR-001, BR-002)
 	if exitCode != 0 {
