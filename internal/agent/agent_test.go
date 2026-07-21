@@ -905,17 +905,18 @@ func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-2: Fake pi with growing output never killed for stalling
+// AC-2: Agent completing tool executions regularly is never killed for stalling
 // ---------------------------------------------------------------------------
 
 func TestRunRole_SteadyOutputNotKilled_AC2(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Emit output every 200ms (< 1s idle timeout), run for ~2s
+	// Emit tool_execution_end events every 200ms (< 1s idle timeout), run for ~2s.
 	steadyScript := `
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  echo "output $i"
+  printf '{"type":"tool_execution_start"}\n'
+  printf '{"type":"tool_execution_end"}\n'
   sleep 0.2
 done
 exit 0
@@ -935,7 +936,7 @@ exit 0
 
 	// AC-2: Should complete successfully without stalling
 	if err != nil {
-		t.Fatalf("steady output should not trigger stall, got error: %v", err)
+		t.Fatalf("steady tool completions should not trigger stall, got error: %v", err)
 	}
 
 	if exitCode != 0 {
@@ -952,8 +953,8 @@ exit 0
 	if err != nil {
 		t.Fatalf("failed to read stdout: %v", err)
 	}
-	if !strings.Contains(string(stdoutBytes), "output 1") {
-		t.Errorf("stdout should contain output, got: %q", string(stdoutBytes))
+	if !strings.Contains(string(stdoutBytes), "tool_execution_end") {
+		t.Errorf("stdout should contain tool events, got: %q", string(stdoutBytes))
 	}
 }
 
@@ -1060,17 +1061,15 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 }
 
 // AC-1 (regression): a subprocess that writes once immediately then hangs must be
-// detected as stalled at ~idleTimeout — anchored to the actual last write, not the
-// poll time. With Timeout set between idleTimeout and idleTimeout+pollInterval, the
-// pre-fix behavior (anchoring to poll time) would return ErrTimeout; the fix returns
-// ErrStalled.
+// detected as stalled at ~idleTimeout. With Timeout set between idleTimeout and
+// idleTimeout+pollInterval, the stall window (anchored to process start) fires
+// before the wall-clock timeout, returning ErrStalled.
 func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	// idle=2s, poll=1.5s. The write lands well inside the first poll window, so the
-	// fix (anchor to the actual write ~t0) detects the stall at the ~3.0s poll; the
-	// pre-fix behaviour (anchor to the first poll at ~1.5s) would only detect it at
-	// the ~4.5s poll. A 3.75s wall-clock timeout (750ms margin either side, robust
-	// under -race) therefore yields ErrStalled with the fix but ErrTimeout without it.
+	// idle=2s, poll=1.5s. lastProgress is anchored to process start (~t0).
+	// First poll at ~1.5s: 1.5s < 2s → no stall.
+	// Second poll at ~3.0s: 3.0s >= 2s → stall.
+	// Wall-clock timeout=3.75s, so 3.0s < 3.75s → ErrStalled, not ErrTimeout.
 	cfg.Timeout = 3750 * time.Millisecond
 
 	writeOnceThenHang := `printf 'hello'
@@ -1187,16 +1186,16 @@ exit 0`
 	}
 }
 
-// AC-4: steady output (emitting within idle window), never stalls → completes normally
+// AC-4: agent completing tool executions regularly never stalls
 func TestRunRole_SteadyOutput_AC4(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Emit every 300ms (< 1s idle timeout), run for ~2s total (spans idle window)
-	// This ensures the idle clock keeps resetting and stall never triggers.
+	// Emit tool_execution_end every 300ms (< 1s idle timeout), run for ~2s total.
 	steadyScript := `
 for i in 1 2 3 4 5 6 7; do
-  echo "output $i"
+  printf '{"type":"tool_execution_start"}\n'
+  printf '{"type":"tool_execution_end"}\n'
   sleep 0.3
 done
 exit 0
@@ -1215,7 +1214,7 @@ exit 0
 	exitCode, paths, err := RunRole(ctx, cfg)
 
 	if err != nil {
-		t.Fatalf("steady output should not trigger stall, got error: %v", err)
+		t.Fatalf("steady tool completions should not trigger stall, got error: %v", err)
 	}
 
 	if exitCode != 0 {
@@ -1231,8 +1230,8 @@ exit 0
 	if err != nil {
 		t.Fatalf("failed to read stdout: %v", err)
 	}
-	if !strings.Contains(string(stdoutBytes), "output 1") {
-		t.Errorf("stdout should contain output, got: %q", string(stdoutBytes))
+	if !strings.Contains(string(stdoutBytes), "tool_execution_end") {
+		t.Errorf("stdout should contain tool events, got: %q", string(stdoutBytes))
 	}
 }
 
@@ -1542,5 +1541,164 @@ echo "GOLEMIC_TURN_ID: ${GOLEMIC_TURN_ID}"
 	}
 	if got := run(3); got != "3" {
 		t.Errorf("GOLEMIC_TURN_ID for TurnID=3: got %q, want %q", got, "3")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tool-progress stall detection (issue #155)
+// ---------------------------------------------------------------------------
+
+// TestToolProgress_ThinkingLoopStalls verifies that an agent producing only
+// thinking/text events (no tool_execution_end) is detected as stalled even
+// though the activity.jsonl keeps growing.
+func TestToolProgress_ThinkingLoopStalls(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	// Continuously emit thinking events but never complete a tool execution.
+	thinkingScript := `while true; do
+  printf '{"type":"thinking","content":"still thinking"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, thinkingScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected ErrStalled for thinking-only loop, got nil")
+	}
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("thinking loop: expected ErrStalled, got: %v", err)
+	}
+	if errors.Is(err, ErrTimeout) {
+		t.Errorf("thinking loop: must not be ErrTimeout: %v", err)
+	}
+	if *invocations != 1 {
+		t.Errorf("invocation count: got %d, want 1", *invocations)
+	}
+}
+
+// TestToolProgress_InFlightToolSuppressesStall verifies that an agent with a
+// long-running tool (tool_execution_start without matching tool_execution_end)
+// is never killed for stalling, regardless of duration.
+func TestToolProgress_InFlightToolSuppressesStall(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	// Short wall-clock timeout so the test completes quickly.
+	cfg.Timeout = 2 * time.Second
+
+	// Emit tool_execution_start then hang indefinitely (no end event).
+	inFlightScript := `printf '{"type":"tool_execution_start"}\n'
+while true; do sleep 3600; done`
+	scriptPath := writeScript(t, inFlightScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	// idle timeout shorter than wall-clock timeout: stall would fire if not suppressed.
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	// Should hit wall-clock timeout, NOT stall.
+	if err == nil {
+		t.Fatal("expected ErrTimeout, got nil")
+	}
+	if !errors.Is(err, ErrTimeout) {
+		t.Errorf("in-flight tool: expected ErrTimeout (not ErrStalled), got: %v", err)
+	}
+	if errors.Is(err, ErrStalled) {
+		t.Errorf("in-flight tool must not trigger stall: %v", err)
+	}
+	if *invocations != 1 {
+		t.Errorf("invocation count: got %d, want 1 (wall-clock timeout is terminal)", *invocations)
+	}
+}
+
+// TestToolProgress_RegularCompletionsNoStall verifies that an agent completing
+// tool executions at intervals shorter than idleTimeout is never stalled.
+func TestToolProgress_RegularCompletionsNoStall(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	// Complete a tool every 200ms (< 1s idle timeout), 10 times, then exit.
+	regularScript := `for i in 1 2 3 4 5 6 7 8 9 10; do
+  printf '{"type":"tool_execution_start"}\n'
+  printf '{"type":"tool_execution_end"}\n'
+  sleep 0.2
+done
+exit 0`
+	scriptPath := writeScript(t, regularScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	ctx := context.Background()
+	exitCode, _, err := RunRole(ctx, cfg)
+
+	if err != nil {
+		t.Fatalf("regular tool completions must not stall, got: %v", err)
+	}
+	if exitCode != 0 {
+		t.Errorf("exit code: got %d, want 0", exitCode)
+	}
+	if *invocations != 1 {
+		t.Errorf("invocation count: got %d, want 1 (no stalls)", *invocations)
+	}
+}
+
+// TestToolProgress_ToolcallCompositionStalls verifies that an agent generating
+// large tool-call arguments (toolcall_delta events) without actually executing
+// a tool is detected as stalled. Composition does not count as in-flight.
+func TestToolProgress_ToolcallCompositionStalls(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	// Continuously emit toolcall_delta (composition) but never start a real execution.
+	compositionScript := `while true; do
+  printf '{"type":"toolcall_delta","delta":"x"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, compositionScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected ErrStalled for toolcall composition loop, got nil")
+	}
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("toolcall composition: expected ErrStalled, got: %v", err)
+	}
+	if errors.Is(err, ErrTimeout) {
+		t.Errorf("toolcall composition: must not be ErrTimeout: %v", err)
+	}
+	if *invocations != 1 {
+		t.Errorf("invocation count: got %d, want 1", *invocations)
 	}
 }

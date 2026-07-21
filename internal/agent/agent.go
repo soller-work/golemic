@@ -4,7 +4,10 @@
 package agent
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -152,24 +155,67 @@ type TranscriptPaths struct {
 	Stderr string // path to <RunsDir>/<RunID>/<role>.stderr.log
 }
 
-// transcriptByteSize returns the combined byte size of the stdout and stderr
-// transcripts and the most recent modification time across them. Using the open
-// file handles avoids TOCTOU races during execution. The mod time lets the caller
-// anchor the idle window to the actual last write rather than the poll time.
-func transcriptByteSize(stdoutFile, stderrFile *os.File) (int64, time.Time) {
-	var size int64
-	var modTime time.Time
-	if fi, err := stdoutFile.Stat(); err == nil {
-		size += fi.Size()
-		modTime = fi.ModTime()
-	}
-	if fi, err := stderrFile.Stat(); err == nil {
-		size += fi.Size()
-		if fi.ModTime().After(modTime) {
-			modTime = fi.ModTime()
+// toolProgressState holds the incremental read position for tool-progress scanning.
+type toolProgressState struct {
+	offset   int64
+	inFlight int // tool_execution_start count minus tool_execution_end count
+}
+
+// applyToolEvent updates state based on a single activity event type.
+// Returns 1 if a tool execution completed, 0 otherwise.
+func applyToolEvent(evType string, state *toolProgressState) int {
+	switch evType {
+	case "tool_execution_start":
+		state.inFlight++
+	case "tool_execution_end":
+		if state.inFlight > 0 {
+			state.inFlight--
 		}
+		return 1
 	}
-	return size, modTime
+	return 0
+}
+
+// readToolProgress reads new complete lines from the activity JSONL at path
+// starting from state.offset. It returns the number of newly completed tool
+// executions and whether any tool is currently in-flight. Partial last lines
+// (no trailing newline) are left for the next tick. Malformed or unrecognised
+// lines are skipped without affecting in-flight state.
+func readToolProgress(path string, state *toolProgressState) (newlyCompleted int, inFlight bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, state.inFlight > 0
+	}
+	defer f.Close() //nolint:errcheck
+
+	if _, err := f.Seek(state.offset, io.SeekStart); err != nil {
+		return 0, state.inFlight > 0
+	}
+
+	data, err := io.ReadAll(f)
+	if err != nil || len(data) == 0 {
+		return 0, state.inFlight > 0
+	}
+
+	lastNL := bytes.LastIndexByte(data, '\n')
+	if lastNL < 0 {
+		return 0, state.inFlight > 0
+	}
+	state.offset += int64(lastNL + 1)
+
+	scanner := bufio.NewScanner(bytes.NewReader(data[:lastNL+1]))
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var ev struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &ev) != nil {
+			continue
+		}
+		newlyCompleted += applyToolEvent(ev.Type, state)
+	}
+
+	return newlyCompleted, state.inFlight > 0
 }
 
 // ---------------------------------------------------------------------------
@@ -196,13 +242,16 @@ func transcriptByteSize(stdoutFile, stderrFile *os.File) (int64, time.Time) {
 // (SIGKILL to -pgid) and the returned error wraps ErrTimeout. Partial output
 // up to the kill point is preserved in the transcript files.
 //
-// Stall detection: if the combined transcript byte size doesn't grow for the
-// idle threshold (default 300s, configurable via GOLEMIC_AGENT_IDLE_TIMEOUT_SEC),
-// the process group is killed and the attempt is retried (up to maxStallRetries
-// times, default 2, configurable via GOLEMIC_AGENT_MAX_STALL_RETRIES). Fresh
-// transcript files are truncated per attempt. If all attempts stall, returns
-// ErrStalled. If a producing-but-slow process exceeds wall-clock Timeout, that
-// is terminal (not retried) and returns ErrTimeout.
+// Stall detection: if no tool execution completes (tool_execution_end in the
+// activity.jsonl) for the idle threshold (default 300s, configurable via
+// GOLEMIC_AGENT_IDLE_TIMEOUT_SEC), the process group is killed and retried (up
+// to maxStallRetries times, default 2, configurable via
+// GOLEMIC_AGENT_MAX_STALL_RETRIES). A tool currently in-flight
+// (tool_execution_start without matching tool_execution_end) suppresses the
+// stall unconditionally. Toolcall composition events (toolcall_*) do not count
+// as progress. Fresh transcript files are truncated per attempt. If all
+// attempts stall, returns ErrStalled. If a process exceeds wall-clock Timeout,
+// that is terminal (not retried) and returns ErrTimeout.
 //
 // The exit code is returned as-is (informational, not semantically interpreted).
 func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths TranscriptPaths, err error) {
@@ -408,16 +457,6 @@ func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, gole
 	return 0, fmt.Errorf("%w: role %q stalled after %d attempts with idle timeout %v", ErrStalled, cfg.Role, maxStallRetries+1, idleTimeout)
 }
 
-// trackTranscriptGrowth updates lastByteSize and lastGrowth based on observed transcript size.
-func trackTranscriptGrowth(currentSize int64, lastWrite time.Time, lastByteSize *int64, lastGrowth *time.Time) {
-	if currentSize > *lastByteSize {
-		*lastByteSize = currentSize
-		if lastWrite.After(*lastGrowth) {
-			*lastGrowth = lastWrite
-		}
-	}
-}
-
 // killProcessGroup sends SIGKILL to the process group, drains done, and closes transcript files.
 // Returns the kill error (nil on success).
 func killProcessGroup(cmd *exec.Cmd, stdoutFile, stderrFile *os.File, done <-chan error) error {
@@ -439,8 +478,8 @@ func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFi
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	pollTicker := time.NewTicker(pollInterval)
-	lastGrowth := time.Now()
-	var lastByteSize int64
+	lastProgress := time.Now()
+	var toolState toolProgressState
 	var waitErr error
 
 	for {
@@ -456,11 +495,13 @@ func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFi
 			return 0, false, fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
 
 		case <-pollTicker.C:
-			currentSize, lastWrite := transcriptByteSize(stdoutFile, stderrFile)
-			trackTranscriptGrowth(currentSize, lastWrite, &lastByteSize, &lastGrowth)
-			if time.Since(lastGrowth) >= idleTimeout {
-				idleDuration := time.Since(lastGrowth)
-				fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no output for %v >= %v)\n",
+			newlyCompleted, inFlight := readToolProgress(stdoutFile.Name(), &toolState)
+			if newlyCompleted > 0 {
+				lastProgress = time.Now()
+			}
+			if !inFlight && time.Since(lastProgress) >= idleTimeout {
+				idleDuration := time.Since(lastProgress)
+				fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no tool completion for %v >= %v)\n",
 					cfg.Role, attempt, idleDuration, idleTimeout)
 				killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
 				pollTicker.Stop()
