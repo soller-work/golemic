@@ -39,7 +39,7 @@ TYPE_SECTIONS = {
 PLAN_ORDER = [
     "change_type", "stakeholder", "trigger", "success_outcome", "tldr", "scope",
     "behavior", "business_rules", "acceptance_scenarios", "inputs_outputs_errors",
-    "codebase_evidence", "verify_commands", "definition_of_done",
+    "proof", "codebase_evidence", "verify_commands", "definition_of_done",
     "security_relevant", "security", "blockers", "readiness",
 ]
 
@@ -54,6 +54,7 @@ PLAN_HINTS = {
     "business_rules": "String (Markdown): decision logic, constraints.",
     "acceptance_scenarios": "Array of strings: 'Given...When...Then...' proton.",
     "inputs_outputs_errors": "String (Markdown): I/O contract, validation, errors.",
+    "proof": "Object: {how, why, checks:[{functional, technical}]} — plain-language proof-of-delivery plan; functional=stakeholder ticks off, technical=implementation-agnostic criterion the reviewer confirms.",
     "codebase_evidence": "Array of {location: 'path:line', note: '...'} — findings from repo.",
     "verify_commands": "Array of strings: test, lint, deploy commands.",
     "definition_of_done": "Array of strings: completion criteria.",
@@ -121,6 +122,7 @@ def cmd_new(args: argparse.Namespace) -> None:
         "business_rules": "",
         "acceptance_scenarios": [],
         "inputs_outputs_errors": "",
+        "proof": {"how": "", "why": "", "checks": []},
         "codebase_evidence": [],
         "verify_commands": [],
         "definition_of_done": [],

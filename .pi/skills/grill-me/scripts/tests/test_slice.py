@@ -45,6 +45,11 @@ def load_minimal_slice():
         "business_rules": "",
         "acceptance_scenarios": ["Given user is logged in, when they click button, then state updates"],
         "inputs_outputs_errors": "Input: click event. Output: updated state. Errors: none.",
+        "proof": {
+            "how": "We click the button and see the state update.",
+            "why": "The update is the promised outcome.",
+            "checks": [{"functional": "Click updates state", "technical": "A test asserts the state update after the click"}],
+        },
         "verify_commands": ["pytest"],
         "definition_of_done": ["Tests pass", "Code reviewed"],
         "readiness": "ready",

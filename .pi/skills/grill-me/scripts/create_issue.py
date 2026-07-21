@@ -65,6 +65,12 @@ def validate_full(data: dict, schema: dict = None) -> tuple[bool, list[str]]:
     return len(errors) == 0, errors
 
 
+def _normalize_table_cell(text: str) -> str:
+    """Replace CR/LF sequences with spaces and escape pipes for Markdown table cells."""
+    text = text.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return text.replace("|", "\\|")
+
+
 def render_body(data: dict) -> str:
     """Render fixed Markdown body layout per v2 spec. All sections always present except conditional ones."""
     parts = []
@@ -115,6 +121,30 @@ def render_body(data: dict) -> str:
     if acceptance:
         for scenario in acceptance:
             parts.append(f"- {scenario}")
+    else:
+        parts.append("_None_")
+
+    # Proof of Delivery (always present)
+    proof = data.get("proof", {})
+    parts.append("## Proof of Delivery")
+    parts.append("**How we show it works (plain language):**")
+    how = proof.get("how", "").strip()
+    parts.append(how if how else "_None_")
+    parts.append("**Why this is convincing:**")
+    why = proof.get("why", "").strip()
+    parts.append(why if why else "_None_")
+    checks = proof.get("checks", [])
+    parts.append("**Reviewer checklist:**")
+    if checks:
+        table = [
+            "| Functional (stakeholder) | Technical evidence (reviewer confirms) |",
+            "| --- | --- |",
+        ]
+        for c in checks:
+            functional = _normalize_table_cell(c.get("functional", ""))
+            technical = _normalize_table_cell(c.get("technical", ""))
+            table.append(f"| {functional} | {technical} |")
+        parts.append("\n".join(table))
     else:
         parts.append("_None_")
 

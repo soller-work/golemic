@@ -18,6 +18,15 @@
     "Given a shipped order, when cancel-order is called, then the request is rejected."
   ],
   "inputs_outputs_errors": "Input: order_id (string, required).\nOutput: cancelled order object.\nErrors: ORDER_NOT_OWNED when the order belongs to a different user; ORDER_ALREADY_SHIPPED when the order status is SHIPPED.",
+  "proof": {
+    "how": "We walk through cancelling a real order and see it flip to 'cancelled', then try to cancel an order that already shipped and see it refused, and try to cancel someone else's order and see it refused.",
+    "why": "These three walk-throughs cover exactly the promise: your own pending order can be cancelled, and the two cases that must never succeed (already shipped, not yours) are actively blocked — so if all three behave as described, the feature does what was asked.",
+    "checks": [
+      {"functional": "Cancelling my own pending order marks it as cancelled.", "technical": "An automated test cancels a pending order owned by the caller and asserts the status becomes cancelled."},
+      {"functional": "A shipped order cannot be cancelled.", "technical": "An automated test attempts to cancel a SHIPPED order and asserts an ORDER_ALREADY_SHIPPED error with no state change."},
+      {"functional": "I cannot cancel an order that isn't mine.", "technical": "An automated test attempts to cancel an order owned by another user and asserts an ORDER_NOT_OWNED error."}
+    ]
+  },
   "verify_commands": ["go test ./..."],
   "definition_of_done": ["All acceptance scenarios pass", "Unit tests green"],
   "readiness": "blocked",
