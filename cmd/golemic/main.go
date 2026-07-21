@@ -865,7 +865,7 @@ func (e osExecutor) Run(name string, args ...string) (string, error) {
 
 func (e osExecutor) RunWithEnv(env map[string]string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "GOLEMIC_GH_AUTHORIZED=1")
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
@@ -897,7 +897,7 @@ func (e osExecutor) RunInDir(dir string, name string, args ...string) (string, e
 func (e osExecutor) RunWithEnvInDir(env map[string]string, dir string, name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "GOLEMIC_GH_AUTHORIZED=1")
 	for k, v := range env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
