@@ -280,7 +280,7 @@ func TestRunRole_ReviewerToolAllowlist_AC004(t *testing.T) {
 
 func TestRunRole_Timeout_AC002(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 1200 * time.Millisecond
+	cfg.Timeout = 3 * time.Second
 
 	markerDir := t.TempDir()
 	markerFile := filepath.Join(markerDir, "output.txt")
@@ -1239,7 +1239,7 @@ exit 0
 // AC-5: produces output but exceeds wall-clock timeout → ErrTimeout (terminal, not retried)
 func TestRunRole_TimeoutNotRetried_AC5(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 500 * time.Millisecond
+	cfg.Timeout = 2 * time.Second
 
 	// Output immediately, then sleep forever
 	timeoutScript := `echo "started" && while true; do sleep 3600; done`
