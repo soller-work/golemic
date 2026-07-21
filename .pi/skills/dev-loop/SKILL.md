@@ -39,7 +39,11 @@ commit messages, PR title/body, task briefings, review findings. See
 
 ## Agents
 
-Both project-local under `.pi/agents/`:
+Persona and model for each role are defined in `.golemic/agents/{role}.md` — that is the single source of truth. The `.pi/agents/*.md` files are symlinks that point there; Claude Code picks them up automatically. Do **not** edit `.pi/agents/*.md` directly — edit `.golemic/agents/{role}.md` instead.
+
+The model chain is read from each agent's frontmatter `model:` field — there is no separate model config.
+
+Available roles:
 - `dev` — implements the change.
 - `reviewer` — reviews the diff, returns a verdict.
 
@@ -83,10 +87,12 @@ Task must contain, in this order:
    `go build ./... && go vet ./... && go test -count=1 ./...` green; external
    commands (`gh`, `git`, `pi`) only behind injectable interfaces (§2.12).
 7. **Out of scope**: verbatim from the slice.
-8. **Commit, don't push yet**: commit on `golemic/issue-N` with a meaningful
-   message. Do **not** push or open a PR — that happens after approval.
-9. **Report format**: what changed, how verified, AC→test mapping, remaining
-   risks.
+8. **Project guidelines**: inject the full contents of `.golemic/guidelines/dev.md`
+   so the dev applies project-specific coding standards and conventions.
+9. **Commit, don't push yet**: commit on `golemic/issue-N` with a meaningful
+   message. Do **not** push or open a PR — that happens after reviewer approval.
+10. **Report format**: what changed, how verified, AC→test mapping, remaining
+    risks.
 
 Save the returned `sessionId` — you need it for round 2.
 
@@ -100,9 +106,20 @@ Task must contain:
 4. **AC coverage check (blocker-level)**: verify the dev's AC→test mapping —
    every acceptance scenario must trace to a real, meaningful automated test. A
    missing or hollow test is a P1/P2 finding.
-5. **Verdict contract**: severity-tagged findings (`P1`–`P4`) with `file:line`
-   refs and concrete fixes. Final line must be `VERDICT: APPROVED` or
-   `VERDICT: CHANGES_REQUESTED`.
+5. **Project guidelines**: inject the full contents of `.golemic/guidelines/reviewer.md`
+   so the reviewer applies project-specific standards when evaluating the diff.
+6. **Verdict contract**: provide severity-tagged findings (`P1`–`P4`) with
+   `file:line` refs and concrete fixes. The **final line** of the review report
+   must be exactly one of:
+   ```
+   VERDICT: APPROVED
+   ```
+   or
+   ```
+   VERDICT: CHANGES_REQUESTED
+   ```
+   This line is how the orchestrator reads the verdict — no other format is
+   accepted.
 
 Reviewer sessions can be reused across rounds — save the `sessionId`.
 
