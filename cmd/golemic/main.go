@@ -66,6 +66,7 @@ var knownCommands = []struct {
 	{"status", "Show run health status"},
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
 	{"slice", "Print the authoritative task spec for an issue (golemic slice --issue N)"},
+	{"pr-view", "Print pull request context for a PR number (golemic pr-view --pr N)"},
 	{"claim-issue", "Claim an issue as in-progress for the dev-bot (golemic claim-issue --number N)"},
 	{"release-issue", "Release a claimed issue lock with reason-driven label handoff (golemic release-issue --number N --reason done|failed|abandoned)"},
 	{"run-loop", "Run the autonomous 60-second polling loop for takeable issues"},
@@ -178,6 +179,8 @@ func dispatchExtendedCommands(command string, args []string, stdout, stderr io.W
 		return runNextIssue(args, stdout, stderr, osExecutor{}), true
 	case "slice":
 		return runSlice(args, stdout, stderr, osExecutor{}), true
+	case "pr-view":
+		return runPRView(args, stdout, stderr, osExecutor{}), true
 	case "claim-issue":
 		return runClaimIssue(args, stdout, stderr, os.Getenv, osExecutor{}), true
 	case "release-issue":
