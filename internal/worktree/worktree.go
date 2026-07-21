@@ -295,6 +295,9 @@ func appendExcludePattern(excludePath, pattern string) error {
 			return nil
 		}
 	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0755); err != nil {
+		return fmt.Errorf("create exclude dir: %w", err)
+	}
 	f, err := os.OpenFile(excludePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return fmt.Errorf("open exclude file: %w", err)
