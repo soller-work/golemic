@@ -226,3 +226,25 @@ class TestCreateIssueArchiving:
         assert "def archive_slice" in create_issue_code
 
 
+class TestChangeTypeToIssueType:
+    """Tests for change_type → GitHub issue type mapping."""
+
+    @pytest.mark.parametrize("change_type,expected_type", [
+        ("feature", "Feature"),
+        ("bug", "Bug"),
+        ("refactoring", "Task"),
+    ])
+    def test_dry_run_shows_mapped_issue_type(self, change_type, expected_type):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            slice_path = tmpdir / "slice.json"
+
+            data = load_minimal_slice()
+            data["change_type"] = change_type
+            slice_path.write_text(json.dumps(data))
+
+            code, stdout, stderr = run_create_issue_py(str(slice_path), "--dry-run")
+            assert code == 0, f"dry-run failed: {stderr}"
+            assert f"--type {expected_type!r}" in stdout
+
+
