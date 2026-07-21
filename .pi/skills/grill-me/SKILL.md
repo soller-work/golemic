@@ -37,9 +37,15 @@ The **only** writes you ever perform are the slice JSON scratch files (via `slic
 3. **Every question is multiple choice.** Offer **max 4 options**, then a clear recommendation with reasoning. See format below.
 4. **Confirm before filing.** When you have everything, just ask whether you're done and may create the issue. Don't dump the full filled-out slice for review — a simple go/no-go is enough. The one thing you *do* spell out at this point is the **proof plan**: in plain language, tell the user how you intend to prove the change does what they asked and why that convinces you (the `proof.how` / `proof.why` you filled). This is your obligation to the non-technical stakeholder — they approve the standard of proof before the issue is filed.
 
+## Language Policy
+
+**Interview language:** Follow the language the user starts the session in. If they write German, ask in German. If English, ask in English. Never switch the user to a different language mid-interview.
+
+**Artifact language:** Every field you author in the slice — title, tldr, stakeholder, trigger, success_outcome, scope bullets, behavior, business_rules, acceptance_scenarios, inputs_outputs_errors, proof.how, proof.why, proof.checks entries, definition_of_done, blockers text, and root_cause / reproduction / regression_scenarios / current_structure / target_structure / behavior_preservation — **must be written in English**, regardless of the session language. Technical identifiers (file paths, function names, commands, code symbols, issue numbers, quoted literals) are never translated; they stay as-is. The GitHub issue title and body are implementation contracts consumed by reviewers and agents worldwide; they must be consistently English.
+
 ## Question Format
 
-Only ask when the answer is a product judgment the code can't make. Then:
+Only ask when the answer is a product judgment the code can't make. Then ask in the user's session language, for example in German:
 
 > **Frage N — <Topic>**
 > <Die eine Entscheidung, die du brauchst — kurz.>
