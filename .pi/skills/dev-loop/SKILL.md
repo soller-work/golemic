@@ -39,11 +39,18 @@ commit messages, PR title/body, task briefings, review findings. See
 
 ## Agents
 
-Both project-local under `.pi/agents/`:
+The **single source of truth** for each agent's persona body and model chain is
+`.golemic/agents/{role}.md` (e.g. `.golemic/agents/dev.md`,
+`.golemic/agents/reviewer.md`). The `.pi/agents/` entries are symlinks into that
+directory — do not edit them directly, and do not treat them as authoritative.
+The model used for each subagent comes from the `model:` field in the agent's
+frontmatter in `.golemic/agents/{role}.md`; there is no separate model config.
+
+Invoke with `agentScope: "both"` and `confirmProjectAgents: false`.
+
+Roles:
 - `dev` — implements the change.
 - `reviewer` — reviews the diff, returns a verdict.
-
-Always invoke with `agentScope: "both"` and `confirmProjectAgents: false`.
 
 ## Isolated worktree (mandatory)
 
@@ -73,20 +80,24 @@ Task must contain, in this order:
 1. **Issue number + one-line goal**, taken from the slice `title`.
 2. **Spec pointer**: instruct the dev to run `golemic slice --issue N` and treat
    that output as the source of truth, plus the architecture §§ it references.
-3. **What already exists**: relevant existing files the work builds on.
-4. **Scope**: from the slice — scope, business rules, interfaces/process steps,
+3. **Project guidelines**: include the full contents of `.golemic/guidelines/dev.md`
+   verbatim under a "Project Guidelines" heading.
+4. **What already exists**: relevant existing files the work builds on.
+5. **Scope**: from the slice — scope, business rules, interfaces/process steps,
    state changes.
-5. **AC→test mapping**: every acceptance scenario must be covered by at least one
+6. **AC→test mapping**: every acceptance scenario must be covered by at least one
    named automated test. The dev's report must include the mapping (AC → test
    function).
-6. **Definition of Done**: the slice's quality gates; at minimum
+7. **Definition of Done**: the slice's quality gates; at minimum
    `go build ./... && go vet ./... && go test -count=1 ./...` green; external
    commands (`gh`, `git`, `pi`) only behind injectable interfaces (§2.12).
-7. **Out of scope**: verbatim from the slice.
-8. **Commit, don't push yet**: commit on `golemic/issue-N` with a meaningful
-   message. Do **not** push or open a PR — that happens after approval.
-9. **Report format**: what changed, how verified, AC→test mapping, remaining
-   risks.
+8. **Out of scope**: verbatim from the slice.
+9. **Commit, don't push yet**: commit on `golemic/issue-N` with a meaningful
+   message following Conventional Commits with the slice number
+   (e.g. `fix(runner): … (117)`). Do **not** push or open a PR — that happens
+   after the reviewer approves.
+10. **Report format**: what changed, how verified, AC→test mapping, remaining
+    risks.
 
 Save the returned `sessionId` — you need it for round 2.
 
@@ -94,15 +105,26 @@ Save the returned `sessionId` — you need it for round 2.
 
 Task must contain:
 1. **Issue number + spec pointer** (reviewer also runs `golemic slice --issue N`).
-2. **File list**: new and modified files (from `git status` / `git diff`).
-3. **Review focus**: the slice's acceptance scenarios as a checklist, plus edge
+2. **Project guidelines**: include the full contents of `.golemic/guidelines/reviewer.md`
+   verbatim under a "Project Guidelines" heading.
+3. **File list**: new and modified files (from `git status` / `git diff`).
+4. **Review focus**: the slice's acceptance scenarios as a checklist, plus edge
    cases and any claims from the dev's report that deserve scrutiny.
-4. **AC coverage check (blocker-level)**: verify the dev's AC→test mapping —
+5. **AC coverage check (blocker-level)**: verify the dev's AC→test mapping —
    every acceptance scenario must trace to a real, meaningful automated test. A
    missing or hollow test is a P1/P2 finding.
-5. **Verdict contract**: severity-tagged findings (`P1`–`P4`) with `file:line`
-   refs and concrete fixes. Final line must be `VERDICT: APPROVED` or
-   `VERDICT: CHANGES_REQUESTED`.
+6. **Verdict contract**: severity-tagged findings (`P1`–`P4`) with `file:line`
+   refs and concrete fixes. The **final line** of the report must be exactly one
+   of:
+   ```
+   VERDICT: APPROVED
+   ```
+   or
+   ```
+   VERDICT: CHANGES_REQUESTED
+   ```
+   This is how the orchestrator reads the verdict in the manual flow. Do **not**
+   use `golemic submit-review` — that is the runner path and does not apply here.
 
 Reviewer sessions can be reused across rounds — save the `sessionId`.
 
