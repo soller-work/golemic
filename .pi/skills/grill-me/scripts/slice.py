@@ -37,13 +37,14 @@ TYPE_SECTIONS = {
 }
 
 PLAN_ORDER = [
-    "stakeholder", "trigger", "success_outcome", "tldr", "scope",
+    "change_type", "stakeholder", "trigger", "success_outcome", "tldr", "scope",
     "behavior", "business_rules", "acceptance_scenarios", "inputs_outputs_errors",
     "codebase_evidence", "verify_commands", "definition_of_done",
     "security_relevant", "security", "blockers", "readiness",
 ]
 
 PLAN_HINTS = {
+    "change_type": "Enum: 'feature', 'bug', or 'refactoring' — intent/proof category.",
     "stakeholder": "String: who is the primary stakeholder.",
     "trigger": "String: what triggers this capability.",
     "success_outcome": "String: the desired outcome.",
@@ -109,6 +110,7 @@ def cmd_new(args: argparse.Namespace) -> None:
 
     skeleton = {
         "slice_type": slice_type,
+        "change_type": "feature",
         "title": "",
         "stakeholder": "",
         "trigger": "",

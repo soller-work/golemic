@@ -39,6 +39,7 @@ def load_minimal_slice():
     """Create a minimal valid slice dict."""
     return {
         "slice_type": "command",
+        "change_type": "feature",
         "title": "Test",
         "stakeholder": "User",
         "trigger": "Action",

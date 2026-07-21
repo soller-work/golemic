@@ -19,6 +19,7 @@ def load_minimal_slice():
     """Create a minimal valid slice dict."""
     return {
         "slice_type": "command",
+        "change_type": "feature",
         "title": "Test Issue",
         "stakeholder": "User",
         "trigger": "User action",
@@ -51,7 +52,7 @@ class TestCreateIssueRender:
     """Tests for fixed body layout."""
 
     def test_dry_run_renders_tldr_header(self):
-        """Test --dry-run renders TL;DR header with slice_type and tldr."""
+        """Test --dry-run renders TL;DR header with change_type, slice_type, and tldr."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             slice_path = tmpdir / "slice.json"
@@ -62,6 +63,7 @@ class TestCreateIssueRender:
             code, stdout, stderr = run_create_issue_py(str(slice_path), "--dry-run")
             assert code == 0, f"dry-run should succeed: {stderr}"
             assert "TL;DR" in stdout
+            assert "feature" in stdout
             assert "command" in stdout
             assert "Update state" in stdout
 

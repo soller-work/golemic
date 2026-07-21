@@ -71,8 +71,9 @@ def render_body(data: dict) -> str:
 
     # TL;DR header block
     slice_type = data.get("slice_type", "?")
+    change_type = data.get("change_type", "?")
     tldr = data.get("tldr", "")
-    parts.append(f"> **TL;DR** · `{slice_type}` · {tldr}")
+    parts.append(f"> **TL;DR** · `{change_type}` · `{slice_type}` · {tldr}")
     parts.append(f"> **Trigger:** {data.get('trigger', '')}")
     parts.append(f"> **Result:** {data.get('success_outcome', '')}")
 

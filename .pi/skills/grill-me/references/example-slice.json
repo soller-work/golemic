@@ -1,5 +1,6 @@
 {
   "slice_type": "command",
+  "change_type": "feature",
   "title": "Cancel Order",
   "stakeholder": "Customer support agent",
   "trigger": "Agent calls cancel-order with an order ID",
