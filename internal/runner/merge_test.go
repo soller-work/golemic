@@ -579,9 +579,9 @@ func TestVerifyAndPush_GreenCI_MergesSuccessfully_AC001(t *testing.T) { //nolint
 				if isGHCheckRunsAPI(args) {
 					checksCall++
 					if checksCall == 1 {
-						return ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "in_progress"}}), nil
+						return ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}}), nil
 					}
-					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}}), nil
+					return requiredVerifyCheckRunsJSON(), nil
 				}
 				if resp, ok := dispatchMergeGh(args, nil, nil, nil, "sha-abc"); ok {
 					return resp, nil
@@ -632,7 +632,7 @@ func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolin
 					if checksCall == 1 {
 						return ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}}), nil
 					}
-					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "failure"}}), nil
+					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "failure"}}), nil
 				}
 				if resp, ok := dispatchMergeGh(args, nil, nil, nil, ""); ok {
 					return resp, nil

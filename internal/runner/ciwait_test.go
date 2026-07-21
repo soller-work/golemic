@@ -36,6 +36,11 @@ func ghCheckRunsJSON(items []ghCheckRunItem) string {
 	return string(b)
 }
 
+func requiredVerifyCheckRunsJSON(items ...ghCheckRunItem) string {
+	checks := append([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}, items...)
+	return ghCheckRunsJSON(checks)
+}
+
 // emptyCheckRunsJSON is the API response when no check runs exist for a SHA.
 const emptyCheckRunsJSON = `{"total_count":0,"check_runs":[]}`
 
@@ -286,12 +291,12 @@ func TestQueryCIChecks_NoChecks_AC002(t *testing.T) {
 	}
 }
 
-// AC-001: all check runs completed successfully → green
+// AC-001: all required check runs completed successfully → green
 func TestQueryCIChecks_AllPassed_AC001(t *testing.T) {
-	checks := ghCheckRunsJSON([]ghCheckRunItem{
-		{Name: "build", Status: "completed", Conclusion: "success"},
-		{Name: "lint", Status: "completed", Conclusion: "skipped"},
-	})
+	checks := requiredVerifyCheckRunsJSON(
+		ghCheckRunItem{Name: "build", Status: "completed", Conclusion: "success"},
+		ghCheckRunItem{Name: "lint", Status: "completed", Conclusion: "skipped"},
+	)
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 
 	result, _, err := r.queryCIChecks(99)
@@ -327,7 +332,7 @@ func TestQueryCIChecks_HasFailed_AC003(t *testing.T) {
 func TestQueryCIChecks_StillPending(t *testing.T) {
 	checks := ghCheckRunsJSON([]ghCheckRunItem{
 		{Name: "build", Status: "completed", Conclusion: "success"},
-		{Name: "test", Status: "in_progress"},
+		{Name: "verify", Status: "in_progress"},
 	})
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 
@@ -444,7 +449,7 @@ func TestQueryCIChecks_FailClosed_AC007(t *testing.T) {
 
 // AC-001: immediate green → no wait
 func TestPollCIChecks_ImmediateGreen_AC001(t *testing.T) {
-	checks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
+	checks := requiredVerifyCheckRunsJSON()
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
 
 	result, _, err := r.pollCIChecks(99, 5*time.Second)
@@ -485,6 +490,34 @@ func TestPollCIChecks_NoChecksPassThrough_AC002(t *testing.T) {
 	}
 }
 
+// Regression: an optional green check without the required verify check must stay pending.
+func TestQueryCIChecks_OptionalGreenRequiredAbsent_Pending(t *testing.T) {
+	checks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
+	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
+
+	result, _, err := r.queryCIChecks(99)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "pending" {
+		t.Errorf("result: got %q, want %q", result, "pending")
+	}
+}
+
+func TestPollCIChecks_OptionalGreenRequiredAbsent_TimesOut(t *testing.T) {
+	checks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
+	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
+	r.SetCIPollInterval(1 * time.Millisecond)
+
+	result, _, err := r.pollCIChecks(99, 5*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "timeout" {
+		t.Errorf("result: got %q, want %q", result, "timeout")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // writeCIWaitFinished
 // ---------------------------------------------------------------------------
@@ -508,7 +541,7 @@ func TestWriteCIWaitFinished_WritesCorrectEvent(t *testing.T) {
 
 // AC-001: green checks release the reviewer
 func TestRunCIGate_GreenPassThrough_AC001(t *testing.T) {
-	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
+	greenChecks := requiredVerifyCheckRunsJSON()
 	exec := ciGateExecutor([]string{greenChecks}, nil, nil)
 	r, logPath, _ := buildCIGateRunner(t, exec)
 
@@ -528,7 +561,7 @@ func TestRunCIGate_GreenPassThrough_AC001(t *testing.T) {
 
 // AC-002: no checks → immediate pass-through
 func TestRunCIGate_NoChecksPassThrough_AC002(t *testing.T) {
-	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "completed", Conclusion: "success"}})
+	greenChecks := requiredVerifyCheckRunsJSON()
 	exec := ciGateExecutor([]string{emptyCheckRunsJSON, greenChecks}, nil, nil)
 	r, logPath, _ := buildCIGateRunner(t, exec)
 
@@ -549,7 +582,7 @@ func TestRunCIGate_NoChecksPassThrough_AC002(t *testing.T) {
 // AC-003: red build triggers dev retry that heals the PR
 func TestRunCIGate_RedThenGreen_AC003(t *testing.T) {
 	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
-	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "success"}})
+	greenChecks := requiredVerifyCheckRunsJSON()
 
 	lsRemoteResps := []string{
 		"sha1abc\trefs/heads/golemic/issue-42\n",
@@ -621,7 +654,7 @@ func TestRunCIGate_ExhaustedRetries_AC004(t *testing.T) {
 // AC-005: CI timeout is treated as red → triggers retry
 func TestRunCIGate_TimeoutTreatedAsRed_AC005(t *testing.T) {
 	pendingChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "in_progress"}})
-	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "success"}})
+	greenChecks := requiredVerifyCheckRunsJSON()
 
 	lsRemoteResps := []string{
 		"sha1\trefs/heads/golemic/issue-42\n",
@@ -887,7 +920,7 @@ func TestQueryCIChecks_RequireCIChecksTrue_NoChecksMappedToPending(t *testing.T)
 
 // AC-003: require_ci_checks=true, no_checks then green → pollCIChecks returns green.
 func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenGreen_AC003(t *testing.T) {
-	greenChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})
+	greenChecks := requiredVerifyCheckRunsJSON()
 
 	callIdx := 0
 	responses := []string{emptyCheckRunsJSON, greenChecks}

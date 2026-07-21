@@ -20,6 +20,9 @@ const (
 	defaultCIPollInterval = 10 * time.Second
 	maxCILogBytes         = 8000
 	maxCIFixRounds        = 2
+
+	// branchProtectionRequiredCICheck is the required CI context trusted for green.
+	branchProtectionRequiredCICheck = "verify"
 )
 
 // ghCheckItem is the internal check representation used throughout the CI gate.
@@ -221,7 +224,11 @@ func (r *Runner) noChecksResult() string {
 func classifyChecks(checks []ghCheckItem) (string, []ghCheckItem, error) {
 	var failed []ghCheckItem
 	hasPending := false
+	hasRequiredCheck := false
 	for _, c := range checks {
+		if c.Name == branchProtectionRequiredCICheck {
+			hasRequiredCheck = true
+		}
 		switch categorizeBucket(c.Bucket) {
 		case "fail":
 			failed = append(failed, c)
@@ -232,7 +239,7 @@ func classifyChecks(checks []ghCheckItem) (string, []ghCheckItem, error) {
 	if len(failed) > 0 {
 		return "red", failed, nil
 	}
-	if hasPending {
+	if hasPending || !hasRequiredCheck {
 		return "pending", nil, nil
 	}
 	return "green", nil, nil
