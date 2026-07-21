@@ -143,7 +143,6 @@ type RoleConfig struct {
 	ToolAllowlist     []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
 	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
 	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
-	Approve           bool          // when true, --approve is added to the pi argv (for project-local MCP config)
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.
@@ -330,9 +329,6 @@ func buildPiArgs(cfg RoleConfig, model, sessionID string) []string {
 		"--append-system-prompt", "@" + cfg.SystemPromptFile,
 		"--tools", strings.Join(cfg.ToolAllowlist, ","),
 		"--model", model,
-	}
-	if cfg.Approve {
-		args = append(args, "--approve")
 	}
 	return append(args, cfg.UserPrompt)
 }

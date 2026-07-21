@@ -24,3 +24,6 @@ Conventional Commits with slice number: `type(scope): summary (NNN)` — e.g. `f
 - No global mutable state; no hidden side effects.
 - No panics for normal errors; do not ignore errors; do not destroy error chains with `%v`.
 - Do not store `context.Context` in structs; no premature optimization; no clever one-liners at the cost of readability.
+
+## Exploring the Codebase
+The worktree is indexed into a code-intelligence graph. Prefer `golemic cbm search_graph`, `golemic cbm search_code`, `golemic cbm get_code_snippet`, `golemic cbm trace_call_path`, `golemic cbm query_graph`, `golemic cbm get_architecture`, and `golemic cbm get_graph_schema` over `grep`/`find`/broad `read` for structural exploration — they answer in one call instead of many.

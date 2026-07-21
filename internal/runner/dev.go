@@ -11,14 +11,7 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/prompt"
 	"golemic/internal/telemetry"
-	"golemic/internal/worktree"
 )
-
-// cbmDevTools are the read-only graph tools granted to the dev agent when codebase-memory is enabled.
-var cbmDevTools = []string{
-	"search_graph", "trace_call_path", "query_graph",
-	"get_architecture", "get_graph_schema", "get_code_snippet", "search_code",
-}
 
 // runDevRetryAgent runs the dev agent in the existing worktree to address reviewer findings.
 // findings must be non-empty (enforced by RenderDevRetry). findingsJSON may be empty.
@@ -99,10 +92,6 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	if cbmEnabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
 		r.indexWorktree(devWorktreePath, cbmCacheDir)
-		if err := worktree.WriteMCPFiles(devWorktreePath, cbmCacheDir); err != nil {
-			fmt.Fprintf(r.stderr, "Warning: failed to write CBM MCP files for dev worktree: %v\n", err)
-			cbmEnabled = false
-		}
 	}
 
 	// Render dev prompt
@@ -129,10 +118,6 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
-	devTools := []string{"read", "bash", "write", "edit"}
-	if cbmEnabled {
-		devTools = append(devTools, cbmDevTools...)
-	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  systemPromptFile,
@@ -145,9 +130,8 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
-		ToolAllowlist:     devTools,
+		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
-		Approve:           cbmEnabled,
 	})
 
 	if err != nil {
@@ -192,10 +176,6 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 
 // buildDevAgentConfig creates the agent.RoleConfig for the dev retry agent.
 func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, cbmEnabled bool) agent.RoleConfig {
-	tools := []string{"read", "bash", "write", "edit"}
-	if cbmEnabled {
-		tools = append(tools, cbmDevTools...)
-	}
 	return agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  systemPromptFile,
@@ -208,9 +188,8 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
-		ToolAllowlist:     tools,
+		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
-		Approve:           cbmEnabled,
 	}
 }
 

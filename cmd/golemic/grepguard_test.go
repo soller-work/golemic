@@ -231,3 +231,51 @@ func findModuleRoot(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// TestGrepGuard_NoMCPWiring enforces BR-C6: the dead MCP integration surfaces
+// (.mcp.json, WriteMCPFiles, mcpServers, --approve for pi) must not reappear
+// in any production Go source file under internal/ or cmd/.
+func TestGrepGuard_NoMCPWiring(t *testing.T) { //nolint:cyclop
+	root := findModuleRoot(t)
+	badPatterns := []string{".mcp.json", "WriteMCPFiles", "mcpServers", `"--approve"`}
+
+	var violations []string
+	for _, searchRoot := range []string{
+		filepath.Join(root, "internal"),
+		filepath.Join(root, "cmd"),
+	} {
+		walkErr := filepath.WalkDir(searchRoot, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				name := d.Name()
+				if name == ".git" || name == "vendor" || name == "node_modules" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return readErr
+			}
+			rel, _ := filepath.Rel(root, path)
+			for _, pat := range badPatterns {
+				if strings.Contains(string(data), pat) {
+					violations = append(violations, rel+": "+pat)
+				}
+			}
+			return nil
+		})
+		if walkErr != nil {
+			t.Fatalf("walk error under %s: %v", searchRoot, walkErr)
+		}
+	}
+	if len(violations) > 0 {
+		t.Errorf("BR-C6: dead MCP wiring found in production Go files:\n  %s",
+			strings.Join(violations, "\n  "))
+	}
+}

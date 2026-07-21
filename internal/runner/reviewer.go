@@ -14,12 +14,7 @@ import (
 	"golemic/internal/eventlog"
 	"golemic/internal/prompt"
 	"golemic/internal/telemetry"
-	"golemic/internal/worktree"
 )
-
-// cbmReviewerTools are the read-only graph tools granted to the reviewer agent when codebase-memory is enabled.
-// detect_changes (git-diff blast radius) is reviewer-only per BR-4.
-var cbmReviewerTools = append(append([]string{}, cbmDevTools...), "detect_changes")
 
 // graphqlDiscoverPending queries the viewer's PENDING reviews on a PR.
 // states:[PENDING] already scopes to the token's own pending reviews, so no author filter is needed
@@ -191,10 +186,6 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	if cbmEnabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
 		r.indexWorktree(reviewerWorktreePath, cbmCacheDir)
-		if err := worktree.WriteMCPFiles(reviewerWorktreePath, cbmCacheDir); err != nil {
-			fmt.Fprintf(r.stderr, "Warning: failed to write CBM MCP files for reviewer worktree: %v\n", err)
-			cbmEnabled = false
-		}
 	}
 
 	// Get PR number from pr_opened event
@@ -228,10 +219,6 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
-	revTools := []string{"read", "bash"}
-	if cbmEnabled {
-		revTools = append(revTools, cbmReviewerTools...)
-	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "reviewer",
 		SystemPromptFile:  systemPromptFile,
@@ -244,9 +231,8 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
-		ToolAllowlist:     revTools,
+		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
-		Approve:           cbmEnabled,
 	})
 
 	if err != nil {
