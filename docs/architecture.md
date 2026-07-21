@@ -162,7 +162,7 @@ Lifecycle-Events schreibt der Runner selbst.
 | Runner | `worktree_created` | `path`, `branch`, `baseSha`, `role` |
 | Dev (`emit`) | `dev_started` | – |
 | Dev (`open-pr`) | `pr_opened` | `prNumber`, `url`, `branch` |
-| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`high`/`low`), `reviewId` (GraphQL node id), `inlineCommentCount` (int ≥ 0) |
+| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`low`/`medium`/`high`), `reviewId` (GraphQL node id), `inlineCommentCount` (int ≥ 0) |
 | Runner | `ci_wait_finished` | `result`, `round` |
 | Runner | `automerge_skipped` | `reason` |
 | Runner | `automerge_failed` | `reason` |
@@ -454,7 +454,7 @@ validated fail-fast before any `gh` call and mirrored as a `confidence:*` label 
 - `internal/runner/merge.go` — gate, rebase, verify, push, squash merge
 - `internal/eventlog/eventlog.go` — `pr_merged`, `automerge_skipped`, `automerge_failed` event types; extended `review_submitted` payload with `reviewId` + `inlineCommentCount`
 - `cmd/golemic/main.go` — `review-comment` subcommand; GraphQL-based `submit-review`; `--merge-confidence` flag and PR label mirroring
-- `prompts/reviewer.md` — three-tier merge confidence criteria (low blocks; medium/high auto-merge)
+- `.golemic/agents/reviewer.md` — three-tier merge confidence criteria (low blocks; medium/high auto-merge)
 
 ### Pre-round Sweep and FindingsJSON Injection (Slice B of #35)
 

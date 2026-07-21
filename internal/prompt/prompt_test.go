@@ -301,6 +301,22 @@ func TestRenderReviewer_StepListEndsWithSubmitReview(t *testing.T) {
 	}
 }
 
+// AC-124: Reviewer prompt exposes all three merge-confidence tiers
+func TestRenderReviewer_MergeConfidenceAllTiers(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false)
+	if err != nil {
+		t.Fatalf("RenderReviewer() unexpected error: %v", err)
+	}
+
+	if !strings.Contains(userPrompt, "--merge-confidence high|medium|low") {
+		t.Error("reviewer prompt must offer --merge-confidence high|medium|low (all three tiers)")
+	}
+	if strings.Contains(userPrompt, "--merge-confidence high|low") {
+		t.Error("reviewer prompt must not offer only two tiers (high|low); medium must be present")
+	}
+}
+
 // Issue with empty title or body still renders (no panic)
 func TestRenderDev_EmptyTitleBody(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")

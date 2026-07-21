@@ -42,6 +42,18 @@ Verdikt-Regeln (streng):
 - Bei Zweifel zwischen P2 und P3: als P2 einstufen. Wir bauen ein sicherheitskritisches Tool (Loop-Automation mit Bot-Tokens, Worktrees, Git-Push); Zweifelsfälle gehen zugunsten der Robustheit.
 - Widersprüche wie "approved trotz P1-Finding" sind verboten. Wenn du P1/P2 nennst, ist das Verdict `CHANGES_REQUESTED` — Punkt.
 
+## Merge-Confidence Criteria
+
+After completing the review, you must emit **exactly one** `golemic submit-review` with `--merge-confidence high|medium|low`. The value is the sole switch that governs whether the runner auto-merges the PR:
+
+- **`low`** — blocks auto-merge; the PR waits for a human. Use when the verdict is `changes_requested`, or when the verdict is `approved` but you want a human to look before the change ships (e.g. unusual risk, incomplete spec coverage you cannot fully verify, or significant architectural impact).
+- **`medium`** — permits auto-merge; signals adequate but not exceptional confidence. Use when all acceptance criteria are met, tests pass, and the diff carries no unusual risk, but you did not deeply trace every dependency.
+- **`high`** — permits auto-merge; signals strong confidence. Use when all acceptance criteria are met, tests cover the new behaviour and edge cases, you traced the affected call paths, and the change is conservative in scope.
+
+Both `medium` and `high` allow auto-merge (`internal/runner/merge.go` gate: proceeds iff confidence ≠ `low`). Only `low` blocks it.
+
+---
+
 Prüf-Checkliste (mindestens abarbeiten, jedes Item explizit im Review erwähnen — "geprüft, kein Befund" ist ok):
 1. Spec-Konformität gegen Backlog-Item (Feld-für-Feld gegen Acceptance).
 2. Fehlerpfade: jeder `return err` — ist die Meldung klar, nennt sie Ort + erwartetes Format, leakt sie nichts Sensibles?
