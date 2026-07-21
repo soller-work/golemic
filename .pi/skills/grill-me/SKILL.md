@@ -11,6 +11,25 @@ Understand what the user actually wants and why. Everything the codebase can ans
 
 The end product is a validated GitHub issue (an autonomously implementable vertical slice). You fill the whole slice; the user never dictates individual schema fields.
 
+## Hard Boundary — This Skill Only Creates Issues
+
+The **entire and only** job of this skill is to produce a GitHub issue. From the first message to the last, in every situation, the single artifact you may create is an issue. You never implement anything — not before the issue, not "as a quick fix," not after, not ever within this skill.
+
+This is absolute. It holds no matter how the request is phrased:
+
+- If the user describes a change as if they want it done → you turn it into an issue, you do **not** make the change.
+- If it looks trivial or like a one-line fix → still an issue, never a direct edit.
+- If the user says "just do it," "quick fix," "while you're at it," or seems to expect code → you still only produce an issue. If they truly want implementation, they must run the implementation flow (runner / dev-loop) separately; say so and keep grilling toward the issue.
+
+You **must never**, at any point in the session:
+
+- Edit, create, or delete source files, tests, configs, or docs in the repo.
+- Run anything that mutates the working tree, stage, or history (`git add/commit/branch/checkout`, formatters, codegen, migrations).
+- Open a PR, push, or otherwise act on the implementation.
+- Start implementing "to save a step" or hand off a half-written change.
+
+The **only** writes you ever perform are the slice JSON scratch files (via `slice.py`) and the GitHub issue itself (via `create_issue.py`). Reading and inspecting code is not just allowed but expected — changing it is strictly out of scope. When in doubt, the answer is: capture it in the issue, don't do it.
+
 ## Core Principles
 
 1. **Ask only what you can't find out yourself.** Classification (`command`/`query`/`process`/`integration`) and change type (`feature`/`bug`/`refactoring`), scope boundaries, behavior, business rules, acceptance scenarios, I/O contract, verify commands, and codebase evidence are *your* job to derive — never a question to the user. Inspect the code first; the user's time is for product intent, not form-filling.
@@ -55,7 +74,7 @@ Rules: max 4 options. Fewer is fine if fewer are real. Always name the recommend
 3. **Interview.** Ask only the open product decisions, one at a time, in the multiple-choice format above.
 4. **Fill the slice.** Use `slice.py write` (or `new` + `set`) to populate every field from intent + code + answers. Record each non-trivial assumption in `blockers` as `kind: assumption`.
 5. **Confirm.** Ask the user whether you're done and may create the issue. No field-by-field review.
-6. **Finalize and file.** `slice.py finalize <path>` (or `--blocked` if genuine blockers remain), then `create_issue.py <slice.json> [--blocked-by N[,N...]]`. Print the issue URL. The GitHub issue is now the artifact.
+6. **Finalize and file.** `slice.py finalize <path>` (or `--blocked` if genuine blockers remain), then `create_issue.py <slice.json> [--blocked-by N[,N...]]`. Print the issue URL. The GitHub issue is now the artifact. **Stop here** — do not implement, branch, or PR. See [Hard Boundary](#hard-boundary--you-only-produce-issues).
 
 ## Readiness Gate
 
