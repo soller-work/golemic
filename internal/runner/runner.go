@@ -542,7 +542,7 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 
 // pingPongLoop runs the bounded reviewer ping-pong loop (up to maxRounds).
 func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.EventWriter, timeout time.Duration, runSpanID string) string {
-	const maxRounds = 3
+	maxRounds := r.cfg.MaxReviewRounds
 
 	prNumber, err := r.getPRNumber(eventLogPath)
 	if err != nil {

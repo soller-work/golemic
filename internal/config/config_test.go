@@ -414,6 +414,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.CITimeoutMinutes != 15 {
 		t.Errorf("CITimeoutMinutes = %d, want %d", cfg.CITimeoutMinutes, 15)
 	}
+	if cfg.MaxReviewRounds != 5 {
+		t.Errorf("MaxReviewRounds = %d, want 5", cfg.MaxReviewRounds)
+	}
 }
 
 func TestLoadErrorsIsNotExist(t *testing.T) {
@@ -517,5 +520,66 @@ func TestCodebaseMemory_UnknownFieldStillRejected(t *testing.T) {
 	_, err := Load(dir)
 	if err == nil {
 		t.Fatal("expected error for unknown field, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// max_review_rounds config tests (issue-148)
+// ---------------------------------------------------------------------------
+
+func TestMaxReviewRounds_AbsentDefaultsFive(t *testing.T) {
+	cfg := writeAndLoad(t, t.TempDir(), `{"project":"p","verify_command":"v"}`)
+	if cfg.MaxReviewRounds != 5 {
+		t.Errorf("MaxReviewRounds = %d, want 5 (default)", cfg.MaxReviewRounds)
+	}
+}
+
+func TestMaxReviewRounds_ExplicitValue(t *testing.T) {
+	cfg := writeAndLoad(t, t.TempDir(), `{"project":"p","verify_command":"v","max_review_rounds":2}`)
+	if cfg.MaxReviewRounds != 2 {
+		t.Errorf("MaxReviewRounds = %d, want 2", cfg.MaxReviewRounds)
+	}
+}
+
+func TestMaxReviewRounds_ZeroRejected(t *testing.T) {
+	dir := t.TempDir()
+	golemicDir := filepath.Join(dir, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{"project":"p","verify_command":"v","max_review_rounds":0}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for max_review_rounds=0, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_review_rounds") {
+		t.Errorf("error must mention field name, got: %v", err)
+	}
+}
+
+func TestMaxReviewRounds_NegativeRejected(t *testing.T) {
+	dir := t.TempDir()
+	golemicDir := filepath.Join(dir, ".golemic")
+	if err := os.MkdirAll(golemicDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(golemicDir, "config.json"), []byte(`{"project":"p","verify_command":"v","max_review_rounds":-1}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("expected error for max_review_rounds=-1, got nil")
+	}
+	if !strings.Contains(err.Error(), "max_review_rounds") {
+		t.Errorf("error must mention field name, got: %v", err)
+	}
+}
+
+func TestDefaultConfig_MaxReviewRounds(t *testing.T) {
+	cfg := DefaultConfig("proj")
+	if cfg.MaxReviewRounds != 5 {
+		t.Errorf("DefaultConfig MaxReviewRounds = %d, want 5", cfg.MaxReviewRounds)
 	}
 }

@@ -200,8 +200,9 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
 	r.cfg = &config.Config{
-		VerifyCommand:  "go test",
-		TimeoutMinutes: 30,
+		VerifyCommand:   "go test",
+		TimeoutMinutes:  30,
+		MaxReviewRounds: 5,
 	}
 	r.issue = &issueData{Number: 42, Title: "Test Issue"}
 
@@ -388,6 +389,7 @@ func TestPingPong_ThreeChangesRequestedEscalates_AC003(t *testing.T) {
 	capture := &promptCapture{}
 
 	r, logPath, _ := setupPingPongRunner(t, exec)
+	r.cfg.MaxReviewRounds = 3
 	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
 		{role: "dev", exitCode: 0},
 		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
@@ -670,5 +672,92 @@ func TestLatestReviewBody(t *testing.T) {
 	}
 	if body != "second finding" {
 		t.Errorf("expected %q, got %q", "second finding", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Issue-148: max_review_rounds configurable, default 5
+// ---------------------------------------------------------------------------
+
+func TestPingPong_FiveChangesRequestedEscalates_Default(t *testing.T) {
+	var commentCalls []string
+	exec := pingPongExecutor(false, &commentCalls)
+	capture := &promptCapture{}
+
+	r, logPath, _ := setupPingPongRunner(t, exec)
+	// cfg.MaxReviewRounds is 0 (zero value) in test helper; set to default 5
+	r.cfg.MaxReviewRounds = 5
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix C", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix D", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix E", exitCode: 0},
+	}, capture))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeEscalated {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeEscalated)
+	}
+	if len(capture.devPrompts) != 5 {
+		t.Errorf("expected 5 dev calls (1 initial + 4 retries), got %d", len(capture.devPrompts))
+	}
+	if len(commentCalls) != 1 {
+		t.Errorf("expected 1 escalation comment, got %d", len(commentCalls))
+		return
+	}
+	assertEscalationComment(t, commentCalls[0], 42, 99, 5)
+}
+
+func TestPingPong_ExplicitMaxRounds2_Escalates(t *testing.T) {
+	var commentCalls []string
+	exec := pingPongExecutor(false, &commentCalls)
+
+	r, logPath, _ := setupPingPongRunner(t, exec)
+	r.cfg.MaxReviewRounds = 2
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeEscalated {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeEscalated)
+	}
+	if len(commentCalls) != 1 {
+		t.Errorf("expected 1 escalation comment, got %d", len(commentCalls))
+		return
+	}
+	assertEscalationComment(t, commentCalls[0], 42, 99, 2)
+}
+
+func TestPingPong_ApprovalBeforeLimit_NoEscalation(t *testing.T) {
+	var commentCalls []string
+	exec := pingPongExecutor(false, &commentCalls)
+
+	r, logPath, _ := setupPingPongRunner(t, exec)
+	r.cfg.MaxReviewRounds = 4
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "approved", exitCode: 0},
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if len(commentCalls) != 0 {
+		t.Errorf("expected no escalation comment, got %d", len(commentCalls))
 	}
 }
