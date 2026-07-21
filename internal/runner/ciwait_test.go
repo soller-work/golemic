@@ -74,11 +74,21 @@ func buildCIGateRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 	creds := loadTestCreds(t, homeDir, project)
 
 	// Write guidelines so RenderDevCIRetry can read them
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
+	guidelinesDir := filepath.Join(golemicCfgDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write agent file so resolveAgentFile can read model+persona
+	agentsDir := filepath.Join(golemicCfgDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -92,7 +102,6 @@ func buildCIGateRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 		VerifyCommand:    "go test",
 		CITimeoutMinutes: 15,
 		TimeoutMinutes:   30,
-		Models:           config.Models{Dev: "test/dev"},
 	}
 	r.issue = &issueData{Number: 42, Title: "T"}
 	r.SetCIPollInterval(1 * time.Millisecond)
@@ -657,11 +666,19 @@ func TestRunDevCIRetryAgent_PromptContainsCheckInfo(t *testing.T) {
 	homeDir, repoRoot, project := setupRunnerTest(t)
 	creds := loadTestCreds(t, homeDir, project)
 
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
+	guidelinesDir := filepath.Join(golemicCfgDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(golemicCfgDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -671,7 +688,7 @@ func TestRunDevCIRetryAgent_PromptContainsCheckInfo(t *testing.T) {
 	r.runID = "issue-42-ci-prompt"
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
-	r.cfg = &config.Config{VerifyCommand: "go test", Models: config.Models{Dev: "test/dev"}}
+	r.cfg = &config.Config{VerifyCommand: "go test"}
 	r.issue = &issueData{Number: 42, Title: "T"}
 	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		capturedPrompt = cfg.UserPrompt
@@ -702,11 +719,19 @@ func TestRunDevCIRetryAgent_ErrStalledMapsToStalledOutcome_P2_1b(t *testing.T) {
 	homeDir, repoRoot, project := setupRunnerTest(t)
 	creds := loadTestCreds(t, homeDir, project)
 
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	golemicCfgDir2 := filepath.Join(repoRoot, ".golemic")
+	guidelinesDir := filepath.Join(golemicCfgDir2, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir2 := filepath.Join(golemicCfgDir2, "agents")
+	if err := os.MkdirAll(agentsDir2, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir2, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -716,7 +741,7 @@ func TestRunDevCIRetryAgent_ErrStalledMapsToStalledOutcome_P2_1b(t *testing.T) {
 	r.runID = "issue-42-ci-stall"
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
-	r.cfg = &config.Config{VerifyCommand: "go test", Models: config.Models{Dev: "test/dev"}}
+	r.cfg = &config.Config{VerifyCommand: "go test"}
 	r.issue = &issueData{Number: 42, Title: "T"}
 
 	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {

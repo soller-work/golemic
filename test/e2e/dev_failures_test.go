@@ -166,8 +166,7 @@ func dfInvoke(t *testing.T, binary, workDir, binDir, homeDir string, extraEnv ma
 //   - a local bare git repo (the "origin")
 //   - a working git repo with origin pointing to the bare repo
 //   - .golemic/guidelines/dev.md (required by the runner's prompt renderer)
-//
-// prompts/dev.md must exist next to the golemic binary (BR-003: never in the fixture repo).
+//   - .golemic/agents/dev.md (required by the runner's agent-file resolver)
 //
 // Returns (bareRepoPath, sandboxRepoPath).
 func dfSetupSandbox(t *testing.T, realGit string) (string, string) {
@@ -220,12 +219,21 @@ func dfSetupSandbox(t *testing.T, realGit string) (string, string) {
 	// Fetch so origin/main tracking ref exists in the working repo.
 	run(workDir, realGit, "fetch", "origin")
 
-	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
+	golemicDir := filepath.Join(workDir, ".golemic")
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"),
 		[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"),
+		[]byte("---\nmodel: test/dev-model\n---\nDev persona.\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 

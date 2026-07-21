@@ -34,12 +34,6 @@ func TestLoad(t *testing.T) {
 				if cfg.Label != "ready-for-agent" {
 					t.Errorf("Label = %v, want ready-for-agent", cfg.Label)
 				}
-				if cfg.Models.Dev != "z-ai/glm-4.6" {
-					t.Errorf("Models.Dev = %v, want z-ai/glm-4.6", cfg.Models.Dev)
-				}
-				if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
-					t.Errorf("Models.Reviewer = %v, want deepseek/deepseek-v4-pro", cfg.Models.Reviewer)
-				}
 				if cfg.TimeoutMinutes != 30 {
 					t.Errorf("TimeoutMinutes = %v, want 30", cfg.TimeoutMinutes)
 				}
@@ -51,10 +45,6 @@ func TestLoad(t *testing.T) {
 				"project": "my-project",
 				"verify_command": "npm test",
 				"label": "custom-label",
-				"models": {
-					"dev": "custom/dev-model",
-					"reviewer": "custom/reviewer-model"
-				},
 				"timeout_minutes": 45
 			}`,
 			wantErr: false,
@@ -68,14 +58,25 @@ func TestLoad(t *testing.T) {
 				if cfg.Label != "custom-label" {
 					t.Errorf("Label = %v, want custom-label", cfg.Label)
 				}
-				if cfg.Models.Dev != "custom/dev-model" {
-					t.Errorf("Models.Dev = %v, want custom/dev-model", cfg.Models.Dev)
-				}
-				if cfg.Models.Reviewer != "custom/reviewer-model" {
-					t.Errorf("Models.Reviewer = %v, want custom/reviewer-model", cfg.Models.Reviewer)
-				}
 				if cfg.TimeoutMinutes != 45 {
 					t.Errorf("TimeoutMinutes = %v, want 45", cfg.TimeoutMinutes)
+				}
+			},
+		},
+		{
+			name: "stale models block is silently ignored",
+			configContent: `{
+				"project": "test",
+				"verify_command": "go test",
+				"models": {
+					"dev": "some/old-model",
+					"reviewer": "some/other-model"
+				}
+			}`,
+			wantErr: false,
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Project != "test" {
+					t.Errorf("Project = %v, want test", cfg.Project)
 				}
 			},
 		},
@@ -223,46 +224,7 @@ func TestLoad(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "empty models.dev gets default",
-			configContent: `{
-				"project": "test",
-				"verify_command": "go test",
-				"models": {
-					"dev": "",
-					"reviewer": "custom/reviewer"
-				}
-			}`,
-			wantErr: false,
-			validate: func(t *testing.T, cfg *Config) {
-				if cfg.Models.Dev != "z-ai/glm-4.6" {
-					t.Errorf("Models.Dev = %v, want z-ai/glm-4.6 (default)", cfg.Models.Dev)
-				}
-				if cfg.Models.Reviewer != "custom/reviewer" {
-					t.Errorf("Models.Reviewer = %v, want custom/reviewer", cfg.Models.Reviewer)
-				}
-			},
-		},
-		{
-			name: "empty models.reviewer gets default",
-			configContent: `{
-				"project": "test",
-				"verify_command": "go test",
-				"models": {
-					"dev": "custom/dev",
-					"reviewer": ""
-				}
-			}`,
-			wantErr: false,
-			validate: func(t *testing.T, cfg *Config) {
-				if cfg.Models.Dev != "custom/dev" {
-					t.Errorf("Models.Dev = %v, want custom/dev", cfg.Models.Dev)
-				}
-				if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
-					t.Errorf("Models.Reviewer = %v, want deepseek/deepseek-v4-pro (default)", cfg.Models.Reviewer)
-				}
-			},
-		},
+
 		// require_ci_checks config tests
 		{
 			name: "require_ci_checks absent defaults to false",
@@ -445,12 +407,6 @@ func TestDefaultConfig(t *testing.T) {
 	}
 	if cfg.Label != "ready-for-agent" {
 		t.Errorf("Label = %q, want %q", cfg.Label, "ready-for-agent")
-	}
-	if cfg.Models.Dev != "z-ai/glm-4.6" {
-		t.Errorf("Models.Dev = %q, want %q", cfg.Models.Dev, "z-ai/glm-4.6")
-	}
-	if cfg.Models.Reviewer != "deepseek/deepseek-v4-pro" {
-		t.Errorf("Models.Reviewer = %q, want %q", cfg.Models.Reviewer, "deepseek/deepseek-v4-pro")
 	}
 	if cfg.TimeoutMinutes != 30 {
 		t.Errorf("TimeoutMinutes = %d, want %d", cfg.TimeoutMinutes, 30)

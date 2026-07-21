@@ -204,13 +204,24 @@ func mpSetupSandbox(t *testing.T, realGit string) (bareRepo, workDir string) {
 	run(workDir, realGit, "push", "origin", "HEAD:refs/heads/main")
 	run(workDir, realGit, "fetch", "origin")
 
-	guidelinesDir := filepath.Join(workDir, ".golemic", "guidelines")
+	golemicDir := filepath.Join(workDir, ".golemic")
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	for _, f := range []string{"dev.md", "reviewer.md"} {
 		if err := os.WriteFile(filepath.Join(guidelinesDir, f),
 			[]byte("# Guidelines\nFollow best practices.\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"dev", "reviewer"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"),
+			[]byte("---\nmodel: test/"+role+"-model\n---\nPersona.\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}

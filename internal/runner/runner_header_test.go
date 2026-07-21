@@ -18,14 +18,15 @@ func buildHeaderRunner(t *testing.T, homeDir string) *Runner {
 	t.Helper()
 	project := "hdr-project"
 	runID := "issue-7-20260717T120000Z"
+	repoRoot := t.TempDir()
 	r := &Runner{
 		homeDir:    homeDir,
 		project:    project,
 		runID:      runID,
 		branchName: "golemic/issue-7",
 		issueNum:   7,
+		repoRoot:   repoRoot,
 		cfg: &config.Config{
-			Models:         config.Models{Dev: "model-dev", Reviewer: "model-rev"},
 			TimeoutMinutes: 45,
 		},
 		issue: &issueData{Number: 7, Title: "Add header feature"},
@@ -50,8 +51,8 @@ func TestWriteRunHeader_AllFieldsPresent(t *testing.T) {
 		{"issue number", "#7"},
 		{"issue title", "Add header feature"},
 		{"project", "hdr-project"},
-		{"dev model", "model-dev"},
-		{"reviewer model", "model-rev"},
+		{"dev agent file", filepath.Join(r.repoRoot, ".golemic", "agents", "dev.md")},
+		{"reviewer agent file", filepath.Join(r.repoRoot, ".golemic", "agents", "reviewer.md")},
 		{"branch", "golemic/issue-7"},
 		{"timeout", "45m0s"},
 		{"event log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "events.jsonl")},

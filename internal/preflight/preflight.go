@@ -17,7 +17,7 @@ import (
 	"golemic/internal/credentials"
 )
 
-//go:embed templates/guidelines/dev.md templates/guidelines/reviewer.md
+//go:embed templates/guidelines/dev.md templates/guidelines/reviewer.md templates/agents/dev.md templates/agents/reviewer.md
 var templateFS embed.FS
 
 // Result holds the outcome of a single check.
@@ -312,17 +312,33 @@ func (p *Preflight) checkScaffolding() Result {
 		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create guidelines directory: " + err.Error()}
 	}
 
-	// dev.md
+	// dev.md guidelines
 	if err := p.copyFromTemplate(guidelinesDir, "templates/guidelines/dev.md", "dev.md"); err != nil {
 		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create guidelines/dev.md: " + err.Error()}
 	}
 
-	// reviewer.md
+	// reviewer.md guidelines
 	if err := p.copyFromTemplate(guidelinesDir, "templates/guidelines/reviewer.md", "reviewer.md"); err != nil {
 		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create guidelines/reviewer.md: " + err.Error()}
 	}
 
-	return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "created — please fill in config.json and guidelines"}
+	// agents directory
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create agents directory: " + err.Error()}
+	}
+
+	// dev agent
+	if err := p.copyFromTemplate(agentsDir, "templates/agents/dev.md", "dev.md"); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create agents/dev.md: " + err.Error()}
+	}
+
+	// reviewer agent
+	if err := p.copyFromTemplate(agentsDir, "templates/agents/reviewer.md", "reviewer.md"); err != nil {
+		return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "failed to create agents/reviewer.md: " + err.Error()}
+	}
+
+	return Result{Name: ".golemic/ Scaffolding", Ok: false, Details: "created — please fill in config.json, guidelines, and agents"}
 }
 
 // createConfig marshals a config.Config with defaults and writes it to configPath

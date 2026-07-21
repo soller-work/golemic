@@ -177,9 +177,15 @@ func (r *Runner) loadInlineComments(prNumber int, reviewID string) ([]findingEnt
 // runReviewerAgent runs the reviewer agent and returns the outcome.
 func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int) string {
 	golemicBinaryPath, _ := os.Executable()
-	binaryDir := filepath.Dir(golemicBinaryPath)
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+
+	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("reviewer")
+	if err != nil {
+		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
+		return outcomeReviewFailed
+	}
+	defer cleanupPrompt()
 
 	cbmEnabled := r.cfg.CodebaseMemory.Enabled
 	if cbmEnabled {
@@ -215,7 +221,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	}
 
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
-		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": r.cfg.Models.Reviewer})
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": model})
 
 	// Run reviewer agent
 	runFn := r.runAgentFn
@@ -228,7 +234,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "reviewer",
-		SystemPromptFile:  filepath.Join(binaryDir, "prompts", "reviewer.md"),
+		SystemPromptFile:  systemPromptFile,
 		UserPrompt:        userPrompt,
 		WorktreeDir:       reviewerWorktreePath,
 		RunID:             r.runID,
@@ -236,7 +242,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		TurnID:            r.turnCounter,
 		GHToken:           r.creds.ReviewerToken(),
 		GolemicBinaryPath: golemicBinaryPath,
-		Model:             r.cfg.Models.Reviewer,
+		Model:             model,
 		Timeout:           timeout,
 		ToolAllowlist:     revTools,
 		RunsDir:           runsDir,

@@ -6,8 +6,8 @@
 //   - RenderReviewer: renders a user prompt for the reviewer role with PR number,
 //     issue context, verify command, and guidelines injected.
 //
-// Static system prompts are stored in prompts/dev.md and prompts/reviewer.md;
-// the caller resolves their paths from the golemic binary directory.
+// The role system prompt (persona body) is supplied by the caller from
+// .golemic/agents/{role}.md; these workflow prompts are injected into the user prompt.
 package prompt
 
 import (

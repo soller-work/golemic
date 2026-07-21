@@ -2,10 +2,6 @@
     "project": "golemic",
     "verify_command": "go build ./... && go vet ./... && go test -count=1 ./... && make lint",
     "label": "ready-for-agent",
-    "models": {
-        "dev": "claude-bridge/claude-sonnet-4-6",
-        "reviewer": "claude-bridge/claude-opus-4-8"
-    },
     "timeout_minutes": 30,
     "require_ci_checks": true,
     "codebase_memory": {

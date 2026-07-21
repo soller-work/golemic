@@ -169,15 +169,25 @@ func spansWithName(records []telemetry.Record, name string) []telemetry.Record {
 	return out
 }
 
-// createGuidelines writes minimal dev.md and reviewer.md guideline files under repoRoot.
+// createGuidelines writes minimal dev.md and reviewer.md guideline and agent files under repoRoot.
 func createGuidelines(t *testing.T, repoRoot string) {
 	t.Helper()
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
+	golemicDir := filepath.Join(repoRoot, ".golemic")
+	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"dev.md", "reviewer.md"} {
 		if err := os.WriteFile(filepath.Join(guidelinesDir, name), []byte("# Guidelines"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agentsDir := filepath.Join(golemicDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"dev.md", "reviewer.md"} {
+		if err := os.WriteFile(filepath.Join(agentsDir, name), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}

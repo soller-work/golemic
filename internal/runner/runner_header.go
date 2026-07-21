@@ -24,11 +24,14 @@ func (r *Runner) writeRunHeader(w io.Writer) {
 		timeout = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 	}
 
+	agentsDir := filepath.Join(r.repoRoot, ".golemic", "agents")
+
 	fmt.Fprintln(w, "golemic run")                                                                                //nolint:errcheck
 	fmt.Fprintf(w, "Issue:          #%d %s\n", r.issue.Number, r.issue.Title)                                    //nolint:errcheck
 	fmt.Fprintf(w, "Project:        %s\n", r.project)                                                            //nolint:errcheck
 	fmt.Fprintf(w, "Run ID:         %s\n", r.runID)                                                              //nolint:errcheck
-	fmt.Fprintf(w, "Models:         dev=%s  reviewer=%s\n", r.cfg.Models.Dev, r.cfg.Models.Reviewer)             //nolint:errcheck
+	fmt.Fprintf(w, "Agents:         %s\n", filepath.Join(agentsDir, "dev.md"))                                   //nolint:errcheck
+	fmt.Fprintf(w, "                %s\n", filepath.Join(agentsDir, "reviewer.md"))                              //nolint:errcheck
 	fmt.Fprintf(w, "Branch:         %s\n", r.branchName)                                                         //nolint:errcheck
 	fmt.Fprintf(w, "Timeout:        %s\n", timeout)                                                              //nolint:errcheck
 	fmt.Fprintf(w, "Event log:      %s\n", eventLogPath)                                                         //nolint:errcheck

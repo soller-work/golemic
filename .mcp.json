@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "codebase-memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "codebase-memory-mcp@0.9.0"
+      ],
+      "env": {
+        "CBM_ALLOWED_ROOT": "/Users/sergej/.golemic/golemic/worktrees/issue-116",
+        "CBM_CACHE_DIR": "/Users/sergej/.golemic/golemic/cbm/issue-116",
+        "CBM_LOG_LEVEL": "warn"
+      }
+    }
+  }
+}
