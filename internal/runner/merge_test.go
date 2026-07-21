@@ -669,6 +669,87 @@ func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolin
 	}
 }
 
+// AC-009: stale green on the superseded SHA must not merge; only the pushed SHA can release the merge.
+func TestVerifyAndPush_StaleGreenIgnoredUntilPushedGreen_AC009(t *testing.T) { //nolint:funlen,gocognit,cyclop
+	oldSHA := "sha-old"
+	pushedSHA := "sha-new"
+	currentSHAQueries := 0
+	mergeCalls := 0
+	pushSeen := false
+
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 2 && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return pushedSHA + "\n", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "git" && len(args) >= 1 && args[0] == "push" {
+				pushSeen = true
+				return "", nil
+			}
+			if name != "gh" {
+				return "", fmt.Errorf("unexpected: %s %v", name, args)
+			}
+			switch {
+			case isGHPRViewHeadSHA(args):
+				return oldSHA + "\n", nil
+			case isGHRepoViewNWO(args):
+				return ciTestNWO + "\n", nil
+			case isGHCheckRunsAPI(args):
+				if !strings.Contains(args[1], "/commits/") {
+					t.Fatalf("expected commit-specific check-runs query, got %q", args[1])
+				}
+				if !pushSeen {
+					if !strings.Contains(args[1], oldSHA) {
+						t.Fatalf("before push expected old SHA query, got %q", args[1])
+					}
+					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}), nil
+				}
+				if !strings.Contains(args[1], pushedSHA) {
+					t.Fatalf("after push expected pushed SHA query, got %q", args[1])
+				}
+				currentSHAQueries++
+				switch currentSHAQueries {
+				case 1:
+					return emptyCheckRunsJSON, nil
+				case 2:
+					return ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}}), nil
+				default:
+					t.Fatalf("unexpected extra pushed-SHA poll %d for %q", currentSHAQueries, args[1])
+				}
+			case ghArgsMatch(args, "pr", "merge"):
+				if !pushSeen {
+					t.Fatal("merge attempted before push")
+				}
+				mergeCalls++
+				return "sha-merged", nil
+			}
+			return "", fmt.Errorf("unexpected: %s %v", name, args)
+		},
+	}
+
+	r := makeVerifyRunner(t, exec)
+	var written []eventlog.Event
+	outcome := r.verifyAndPush(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if currentSHAQueries != 2 {
+		t.Errorf("expected 2 pushed-SHA polls (pending then green), got %d", currentSHAQueries)
+	}
+	if mergeCalls != 1 {
+		t.Errorf("expected exactly 1 squash merge, got %d", mergeCalls)
+	}
+	for _, ev := range written {
+		if ev.Type == eventlog.EventAutomergeFailed {
+			t.Errorf("automerge_failed must not be written on stale-green recovery path")
+		}
+	}
+}
+
 // AC-008 (success): no CI configured → verify_command passes → push → squash merge.
 func TestVerifyAndPush_NoCI_VerifyPasses_MergesSuccessfully_AC008(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
