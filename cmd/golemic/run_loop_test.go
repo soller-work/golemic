@@ -77,10 +77,10 @@ func makeRunLoopExec(repoRoot string, nextIssueFunc func() (string, error)) fake
 				if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
 					return repoRoot + "\n", nil
 				}
-				if name == "golemic" && len(args) > 0 && args[0] == "preflight" {
+				if len(args) > 0 && args[0] == "preflight" {
 					return "", nil
 				}
-				if name == "golemic" && len(args) > 0 && args[0] == "next-issue" {
+				if len(args) > 0 && args[0] == "next-issue" {
 					return nextIssueFunc()
 				}
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
@@ -149,7 +149,7 @@ func TestRunLoopDispatcher_StartupFailsWhenLabelsMissing(t *testing.T) { //nolin
 				if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
 					return repoRoot + "\n", nil
 				}
-				if name == "golemic" && len(args) > 0 && args[0] == "preflight" {
+				if len(args) > 0 && args[0] == "preflight" {
 					return "", &preflight.ErrExit{ExitCode: 1, Stderr: "missing labels: in-progress"}
 				}
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
@@ -197,16 +197,16 @@ func TestRunLoopDispatcher_EnvWiredCorrectly(t *testing.T) { //nolint:cyclop,goc
 				if name == "git" && len(args) > 0 && args[0] == "rev-parse" {
 					return repoRoot + "\n", nil
 				}
-				if name == "golemic" && len(args) > 0 && args[0] == "preflight" {
+				if len(args) > 0 && args[0] == "preflight" {
 					return "", nil
 				}
-				if name == "golemic" && len(args) > 0 && args[0] == "next-issue" {
+				if len(args) > 0 && args[0] == "next-issue" {
 					return `{"number":7,"title":"T","url":"u","labels":[]}`, nil
 				}
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			},
 			runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-				if name == "golemic" && len(args) > 0 && args[0] == "claim-issue" {
+				if len(args) > 0 && args[0] == "claim-issue" {
 					cp := make(map[string]string, len(env))
 					for k, v := range env {
 						cp[k] = v
@@ -214,7 +214,7 @@ func TestRunLoopDispatcher_EnvWiredCorrectly(t *testing.T) { //nolint:cyclop,goc
 					capturedClaimEnv = cp
 					return "", nil
 				}
-				if name == "golemic" && len(args) > 0 && args[0] == "release-issue" {
+				if len(args) > 0 && args[0] == "release-issue" {
 					cp := make(map[string]string, len(env))
 					for k, v := range env {
 						cp[k] = v

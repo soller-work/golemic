@@ -908,6 +908,12 @@ func (e osExecutor) RunWithEnvInDir(env map[string]string, dir string, name stri
 // loads config and credentials, verifies preflight labels, then runs the
 // autonomous tick loop until ctx is cancelled (SIGINT or SIGTERM in production).
 func runRunLoop(ctx context.Context, _ []string, _, stderr io.Writer, executor runloop.Executor) int {
+	golemicBin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "run-loop startup failed: %v\n", err)
+		return 1
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintf(stderr, "run-loop startup failed: %v\n", err)
@@ -937,12 +943,12 @@ func runRunLoop(ctx context.Context, _ []string, _, stderr io.Writer, executor r
 		return 1
 	}
 
-	if _, err := executor.RunInDir(repoRoot, "golemic", "preflight", "--check"); err != nil {
+	if _, err := executor.RunInDir(repoRoot, golemicBin, "preflight", "--check"); err != nil {
 		fmt.Fprintf(stderr, "run-loop startup failed: preflight check: %v\n", err)
 		return 1
 	}
 
-	l := runloop.New(executor, homeDir, repoRoot, cfg.Project, stderr)
+	l := runloop.New(executor, golemicBin, homeDir, repoRoot, cfg.Project, stderr)
 	l.Run(ctx)
 	return 0
 }

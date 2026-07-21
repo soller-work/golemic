@@ -101,10 +101,12 @@ func (h *mockHandle) Signal(s os.Signal) error { return h.signalFn(s) }
 // Helpers
 // ---------------------------------------------------------------------------
 
+const fakeGolemicBin = "/fake/golemic"
+
 func newTestLoop(t *testing.T, exec *mockExecutor) (*Loop, string) {
 	t.Helper()
 	homeDir := t.TempDir()
-	l := New(exec, homeDir, "/fake/repo", "testproject", new(bytes.Buffer))
+	l := New(exec, fakeGolemicBin, homeDir, "/fake/repo", "testproject", new(bytes.Buffer))
 	l.interval = time.Hour // prevent automatic re-ticks in tests
 	l.newRunID = func() string { return "test-run-id" }
 	return l, homeDir
@@ -152,14 +154,14 @@ func TestHappyPathTick(t *testing.T) { //nolint:cyclop,gocognit // exhaustive AC
 	eventLogPath := expectedEventLogPath(homeDir)
 
 	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
-		if name == "golemic" && len(args) == 1 && args[0] == "next-issue" {
+		if name == fakeGolemicBin && len(args) == 1 && args[0] == "next-issue" {
 			return issueJSON(42), nil
 		}
 		return "", fmt.Errorf("unexpected RunInDir: %s %v", name, args)
 	}
 
 	exec.runWithEnvInDirFunc = func(env map[string]string, dir, name string, args ...string) (string, error) {
-		if name == "golemic" {
+		if name == fakeGolemicBin {
 			return "", nil // claim-issue and release-issue succeed
 		}
 		return "", fmt.Errorf("unexpected RunWithEnvInDir: %s %v", name, args)
@@ -185,16 +187,16 @@ func TestHappyPathTick(t *testing.T) { //nolint:cyclop,gocognit // exhaustive AC
 	}
 
 	// Verify order and names
-	if calls[0].name != "golemic" || calls[0].args[0] != "next-issue" {
+	if calls[0].name != fakeGolemicBin || calls[0].args[0] != "next-issue" {
 		t.Errorf("call[0]: want golemic next-issue, got %s %v", calls[0].name, calls[0].args)
 	}
-	if calls[1].name != "golemic" || calls[1].args[0] != "claim-issue" || calls[1].args[1] != "--number" || calls[1].args[2] != "42" {
+	if calls[1].name != fakeGolemicBin || calls[1].args[0] != "claim-issue" || calls[1].args[1] != "--number" || calls[1].args[2] != "42" {
 		t.Errorf("call[1]: want golemic claim-issue --number 42, got %s %v", calls[1].name, calls[1].args)
 	}
-	if calls[2].name != "golemic" || calls[2].args[0] != "run" || calls[2].args[1] != "--issue" || calls[2].args[2] != "42" {
+	if calls[2].name != fakeGolemicBin || calls[2].args[0] != "run" || calls[2].args[1] != "--issue" || calls[2].args[2] != "42" {
 		t.Errorf("call[2]: want golemic run --issue 42, got %s %v", calls[2].name, calls[2].args)
 	}
-	if calls[3].name != "golemic" || calls[3].args[0] != "release-issue" {
+	if calls[3].name != fakeGolemicBin || calls[3].args[0] != "release-issue" {
 		t.Errorf("call[3]: want golemic release-issue, got %s %v", calls[3].name, calls[3].args)
 	}
 
@@ -233,7 +235,7 @@ func TestNothingTakeable(t *testing.T) {
 	l, _ := newTestLoop(t, exec)
 
 	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
-		if name == "golemic" && len(args) == 1 && args[0] == "next-issue" {
+		if name == fakeGolemicBin && len(args) == 1 && args[0] == "next-issue" {
 			return "", &preflight.ErrExit{ExitCode: 2, Stderr: "no takeable issue"}
 		}
 		return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -267,13 +269,13 @@ func TestRaceLostAtClaim(t *testing.T) {
 	l, _ := newTestLoop(t, exec)
 
 	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
-		if name == "golemic" && args[0] == "next-issue" {
+		if name == fakeGolemicBin && args[0] == "next-issue" {
 			return issueJSON(42), nil
 		}
 		return "", fmt.Errorf("unexpected: %s %v", name, args)
 	}
 	exec.runWithEnvInDirFunc = func(env map[string]string, dir, name string, args ...string) (string, error) {
-		if name == "golemic" && args[0] == "claim-issue" {
+		if name == fakeGolemicBin && args[0] == "claim-issue" {
 			return "", &preflight.ErrExit{ExitCode: 3, Stderr: "race lost"}
 		}
 		return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -311,7 +313,7 @@ func TestNonSuccessOutcomeFailed(t *testing.T) { //nolint:cyclop // linear seque
 	eventLogPath := expectedEventLogPath(homeDir)
 
 	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
-		if name == "golemic" && args[0] == "next-issue" {
+		if name == fakeGolemicBin && args[0] == "next-issue" {
 			return issueJSON(42), nil
 		}
 		return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -334,7 +336,7 @@ func TestNonSuccessOutcomeFailed(t *testing.T) { //nolint:cyclop // linear seque
 	calls := exec.getCalls()
 	var releaseReason string
 	for _, c := range calls {
-		if c.name == "golemic" && len(c.args) > 0 && c.args[0] == "release-issue" {
+		if c.name == fakeGolemicBin && len(c.args) > 0 && c.args[0] == "release-issue" {
 			for i, a := range c.args {
 				if a == "--reason" && i+1 < len(c.args) {
 					releaseReason = c.args[i+1]
@@ -356,7 +358,7 @@ func TestNoRunFinishedAbandoned(t *testing.T) { //nolint:cyclop // linear sequen
 	l, _ := newTestLoop(t, exec)
 
 	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
-		if name == "golemic" && args[0] == "next-issue" {
+		if name == fakeGolemicBin && args[0] == "next-issue" {
 			return issueJSON(42), nil
 		}
 		return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -379,7 +381,7 @@ func TestNoRunFinishedAbandoned(t *testing.T) { //nolint:cyclop // linear sequen
 	calls := exec.getCalls()
 	var releaseReason string
 	for _, c := range calls {
-		if c.name == "golemic" && len(c.args) > 0 && c.args[0] == "release-issue" {
+		if c.name == fakeGolemicBin && len(c.args) > 0 && c.args[0] == "release-issue" {
 			for i, a := range c.args {
 				if a == "--reason" && i+1 < len(c.args) {
 					releaseReason = c.args[i+1]
@@ -401,7 +403,7 @@ func TestNextIssueExit1Tolerated(t *testing.T) {
 	l, _ := newTestLoop(t, exec)
 
 	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
-		if name == "golemic" && args[0] == "next-issue" {
+		if name == fakeGolemicBin && args[0] == "next-issue" {
 			return "", &preflight.ErrExit{ExitCode: 1, Stderr: "gh error"}
 		}
 		return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -479,7 +481,7 @@ func TestSIGTERMWhileRunnerInFlight(t *testing.T) { //nolint:cyclop,gocognit,fun
 
 	// next-issue succeeds
 	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
-		if name == "golemic" && args[0] == "next-issue" {
+		if name == fakeGolemicBin && args[0] == "next-issue" {
 			return issueJSON(42), nil
 		}
 		return "", fmt.Errorf("unexpected: %s %v", name, args)
@@ -553,7 +555,7 @@ func TestSIGTERMWhileRunnerInFlight(t *testing.T) { //nolint:cyclop,gocognit,fun
 	calls := exec.getCalls()
 	var releaseReason string
 	for _, c := range calls {
-		if c.name == "golemic" && len(c.args) > 0 && c.args[0] == "release-issue" {
+		if c.name == fakeGolemicBin && len(c.args) > 0 && c.args[0] == "release-issue" {
 			for i, a := range c.args {
 				if a == "--reason" && i+1 < len(c.args) {
 					releaseReason = c.args[i+1]
@@ -578,7 +580,7 @@ func TestIntervalOverrideEnvVar(t *testing.T) {
 	t.Setenv("GOLEMIC_RUN_LOOP_INTERVAL_MS", "250")
 
 	exec := &mockExecutor{}
-	l := New(exec, t.TempDir(), "/fake/repo", "proj", new(bytes.Buffer))
+	l := New(exec, fakeGolemicBin, t.TempDir(), "/fake/repo", "proj", new(bytes.Buffer))
 
 	if l.interval != 250*time.Millisecond {
 		t.Errorf("interval: want 250ms, got %v", l.interval)
@@ -602,7 +604,7 @@ func TestDeriveReasonUsesLastEvent(t *testing.T) {
 	writeRunFinishedEvent(t, eventLogPath, "escalated")
 
 	exec := &mockExecutor{}
-	l := New(exec, t.TempDir(), "/fake/repo", "proj", new(bytes.Buffer))
+	l := New(exec, fakeGolemicBin, t.TempDir(), "/fake/repo", "proj", new(bytes.Buffer))
 	reason := l.deriveReason(eventLogPath)
 	if reason != "failed" {
 		t.Errorf("reason: want failed (last event was escalated), got %q", reason)

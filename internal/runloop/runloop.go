@@ -33,18 +33,19 @@ const defaultIntervalMS = 60_000
 
 // Loop is the autonomous run-loop that polls for takeable issues.
 type Loop struct {
-	executor Executor
-	homeDir  string
-	repoRoot string
-	project  string
-	interval time.Duration
-	stderr   io.Writer
-	newRunID func() string
+	executor   Executor
+	golemicBin string
+	homeDir    string
+	repoRoot   string
+	project    string
+	interval   time.Duration
+	stderr     io.Writer
+	newRunID   func() string
 }
 
 // New creates a Loop. The tick interval defaults to 60 s; set
 // GOLEMIC_RUN_LOOP_INTERVAL_MS to a positive integer to override (test-only).
-func New(executor Executor, homeDir, repoRoot, project string, stderr io.Writer) *Loop {
+func New(executor Executor, golemicBin, homeDir, repoRoot, project string, stderr io.Writer) *Loop {
 	ms := defaultIntervalMS
 	if v := os.Getenv("GOLEMIC_RUN_LOOP_INTERVAL_MS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
@@ -52,12 +53,13 @@ func New(executor Executor, homeDir, repoRoot, project string, stderr io.Writer)
 		}
 	}
 	return &Loop{
-		executor: executor,
-		homeDir:  homeDir,
-		repoRoot: repoRoot,
-		project:  project,
-		interval: time.Duration(ms) * time.Millisecond,
-		stderr:   stderr,
+		executor:   executor,
+		golemicBin: golemicBin,
+		homeDir:    homeDir,
+		repoRoot:   repoRoot,
+		project:    project,
+		interval:   time.Duration(ms) * time.Millisecond,
+		stderr:     stderr,
 		newRunID: func() string {
 			return fmt.Sprintf("loop-%s", time.Now().UTC().Format("20060102T150405.000Z"))
 		},
@@ -112,7 +114,7 @@ func (l *Loop) tick(ctx context.Context) {
 
 // selectIssue calls golemic next-issue and returns the issue number.
 func (l *Loop) selectIssue() (int, bool) {
-	out, err := l.executor.RunInDir(l.repoRoot, "golemic", "next-issue")
+	out, err := l.executor.RunInDir(l.repoRoot, l.golemicBin, "next-issue")
 	if err != nil {
 		var ee *preflight.ErrExit
 		if errors.As(err, &ee) && ee.ExitCode == 2 {
@@ -135,7 +137,7 @@ func (l *Loop) selectIssue() (int, bool) {
 
 // claim calls golemic claim-issue for the given issue number.
 func (l *Loop) claim(issueNum int, env map[string]string) bool {
-	_, err := l.executor.RunWithEnvInDir(env, l.repoRoot, "golemic", "claim-issue", "--number", strconv.Itoa(issueNum))
+	_, err := l.executor.RunWithEnvInDir(env, l.repoRoot, l.golemicBin, "claim-issue", "--number", strconv.Itoa(issueNum))
 	if err == nil {
 		return true
 	}
@@ -158,7 +160,7 @@ func (l *Loop) claim(issueNum int, env map[string]string) bool {
 // runAndRelease starts the runner, waits for it (forwarding SIGTERM on ctx cancel),
 // derives the release reason from the event log, and releases the issue.
 func (l *Loop) runAndRelease(ctx context.Context, issueNum int, eventLogPath string, env map[string]string) {
-	handle, err := l.executor.StartWithEnvInDir(env, l.repoRoot, "golemic", "run", "--issue", strconv.Itoa(issueNum))
+	handle, err := l.executor.StartWithEnvInDir(env, l.repoRoot, l.golemicBin, "run", "--issue", strconv.Itoa(issueNum))
 	if err != nil {
 		fmt.Fprintf(l.stderr, "run-loop: runner start failed for #%d: %v\n", issueNum, err) //nolint:errcheck
 		l.release(issueNum, "abandoned", env)
@@ -210,7 +212,7 @@ func (l *Loop) deriveReason(eventLogPath string) string {
 
 // release calls golemic release-issue --number N --reason R.
 func (l *Loop) release(issueNum int, reason string, env map[string]string) {
-	_, err := l.executor.RunWithEnvInDir(env, l.repoRoot, "golemic", "release-issue",
+	_, err := l.executor.RunWithEnvInDir(env, l.repoRoot, l.golemicBin, "release-issue",
 		"--number", strconv.Itoa(issueNum), "--reason", reason)
 	if err != nil {
 		fmt.Fprintf(l.stderr, "run-loop: release-issue #%d failed: %v\n", issueNum, err) //nolint:errcheck
