@@ -17,6 +17,7 @@ type Config struct {
 	TimeoutMinutes   int                  `json:"timeout_minutes"`
 	TimeoutSeconds   int                  `json:"timeout_seconds,omitempty"`
 	CITimeoutMinutes int                  `json:"ci_timeout_minutes,omitempty"`
+	MaxReviewRounds  int                  `json:"max_review_rounds,omitempty"`
 	RequireCIChecks  bool                 `json:"require_ci_checks,omitempty"`
 	Telemetry        TelemetryConfig      `json:"telemetry"`
 	CodebaseMemory   CodebaseMemoryConfig `json:"codebase_memory"`
@@ -41,6 +42,7 @@ type configRaw struct {
 	TimeoutMinutes   *int               `json:"timeout_minutes"`
 	TimeoutSeconds   *int               `json:"timeout_seconds"`
 	CITimeoutMinutes *int               `json:"ci_timeout_minutes"`
+	MaxReviewRounds  *int               `json:"max_review_rounds"`
 	RequireCIChecks  *bool              `json:"require_ci_checks"`
 	Telemetry        *telemetryRaw      `json:"telemetry"`
 	CodebaseMemory   *codebaseMemoryRaw `json:"codebase_memory"`
@@ -66,6 +68,7 @@ func DefaultConfig(project string) *Config {
 		Label:            "ready-for-agent",
 		TimeoutMinutes:   30,
 		CITimeoutMinutes: 15,
+		MaxReviewRounds:  5,
 		Telemetry:        TelemetryConfig{Enabled: true},
 		CodebaseMemory:   CodebaseMemoryConfig{Enabled: true},
 	}
@@ -191,6 +194,17 @@ func Load(repoRoot string) (*Config, error) {
 		}
 	} else {
 		config.CITimeoutMinutes = 15
+	}
+
+	// Extract max_review_rounds (optional; default 5)
+	if raw.MaxReviewRounds != nil {
+		config.MaxReviewRounds = *raw.MaxReviewRounds
+		if config.MaxReviewRounds <= 0 {
+			return nil, fmt.Errorf("field 'max_review_rounds' must be > 0, got %d in config file %s",
+				config.MaxReviewRounds, configPath)
+		}
+	} else {
+		config.MaxReviewRounds = 5
 	}
 
 	return config, nil

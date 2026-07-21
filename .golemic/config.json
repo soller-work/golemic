@@ -3,6 +3,7 @@
     "verify_command": "go build ./... && go vet ./... && go test -count=1 ./... && make lint",
     "label": "ready-for-agent",
     "timeout_minutes": 30,
+    "max_review_rounds": 5,
     "require_ci_checks": true,
     "codebase_memory": {
         "enabled": true
