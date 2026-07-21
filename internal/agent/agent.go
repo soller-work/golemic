@@ -143,6 +143,7 @@ type RoleConfig struct {
 	ToolAllowlist     []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
 	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
 	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
+	Env               []string      // additional "KEY=VALUE" pairs merged into the subprocess environment
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.
@@ -170,7 +171,6 @@ func transcriptByteSize(stdoutFile, stderrFile *os.File) (int64, time.Time) {
 	}
 	return size, modTime
 }
-
 
 // ---------------------------------------------------------------------------
 // RunRole
@@ -353,7 +353,7 @@ func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File
 func newPiCmd(cfg RoleConfig, args []string, golemicDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
 	cmd := CommandFactory("pi", args...)
 	cmd.Dir = cfg.WorktreeDir
-	cmd.Env = append(
+	env := append(
 		os.Environ(),
 		"GOLEMIC_RUN_ID="+cfg.RunID,
 		"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
@@ -361,6 +361,8 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir string, stdoutFile, stde
 		"GH_TOKEN="+cfg.GHToken,
 		"PATH="+golemicDir+string(filepath.ListSeparator)+os.Getenv("PATH"),
 	)
+	env = append(env, cfg.Env...)
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
@@ -462,8 +464,8 @@ func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFi
 
 		case waitErr = <-done:
 			pollTicker.Stop()
-			stdoutFile.Close()  //nolint:errcheck
-			stderrFile.Close()  //nolint:errcheck
+			stdoutFile.Close() //nolint:errcheck
+			stderrFile.Close() //nolint:errcheck
 			cancel()
 			if waitErr == nil {
 				return 0, false, nil
