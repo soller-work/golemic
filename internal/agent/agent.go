@@ -263,7 +263,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 	}
 
 	// ---- Prepare static values ----
-	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role + "-" + strconv.Itoa(cfg.TurnID))
+	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role)
 	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".activity.jsonl")
 	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stderr.log")
 	golemicDir := filepath.Dir(cfg.GolemicBinaryPath)
