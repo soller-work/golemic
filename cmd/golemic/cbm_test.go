@@ -241,6 +241,21 @@ func TestCBM_AllowedSubs_InjectProject(t *testing.T) { //nolint:funlen
 	}
 }
 
+func TestCBM_MissingSchemaForAllowedSub_Exit2(t *testing.T) {
+	setupFakeToolsList(t, []toolEntry{{Name: "get_architecture", Description: "arch"}})
+	t.Setenv("CBM_SOCK", "/tmp/cbm-missing-schema.sock")
+	t.Setenv("CBM_PROJECT", "proj")
+
+	var stderr bytes.Buffer
+	code := runCBM([]string{"golemic", "cbm", "search_graph", "--query=foo"}, &bytes.Buffer{}, &stderr)
+	if code != 2 {
+		t.Fatalf("expected exit 2 for missing schema; got %d, stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "missing inputSchema") {
+		t.Fatalf("stderr missing missing-schema message; got: %s", stderr.String())
+	}
+}
+
 func TestCBM_FlagTypeCoercion(t *testing.T) {
 	const project = "golemic-issue-42-dev"
 	var capturedArgs map[string]json.RawMessage
@@ -346,7 +361,18 @@ func TestCBM_IsErrorResponse_Exit1(t *testing.T) {
 		}
 		json.Unmarshal(req, &msg) //nolint:errcheck
 		if msg.Method == "tools/list" {
-			return toolsListResponse(msg.ID, nil)
+			return toolsListResponse(msg.ID, []map[string]interface{}{
+				{
+					"name":        "get_architecture",
+					"description": "arch",
+					"inputSchema": map[string]interface{}{
+						"properties": map[string]interface{}{
+							"project": map[string]interface{}{"type": "string"},
+						},
+						"required": []string{"project"},
+					},
+				},
+			})
 		}
 		resp, _ := json.Marshal(map[string]interface{}{
 			"jsonrpc": "2.0",

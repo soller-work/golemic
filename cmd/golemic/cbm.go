@@ -433,6 +433,11 @@ func doSocketRPC(sockPath string, req interface{}) ([]byte, error) {
 // and returns the arguments map. Returns exit code 0 on success, 2 on guard
 // violation.
 func buildArguments(sub string, flagArgs []string, schema *inputSchema, project string, stderr io.Writer) (map[string]interface{}, int) {
+	if schema == nil {
+		fmt.Fprintf(stderr, "cbm: tool %q missing inputSchema in upstream tools/list\n", sub)
+		return nil, 2
+	}
+
 	raw, err := parseFlags(flagArgs)
 	if err != nil {
 		fmt.Fprintf(stderr, "cbm: %v\n", err)
@@ -483,12 +488,6 @@ func allowedSchemaKeys(schema *inputSchema) []string {
 
 func coerceArguments(raw map[string]string, schema *inputSchema) (map[string]interface{}, error) {
 	arguments := make(map[string]interface{}, len(raw))
-	if schema == nil {
-		for k, v := range raw {
-			arguments[k] = v
-		}
-		return arguments, nil
-	}
 	for k, v := range raw {
 		prop, ok := schema.Properties[k]
 		if !ok {
