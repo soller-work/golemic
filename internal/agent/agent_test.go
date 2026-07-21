@@ -829,8 +829,8 @@ func TestRunRole_ModeJsonAndSessionID_AC1(t *testing.T) {
 		t.Fatalf("exit code: got %d, want 0", exitCode)
 	}
 
-	// AC-1: Verify --mode json and --session-id are present
-	expectedSessionID := sanitizeSessionID("test-run-123-dev-5")
+	// AC-1: Verify --mode json and --session-id are present; TurnID must NOT appear in session ID.
+	expectedSessionID := sanitizeSessionID("test-run-123-dev")
 	if !argContains(capturedArgs, "--mode", "json") {
 		t.Errorf("args missing '--mode json', got: %v", capturedArgs)
 	}
@@ -888,8 +888,8 @@ func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
 		t.Errorf("invocation count: got %d, want 3 (1 initial + 2 retries)", invocationCount)
 	}
 
-	// AC-3: Extract and verify all session-ids are identical
-	expectedSessionID := sanitizeSessionID("run-retry-test-dev-7")
+	// AC-3: Extract and verify all session-ids are identical; TurnID must NOT appear in session ID.
+	expectedSessionID := sanitizeSessionID("run-retry-test-dev")
 	for idx, invocation := range allInvocations {
 		var sessionID string
 		for i := 0; i < len(invocation)-1; i++ {
@@ -1392,5 +1392,155 @@ func TestParseIdleTimeout_ProductionBoundary(t *testing.T) {
 	want := 30 * time.Second
 	if got != want {
 		t.Errorf("parseIdleTimeout with production boundary (30s == 30s poll interval): got %v, want %v", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Issue-147: Pi-Session stable per role across turns
+// ---------------------------------------------------------------------------
+
+// extractSessionID returns the --session-id value from args, or empty string.
+func extractSessionID(args []string) string {
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--session-id" {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+// extractTurnID returns the GOLEMIC_TURN_ID value captured from env script output.
+func extractEnvVar(output, name string) string {
+	prefix := name + ": "
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimPrefix(line, prefix)
+		}
+	}
+	return ""
+}
+
+// TestRunRole_SessionIDStableAcrossDevTurns verifies that the dev session ID is
+// identical for TurnID=1 (initial dev) and TurnID=3 (dev-retry after reviewer).
+func TestRunRole_SessionIDStableAcrossDevTurns_Issue147(t *testing.T) {
+	scriptPath := writeScript(t, captureEnvScript())
+
+	run := func(turnID int) string {
+		cfg := defaultRoleConfig(t, "dev")
+		cfg.RunID = "issue-42-test"
+		cfg.TurnID = turnID
+		var args []string
+		fakeCommandFactory(t, scriptPath, &args)
+		if _, _, err := RunRole(context.Background(), cfg); err != nil {
+			t.Fatalf("RunRole (TurnID=%d) failed: %v", turnID, err)
+		}
+		return extractSessionID(args)
+	}
+
+	sid1 := run(1)
+	sid3 := run(3)
+
+	if sid1 == "" {
+		t.Fatal("no --session-id found in Pi args for TurnID=1")
+	}
+	if sid1 != sid3 {
+		t.Errorf("dev session ID changed across turns: TurnID=1 → %q, TurnID=3 → %q", sid1, sid3)
+	}
+	// Session must not contain TurnID digits as a distinguishing suffix.
+	if strings.Contains(sid1, "-1") || strings.Contains(sid1, "-3") {
+		t.Errorf("dev session ID must not embed TurnID, got: %q", sid1)
+	}
+}
+
+// TestRunRole_SessionIDStableAcrossReviewerTurns verifies that the reviewer
+// session ID is identical for TurnID=2 (first review) and TurnID=4 (second review).
+func TestRunRole_SessionIDStableAcrossReviewerTurns_Issue147(t *testing.T) {
+	scriptPath := writeScript(t, captureEnvScript())
+
+	run := func(turnID int) string {
+		cfg := defaultRoleConfig(t, "reviewer")
+		cfg.RunID = "issue-42-test"
+		cfg.TurnID = turnID
+		cfg.ToolAllowlist = []string{"read", "bash"}
+		var args []string
+		fakeCommandFactory(t, scriptPath, &args)
+		if _, _, err := RunRole(context.Background(), cfg); err != nil {
+			t.Fatalf("RunRole reviewer (TurnID=%d) failed: %v", turnID, err)
+		}
+		return extractSessionID(args)
+	}
+
+	sid2 := run(2)
+	sid4 := run(4)
+
+	if sid2 == "" {
+		t.Fatal("no --session-id found in Pi args for reviewer TurnID=2")
+	}
+	if sid2 != sid4 {
+		t.Errorf("reviewer session ID changed across turns: TurnID=2 → %q, TurnID=4 → %q", sid2, sid4)
+	}
+}
+
+// TestRunRole_DevAndReviewerSessionIDsDiffer verifies that dev and reviewer
+// maintain separate session IDs within the same run.
+func TestRunRole_DevAndReviewerSessionIDsDiffer_Issue147(t *testing.T) {
+	scriptPath := writeScript(t, captureEnvScript())
+
+	runRole := func(role string, turnID int) string {
+		cfg := defaultRoleConfig(t, role)
+		cfg.RunID = "issue-42-test"
+		cfg.TurnID = turnID
+		if role == "reviewer" {
+			cfg.ToolAllowlist = []string{"read", "bash"}
+		}
+		var args []string
+		fakeCommandFactory(t, scriptPath, &args)
+		if _, _, err := RunRole(context.Background(), cfg); err != nil {
+			t.Fatalf("RunRole %s (TurnID=%d) failed: %v", role, turnID, err)
+		}
+		return extractSessionID(args)
+	}
+
+	devSID := runRole("dev", 1)
+	reviewerSID := runRole("reviewer", 2)
+
+	if devSID == "" || reviewerSID == "" {
+		t.Fatalf("missing session IDs: dev=%q reviewer=%q", devSID, reviewerSID)
+	}
+	if devSID == reviewerSID {
+		t.Errorf("dev and reviewer must have separate session IDs, both got: %q", devSID)
+	}
+}
+
+// TestRunRole_TurnIDInEnvVar verifies that GOLEMIC_TURN_ID still reflects the
+// actual per-turn counter even though session IDs are now stable per role.
+func TestRunRole_TurnIDInEnvVar_Issue147(t *testing.T) {
+	captureScript := writeScript(t, `echo "ARGS: $@"
+echo "GOLEMIC_RUN_ID: ${GOLEMIC_RUN_ID}"
+echo "GOLEMIC_TURN_ID: ${GOLEMIC_TURN_ID}"
+`)
+
+	run := func(turnID int) string {
+		cfg := defaultRoleConfig(t, "dev")
+		cfg.RunID = "issue-42-test"
+		cfg.TurnID = turnID
+		var args []string
+		fakeCommandFactory(t, captureScript, &args)
+		_, paths, err := RunRole(context.Background(), cfg)
+		if err != nil {
+			t.Fatalf("RunRole (TurnID=%d) failed: %v", turnID, err)
+		}
+		out, err := os.ReadFile(paths.Stdout)
+		if err != nil {
+			t.Fatalf("read stdout: %v", err)
+		}
+		return extractEnvVar(string(out), "GOLEMIC_TURN_ID")
+	}
+
+	if got := run(1); got != "1" {
+		t.Errorf("GOLEMIC_TURN_ID for TurnID=1: got %q, want %q", got, "1")
+	}
+	if got := run(3); got != "3" {
+		t.Errorf("GOLEMIC_TURN_ID for TurnID=3: got %q, want %q", got, "3")
 	}
 }
