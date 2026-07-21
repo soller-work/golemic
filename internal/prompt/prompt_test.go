@@ -44,6 +44,19 @@ func writeTestGuidelines(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+func renderDirectiveAssertions(t *testing.T, name string, render func() (string, error)) {
+	t.Helper()
+
+	out, err := render()
+	if err != nil {
+		t.Fatalf("%s: unexpected error: %v", name, err)
+	}
+	if count := strings.Count(out, workingDirDirective); count != 1 {
+		t.Fatalf("%s: expected directive exactly once, got %d", name, count)
+	}
+	assertBefore(t, out, workingDirDirective, "## Instructions")
+}
+
 // AC-001: Dev prompt uses only --title/--body for open-pr; no b64 remnants
 func TestRenderDev_OpenPRFlags(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
@@ -224,6 +237,99 @@ func TestRenderDev_UserPromptNonEmpty(t *testing.T) {
 
 	if userPrompt == "" {
 		t.Error("userPrompt should be a non-empty string")
+	}
+}
+
+func TestRenderWorkingDirDirective(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "guidelines.md", "# Guidelines")
+
+	tests := []struct {
+		name   string
+		render func() (string, error)
+	}{
+		{
+			name: "RenderDev",
+			render: func() (string, error) {
+				return RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevRetry",
+			render: func() (string, error) {
+				return RenderDevRetry("Fix the null pointer", "", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevCIRetry",
+			render: func() (string, error) {
+				return RenderDevCIRetry("### verify\n```\ngo test failed\n```\n", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+			},
+		},
+		{
+			name: "RenderReviewer",
+			render: func() (string, error) {
+				return RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevRebaseConflictResolve",
+			render: func() (string, error) {
+				return RenderDevRebaseConflictResolve(42, "golemic/issue-42", "origin/main", []string{"foo.go"}, "go test ./...", guidelinesPath)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			renderDirectiveAssertions(t, tc.name, tc.render)
+		})
+	}
+}
+
+func TestRenderWorkingDirDirective_WithEmptyGuidelines(t *testing.T) {
+	dir := t.TempDir()
+	emptyGuidelinesPath := writeTestGuidelines(t, dir, "guidelines.md", "")
+
+	tests := []struct {
+		name   string
+		render func() (string, error)
+	}{
+		{
+			name: "RenderDev",
+			render: func() (string, error) {
+				return RenderDev(testIssue, "golemic/issue-42", "go test ./...", emptyGuidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevRetry",
+			render: func() (string, error) {
+				return RenderDevRetry("Fix the null pointer", "", testIssue, "golemic/issue-42", "go test ./...", emptyGuidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevCIRetry",
+			render: func() (string, error) {
+				return RenderDevCIRetry("### verify\n```\ngo test failed\n```\n", testIssue, "golemic/issue-42", "go test ./...", emptyGuidelinesPath)
+			},
+		},
+		{
+			name: "RenderReviewer",
+			render: func() (string, error) {
+				return RenderReviewer(123, testIssue, "go test ./...", emptyGuidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevRebaseConflictResolve",
+			render: func() (string, error) {
+				return RenderDevRebaseConflictResolve(42, "golemic/issue-42", "origin/main", []string{"foo.go"}, "go test ./...", emptyGuidelinesPath)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			renderDirectiveAssertions(t, tc.name, tc.render)
+		})
 	}
 }
 
