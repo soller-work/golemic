@@ -73,6 +73,7 @@ echo "GOLEMIC_RUN_ID: ${GOLEMIC_RUN_ID}"
 echo "GOLEMIC_EVENT_LOG: ${GOLEMIC_EVENT_LOG}"
 echo "GH_TOKEN: ${GH_TOKEN}"
 echo "PATH: ${PATH}"
+echo "PI_CODING_AGENT_DIR: ${PI_CODING_AGENT_DIR}"
 `
 }
 
@@ -87,6 +88,11 @@ func defaultRoleConfig(t *testing.T, role string) RoleConfig {
 	if err := os.WriteFile(systemPromptFile, []byte("system prompt content"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	// Fake local pi agent dir so preparePiAgentDir succeeds without a real pi install.
+	fakePiAgentDir := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", fakePiAgentDir)
+	// Redirect HOME so preparePiAgentDir writes ~/.golemic/pi to a temp dir.
+	t.Setenv("HOME", t.TempDir())
 	return RoleConfig{
 		Role:              role,
 		SystemPromptFile:  systemPromptFile,
@@ -192,6 +198,9 @@ func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
 	// PATH should have /usr/local/bin prepended
 	if !strings.Contains(stdoutStr, "/usr/local/bin:") {
 		t.Errorf("stdout transcript should contain golemic binary dir prepended in PATH, got: %s", stdoutStr)
+	}
+	if !strings.Contains(stdoutStr, "PI_CODING_AGENT_DIR:") {
+		t.Errorf("stdout transcript should contain PI_CODING_AGENT_DIR, got: %s", stdoutStr)
 	}
 
 	// Verify transcript files exist

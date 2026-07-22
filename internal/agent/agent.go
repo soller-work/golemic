@@ -323,12 +323,22 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 
 	paths = TranscriptPaths{Stdout: stdoutPath, Stderr: stderrPath}
 
+	// ---- Prepare golemic-owned pi agent dir ----
+	localPiDir, err := resolveLocalPiAgentDir()
+	if err != nil {
+		return 0, TranscriptPaths{}, err
+	}
+	golemicPiDir, err := preparePiAgentDir(localPiDir)
+	if err != nil {
+		return 0, TranscriptPaths{}, err
+	}
+
 	// ---- Model chain loop ----
 	var chainAttempts []AttemptSummary
 
 	for _, model := range chain {
 		var attemptErr error
-		exitCode, attemptErr = runModelAttempt(ctx, cfg, model, sessionID, golemicDir, stdoutPath, stderrPath)
+		exitCode, attemptErr = runModelAttempt(ctx, cfg, model, sessionID, golemicDir, golemicPiDir, stdoutPath, stderrPath)
 
 		// Wall-clock timeout is always terminal (BR-9).
 		if errors.Is(attemptErr, ErrTimeout) {
@@ -401,7 +411,7 @@ func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File
 // newPiCmd builds and configures the pi subprocess without starting it.
 // shimDir, when non-empty, is prepended to PATH so its gh shim takes precedence
 // over any system gh binary, blocking direct gh usage from agent bash.
-func newPiCmd(cfg RoleConfig, args []string, golemicDir, shimDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
+func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
 	cmd := CommandFactory("pi", args...)
 	cmd.Dir = cfg.WorktreeDir
 	agentPath := golemicDir + string(filepath.ListSeparator) + os.Getenv("PATH")
@@ -415,6 +425,7 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir, shimDir string, stdoutF
 		"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
 		"GH_TOKEN="+cfg.GHToken,
 		"PATH="+agentPath,
+		"PI_CODING_AGENT_DIR="+golemicPiDir,
 	)
 	env = append(env, cfg.Env...)
 	cmd.Env = env
@@ -424,7 +435,7 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir, shimDir string, stdoutF
 	return cmd
 }
 
-func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, golemicDir, stdoutPath, stderrPath string) (exitCode int, err error) {
+func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, golemicDir, golemicPiDir, stdoutPath, stderrPath string) (exitCode int, err error) {
 	args := buildPiArgs(cfg, model, sessionID)
 	idleTimeout := parseIdleTimeout()
 	maxStallRetries := parseMaxStallRetries()
@@ -437,7 +448,7 @@ func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, gole
 		if fileErr != nil {
 			return 0, fileErr
 		}
-		cmd := newPiCmd(cfg, args, golemicDir, shimDir, stdoutFile, stderrFile)
+		cmd := newPiCmd(cfg, args, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile)
 		if startErr := cmd.Start(); startErr != nil {
 			stdoutFile.Close() //nolint:errcheck
 			stderrFile.Close() //nolint:errcheck
