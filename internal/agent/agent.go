@@ -430,7 +430,7 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir s
 	env = append(env, cfg.Env...)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = stdoutFile
+	cmd.Stdout = &lineFilterWriter{dst: stdoutFile}
 	cmd.Stderr = stderrFile
 	return cmd
 }
