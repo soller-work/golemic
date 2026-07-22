@@ -51,6 +51,10 @@ const workingDirDirective = "## Working Directory\n\nYour `bash` tool starts eac
 // Prefers targeted edits over full-file rewrites to keep run-context token usage low.
 const editOverWriteDirective = "## File Edits\n\nPrefer the `edit` tool over `write` when modifying a file that already exists. Reserve `write` for new files or when replacing substantially all of a file's content. A full-file `write` re-emits the entire file into the run context and grows tokens over a long run."
 
+// noReReadDirective is injected into every dev prompt before ## Instructions.
+// Nudges the dev agent to avoid re-reading unchanged files at full length to keep token usage low.
+const noReReadDirective = "## File Re-reads\n\nKeep track of files you have already read during this run. Do **not** re-read an unchanged file in full — re-reading re-emits the whole file into the run context and grows tokens over a long run. If you only need part of a file, use a targeted `read` range (offset/limit) or a `golemic cbm` lookup instead. A fresh full read is correct when the file has changed since you last read it (e.g. after an `edit`, `write`, or a command that rewrote it)."
+
 const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 **Title:** {{.Issue.Title}}
@@ -76,6 +80,8 @@ Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intell
 ` + workingDirDirective + `
 
 ` + editOverWriteDirective + `
+
+` + noReReadDirective + `
 
 ---
 
@@ -259,6 +265,8 @@ Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intell
 
 ` + editOverWriteDirective + `
 
+` + noReReadDirective + `
+
 ---
 
 ## Instructions
@@ -344,6 +352,8 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 
 ` + editOverWriteDirective + `
 
+` + noReReadDirective + `
+
 ---
 
 ## Instructions
@@ -423,6 +433,8 @@ const devRebaseConflictResolveUserTemplate = `# Rebase Conflict Resolution: PR #
 ` + workingDirDirective + `
 
 ` + editOverWriteDirective + `
+
+` + noReReadDirective + `
 
 ---
 
