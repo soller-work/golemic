@@ -1146,6 +1146,7 @@ func TestRunMergePhase_SilentSuccessOnRaceDeleteFailure(t *testing.T) { //nolint
 	writeReviewEventForMerge(t, logPath, "approved", "high")
 
 	stderr := &strings.Builder{}
+	lsRemoteCalls := 0
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
 			if name == "git" && args[0] == "fetch" {
@@ -1155,7 +1156,11 @@ func TestRunMergePhase_SilentSuccessOnRaceDeleteFailure(t *testing.T) { //nolint
 				return "", nil
 			}
 			if name == "git" && args[0] == "ls-remote" {
-				return "abc123\trefs/heads/golemic/issue-43\n", nil
+				lsRemoteCalls++
+				if lsRemoteCalls == 1 {
+					return "abc123\trefs/heads/golemic/issue-43\n", nil // branch present before delete
+				}
+				return "", nil // branch gone after failed push (re-check)
 			}
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
 		},
@@ -1196,6 +1201,72 @@ func TestRunMergePhase_SilentSuccessOnRaceDeleteFailure(t *testing.T) { //nolint
 	}
 	if strings.Contains(stderr.String(), "remote branch delete failed") {
 		t.Errorf("no warning expected on race-lost push --delete, got: %q", stderr.String())
+	}
+}
+
+// AC-004c: push --delete fails with 'cannot lock ref / unable to resolve reference' (GitHub auto-delete race)
+// → branch is gone on re-check → silent success, no warning.
+func TestRunMergePhase_SilentSuccessOnCannotLockRefRace(t *testing.T) { //nolint:cyclop,funlen
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 46)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	stderr := &strings.Builder{}
+	lsRemoteCalls := 0
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				lsRemoteCalls++
+				if lsRemoteCalls == 1 {
+					return "abc123\trefs/heads/golemic/issue-46\n", nil // branch present before delete
+				}
+				return "", nil // branch gone: GitHub auto-delete already removed it
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if resp, ok := dispatchMergeGh(args, []string{ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "success"}})}, nil, nil, ""); ok {
+				return resp, nil
+			}
+			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
+				return "sha-046", nil
+			}
+			if name == "git" && args[0] == "push" && args[1] == "origin" && args[2] == "--delete" {
+				return "", fmt.Errorf("exit code 1: To https://github.com/soller-work/golemic.git\n ! [remote rejected] golemic/issue-46 (cannot lock ref 'refs/heads/golemic/issue-46': unable to resolve reference 'refs/heads/golemic/issue-46')\nerror: failed to push some refs to 'https://github.com/soller-work/golemic.git'")
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := &Runner{
+		executor:               exec,
+		issueNum:               46,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                t.TempDir(),
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: "proj"},
+		creds:                  mustLoadCreds(t),
+		branchName:             "golemic/issue-46",
+		stderr:                 stderr,
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
+	}
+
+	var written []eventlog.Event
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	if strings.Contains(stderr.String(), "remote branch delete failed") {
+		t.Errorf("no warning expected when GitHub auto-delete won the race, got: %q", stderr.String())
 	}
 }
 
