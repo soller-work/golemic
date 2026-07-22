@@ -47,6 +47,10 @@ type reviewerTemplateData struct {
 // Agents must not prefix bash commands with cd <worktree> because cmd.Dir is already set.
 const workingDirDirective = "## Working Directory\n\nYour `bash` tool starts each invocation with `cwd` already set to the worktree root. Do **not** prefix commands with `cd <path>` — it wastes tokens and clutters the run's progress display. If you must operate in a subdirectory for a single call, use a subshell, e.g. `(cd internal/foo && go test ./...)`."
 
+// editOverWriteDirective is injected into every dev prompt before ## Instructions.
+// Prefers targeted edits over full-file rewrites to keep run-context token usage low.
+const editOverWriteDirective = "## File Edits\n\nPrefer the `edit` tool over `write` when modifying a file that already exists. Reserve `write` for new files or when replacing substantially all of a file's content. A full-file `write` re-emits the entire file into the run context and grows tokens over a long run."
+
 const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 **Title:** {{.Issue.Title}}
@@ -70,6 +74,8 @@ Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intell
 ---
 
 ` + workingDirDirective + `
+
+` + editOverWriteDirective + `
 
 ---
 
@@ -251,6 +257,8 @@ Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intell
 
 ` + workingDirDirective + `
 
+` + editOverWriteDirective + `
+
 ---
 
 ## Instructions
@@ -334,6 +342,8 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 
 ` + workingDirDirective + `
 
+` + editOverWriteDirective + `
+
 ---
 
 ## Instructions
@@ -411,6 +421,8 @@ const devRebaseConflictResolveUserTemplate = `# Rebase Conflict Resolution: PR #
 ---
 
 ` + workingDirDirective + `
+
+` + editOverWriteDirective + `
 
 ---
 
