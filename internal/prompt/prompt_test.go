@@ -52,9 +52,22 @@ func renderDirectiveAssertions(t *testing.T, name string, render func() (string,
 		t.Fatalf("%s: unexpected error: %v", name, err)
 	}
 	if count := strings.Count(out, workingDirDirective); count != 1 {
-		t.Fatalf("%s: expected directive exactly once, got %d", name, count)
+		t.Fatalf("%s: expected workingDirDirective exactly once, got %d", name, count)
 	}
 	assertBefore(t, out, workingDirDirective, "## Instructions")
+}
+
+func renderEditDirectiveAssertions(t *testing.T, name string, render func() (string, error)) {
+	t.Helper()
+
+	out, err := render()
+	if err != nil {
+		t.Fatalf("%s: unexpected error: %v", name, err)
+	}
+	if count := strings.Count(out, editOverWriteDirective); count != 1 {
+		t.Fatalf("%s: expected editOverWriteDirective exactly once, got %d", name, count)
+	}
+	assertBefore(t, out, editOverWriteDirective, "## Instructions")
 }
 
 // AC-001: Dev prompt uses only --title/--body for open-pr; no b64 remnants
@@ -284,6 +297,57 @@ func TestRenderWorkingDirDirective(t *testing.T) {
 			renderDirectiveAssertions(t, tc.name, tc.render)
 		})
 	}
+}
+
+func TestRenderEditOverWriteDirective(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "guidelines.md", "# Guidelines")
+
+	devTests := []struct {
+		name   string
+		render func() (string, error)
+	}{
+		{
+			name: "RenderDev",
+			render: func() (string, error) {
+				return RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevRetry",
+			render: func() (string, error) {
+				return RenderDevRetry("Fix the null pointer", "", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevCIRetry",
+			render: func() (string, error) {
+				return RenderDevCIRetry("### verify\n```\ngo test failed\n```\n", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+			},
+		},
+		{
+			name: "RenderDevRebaseConflictResolve",
+			render: func() (string, error) {
+				return RenderDevRebaseConflictResolve(42, "golemic/issue-42", "origin/main", []string{"foo.go"}, "go test ./...", guidelinesPath)
+			},
+		},
+	}
+
+	for _, tc := range devTests {
+		t.Run(tc.name, func(t *testing.T) {
+			renderEditDirectiveAssertions(t, tc.name, tc.render)
+		})
+	}
+
+	// Reviewer must NOT contain the edit-over-write directive.
+	t.Run("RenderReviewer_NoEditDirective", func(t *testing.T) {
+		out, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false)
+		if err != nil {
+			t.Fatalf("RenderReviewer: unexpected error: %v", err)
+		}
+		if strings.Contains(out, editOverWriteDirective) {
+			t.Error("reviewer prompt must not contain editOverWriteDirective")
+		}
+	})
 }
 
 func TestRenderWorkingDirDirective_WithEmptyGuidelines(t *testing.T) {
