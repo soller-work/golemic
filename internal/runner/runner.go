@@ -54,11 +54,12 @@ type Runner struct {
 	lookupEnv   func(string) (string, bool)
 	runAgentFn  func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
 
-	clean bool
-	quiet bool
+	clean  bool
+	quiet  bool
+	resume bool
 
 	// Progress rendering (nil when --quiet)
-	progressRenderer *progress.Renderer
+	progressRenderer  *progress.Renderer
 	progressScanIndex int // next events.jsonl index to scan in emitAgentWrittenEvents
 
 	ciPollIntervalOverride time.Duration
@@ -128,6 +129,10 @@ func (r *Runner) SetCITimeout(d time.Duration) { r.ciTimeoutOverride = d }
 
 // SetQuiet suppresses the run-setup header when set to true.
 func (r *Runner) SetQuiet(quiet bool) { r.quiet = quiet }
+
+// SetResume enables resume mode: the collision check is skipped and orchestration
+// starts from an existing open PR for the issue branch.
+func (r *Runner) SetResume(resume bool) { r.resume = resume }
 
 // SetSink injects a telemetry sink, bypassing the config-driven sink selection in Run.
 // Used by tests to inject a recording or failing sink at the runner level.
@@ -281,35 +286,37 @@ func (r *Runner) Run() int {
 		}
 	}
 
-	// ---- PS-005: Collision check ----
-	collision, err := r.checkAllCollisions()
-	if err != nil {
-		fmt.Fprintln(r.stderr, err.Error())
-		// Write run_finished with outcome aborted
-		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-		_ = ew.Write(eventlog.Event{
-			Type:    eventlog.EventRunFinished,
-			Ts:      time.Now().Format(time.RFC3339),
-			RunID:   r.runID,
-			TurnID:  r.turnCounter,
-			Payload: finishedPayload,
-		})
-		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
-		return 1
-	}
-	if collision != nil {
-		fmt.Fprintln(r.stderr, collision.Message)
-		// Write run_finished with outcome aborted
-		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-		_ = ew.Write(eventlog.Event{
-			Type:    eventlog.EventRunFinished,
-			Ts:      time.Now().Format(time.RFC3339),
-			RunID:   r.runID,
-			TurnID:  r.turnCounter,
-			Payload: finishedPayload,
-		})
-		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
-		return 1
+	// ---- PS-005: Collision check (skipped in resume mode) ----
+	if !r.resume {
+		collision, err := r.checkAllCollisions()
+		if err != nil {
+			fmt.Fprintln(r.stderr, err.Error())
+			// Write run_finished with outcome aborted
+			finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
+			_ = ew.Write(eventlog.Event{
+				Type:    eventlog.EventRunFinished,
+				Ts:      time.Now().Format(time.RFC3339),
+				RunID:   r.runID,
+				TurnID:  r.turnCounter,
+				Payload: finishedPayload,
+			})
+			fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
+			return 1
+		}
+		if collision != nil {
+			fmt.Fprintln(r.stderr, collision.Message)
+			// Write run_finished with outcome aborted
+			finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
+			_ = ew.Write(eventlog.Event{
+				Type:    eventlog.EventRunFinished,
+				Ts:      time.Now().Format(time.RFC3339),
+				RunID:   r.runID,
+				TurnID:  r.turnCounter,
+				Payload: finishedPayload,
+			})
+			fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
+			return 1
+		}
 	}
 
 	// ---- Telemetry sink setup ----
@@ -334,7 +341,12 @@ func (r *Runner) Run() int {
 		"pid":          os.Getpid(),
 	})
 
-	finalOutcome := r.orchestrate(ew, eventLogPath, runSpanID)
+	var finalOutcome string
+	if r.resume {
+		finalOutcome = r.resumeOrchestrate(ew, eventLogPath, runSpanID)
+	} else {
+		finalOutcome = r.orchestrate(ew, eventLogPath, runSpanID)
+	}
 
 	// Worktree cleanup spans (children of run span, only on success)
 	golemicDir2 := filepath.Join(r.homeDir, ".golemic", r.project)

@@ -813,10 +813,12 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	var issueNum int
 	var cleanFlag bool
 	var quietFlag bool
+	var resumeFlag bool
 	fs.IntVar(&issueNum, "issue", 0, "GitHub issue number (required)")
 	fs.BoolVar(&cleanFlag, "clean", false, "Remove leftover artifacts for the issue before running")
 	fs.BoolVar(&quietFlag, "quiet", false, "Suppress the run-setup header")
 	fs.BoolVar(&quietFlag, "q", false, "Suppress the run-setup header (shorthand)")
+	fs.BoolVar(&resumeFlag, "resume", false, "Resume from an existing open PR (skips collision check)")
 
 	if err := fs.Parse(args[2:]); err != nil {
 		return 1
@@ -844,6 +846,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	r.SetStderr(stderr)
 	r.SetClean(cleanFlag)
 	r.SetQuiet(quietFlag)
+	r.SetResume(resumeFlag)
 	return r.Run()
 }
 
