@@ -788,8 +788,11 @@ existiert bereits separat.
   commit / push / `golemic open-pr`; `gm_dev_done` trägt `{ summary, commitMsg, prTitle, prBody }`;
   ungültige Fertigmeldung → Neustart, gebounded auf 2 Retries; Runner schreibt `pr_opened` +
   bestehende Dev-Lifecycle-Events (breite Eventlog-Migration bleibt Issue 7). (§14, §15.1)
-- [ ] **4. Reviewer read-only + Precheck** — Runner-Precheck (§11) + Reviewer read-only
-  starten + `gm_pr_view` + `gm_repo_tree`.
+- [ ] **4. Reviewer read-only + Precheck** ([#179](https://github.com/soller-work/golemic/issues/179), blocked-by #173, #175) — Runner-Precheck (§11) vor jedem
+  Reviewer-Attempt (before-/afterFingerprint aus #175, `config.VerifyCommand` im Reviewer-Worktree,
+  `reviewer_precheck`-Event, gebounded in den Prompt) + Reviewer read-only starten (kein `edit`/`write`;
+  `bash` bleibt vorerst nur für den heutigen CLI-Submit) + `gm_pr_view` + `gm_repo_tree` über den #173-Transport.
+  Approval-Gate (§12) und `gm_review_submit(_comment)` bleiben Issue 5.
 - [ ] **5. Reviewer-Submit** — `gm_review_submit_comment` (non-terminal, Pending Review) +
   `gm_review_submit` terminal + Reviewer-Gate. (§12, §13)
 - [ ] **6. Code Intelligence `gm_code_*`** — read-only cbmbroker-backed Tools. (§7)
