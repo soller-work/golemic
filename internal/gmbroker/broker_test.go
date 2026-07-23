@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -189,49 +190,218 @@ func TestSliceGet_FetchError(t *testing.T) {
 // gm_dev_done
 // ---------------------------------------------------------------------------
 
+// devAllowedTools is the full dev agent tool allowlist (includes gm_project_check).
+var devAllowedTools = []string{"gm_slice_get", "gm_project_check", "gm_dev_done", "gm_review_submit"}
+
+// startTestBrokerDev starts a broker with the dev tool allowlist (including gm_project_check).
+func startTestBrokerDev(t *testing.T) (*Broker, string) {
+	t.Helper()
+	sockPath := filepath.Join(shortTempDir(t), "gm.sock")
+	b, err := StartWithFetcherAndProjectCheck(sockPath,
+		func(_ context.Context) (string, error) { return "spec", nil },
+		ProjectCheckConfig{}, devAllowedTools)
+	if err != nil {
+		t.Fatalf("StartWithFetcherAndProjectCheck: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	return b, sockPath
+}
+
+// startTestBrokerWithGate starts a broker pre-configured for §10 gate testing:
+// projectCheckFn returns green with fingerprint "gate-test-fp" and computeFingerprintFn
+// returns the same fingerprint so gm_dev_done passes after one project_check call.
+func startTestBrokerWithGate(t *testing.T) (*Broker, string) {
+	t.Helper()
+	b, sockPath := startTestBrokerDev(t)
+	b.SetProjectCheckFn(func(_ ProjectCheckConfig, _ string) (*ProjectCheckResult, error) {
+		return &ProjectCheckResult{
+			OK:                     true,
+			WorkingTreeFingerprint: "gate-test-fp",
+			Summary:                "verify passed",
+		}, nil
+	})
+	b.SetComputeFingerprintFn(func(_ string) (string, error) {
+		return "gate-test-fp", nil
+	})
+	return b, sockPath
+}
+
 // TestDevDone_ValidPayload verifies that a well-formed gm_dev_done call returns
-// a structured echo and triggers no side effects.
+// {ok:true,accepted:true} and stores the params in the broker after the §10 gate passes.
 func TestDevDone_ValidPayload(t *testing.T) {
-	_, sockPath := startTestBroker(t, nil)
+	broker, sockPath := startTestBrokerWithGate(t)
+
+	// Satisfy the §10 gate: call gm_project_check first.
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
 
 	params := map[string]any{
 		"summary":   "Implement the feature",
 		"commitMsg": "feat(runner): implement gm_ transport (173)",
+		"prTitle":   "feat: implement gm_ transport",
+		"prBody":    "Closes #173",
 	}
 	result := call(t, sockPath, "gm_dev_done", "c1", params)
 
 	if result["ok"] != true {
-		t.Errorf("ok: got %v, want true", result["ok"])
+		t.Errorf("ok: got %v, want true; full result: %v", result["ok"], result)
 	}
-	echo, _ := result["echo"].(map[string]any)
-	if echo == nil {
-		t.Fatalf("echo: expected object, got %v", result["echo"])
+	if result["accepted"] != true {
+		t.Errorf("accepted: got %v, want true", result["accepted"])
 	}
-	if echo["summary"] != params["summary"] {
-		t.Errorf("echo.summary: got %v, want %v", echo["summary"], params["summary"])
+
+	// Verify params are stored in the broker.
+	stored, ok := broker.DevDoneResult()
+	if !ok {
+		t.Fatal("DevDoneResult: expected stored params, got false")
 	}
-	if echo["commitMsg"] != params["commitMsg"] {
-		t.Errorf("echo.commitMsg: got %v, want %v", echo["commitMsg"], params["commitMsg"])
+	if stored.Summary != "Implement the feature" {
+		t.Errorf("stored.Summary: got %q, want %q", stored.Summary, "Implement the feature")
+	}
+	if stored.PrTitle != "feat: implement gm_ transport" {
+		t.Errorf("stored.PrTitle: got %q", stored.PrTitle)
+	}
+	if stored.PrBody != "Closes #173" {
+		t.Errorf("stored.PrBody: got %q", stored.PrBody)
+	}
+}
+
+// TestDevDone_TerminalRetryIsIdempotent verifies that a retry of the same
+// accepted terminal call returns the same accepted result and does not mutate
+// broker state.
+func TestDevDone_TerminalRetryIsIdempotent(t *testing.T) {
+	broker, sockPath := startTestBrokerWithGate(t)
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
+
+	params := devDoneParams()
+	first := call(t, sockPath, "gm_dev_done", "c1", params)
+	second := call(t, sockPath, "gm_dev_done", "c1", params)
+
+	if first["ok"] != true || first["accepted"] != true {
+		t.Fatalf("first call: got %v", first)
+	}
+	if second["ok"] != true || second["accepted"] != true {
+		t.Fatalf("second call: got %v", second)
+	}
+
+	stored, ok := broker.DevDoneResult()
+	if !ok {
+		t.Fatal("DevDoneResult: expected stored params, got false")
+	}
+	wantSummary, _ := params["summary"].(string)
+	if stored.Summary != wantSummary {
+		t.Errorf("stored.Summary: got %q, want %q", stored.Summary, wantSummary)
+	}
+}
+
+// TestDevDone_DifferentSecondTerminalCallRejected verifies that a different
+// second terminal call in the same broker invocation is rejected as a protocol
+// error and does not overwrite the first accepted result.
+func TestDevDone_DifferentSecondTerminalCallRejected(t *testing.T) {
+	broker, sockPath := startTestBrokerWithGate(t)
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
+
+	firstParams := devDoneParams()
+	first := call(t, sockPath, "gm_dev_done", "c1", firstParams)
+	if first["ok"] != true || first["accepted"] != true {
+		t.Fatalf("first call: got %v", first)
+	}
+
+	second := call(t, sockPath, "gm_dev_done", "c2", map[string]any{
+		"summary":   "Different summary",
+		"commitMsg": "feat(test): different (42)",
+		"prTitle":   "feat: different",
+		"prBody":    "Closes #42",
+	})
+
+	if second["ok"] != false {
+		t.Errorf("ok: got %v, want false", second["ok"])
+	}
+	if second["code"] != "PROTOCOL_ERROR" {
+		t.Errorf("code: got %v, want PROTOCOL_ERROR", second["code"])
+	}
+	stored, ok := broker.DevDoneResult()
+	if !ok {
+		t.Fatal("DevDoneResult: expected stored params, got false")
+	}
+	wantSummary, _ := firstParams["summary"].(string)
+	if stored.Summary != wantSummary {
+		t.Errorf("stored.Summary: got %q, want %q", stored.Summary, wantSummary)
+	}
+}
+
+// TestDevDone_SchemaInvalidIsTerminalFailure verifies that a schema-invalid
+// gm_dev_done call closes the invocation so a later valid call cannot turn it
+// into success.
+func TestDevDone_SchemaInvalidIsTerminalFailure(t *testing.T) {
+	broker, sockPath := startTestBrokerWithGate(t)
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
+
+	first := call(t, sockPath, "gm_dev_done", "c1", map[string]any{
+		"summary":   "Implement the feature",
+		"commitMsg": "feat(test): implement (42)",
+		"prTitle":   "feat: implement",
+		// prBody omitted
+	})
+	if first["ok"] != false {
+		t.Fatalf("first call: got %v, want ok=false", first)
+	}
+	if first["code"] != "SCHEMA_INVALID" {
+		t.Fatalf("first call: got code %v, want SCHEMA_INVALID", first["code"])
+	}
+
+	second := call(t, sockPath, "gm_dev_done", "c2", devDoneParams())
+	if second["ok"] != false {
+		t.Errorf("ok: got %v, want false", second["ok"])
+	}
+	if second["code"] != "PROTOCOL_ERROR" {
+		t.Errorf("code: got %v, want PROTOCOL_ERROR", second["code"])
+	}
+	if _, ok := broker.DevDoneResult(); ok {
+		t.Error("DevDoneResult: expected false after schema-invalid terminal call")
+	}
+	term, ok := broker.DevDoneTerminalResult()
+	if !ok {
+		t.Fatal("DevDoneTerminalResult: expected stored terminal result")
+	}
+	if term.Status != "SCHEMA_INVALID" {
+		t.Fatalf("DevDoneTerminalResult.Status: got %q, want SCHEMA_INVALID", term.Status)
+	}
+	if !strings.Contains(term.Message, "prBody is required") {
+		t.Fatalf("DevDoneTerminalResult.Message: got %q, want schema error", term.Message)
+	}
+	if len(term.Result) == 0 {
+		t.Fatal("DevDoneTerminalResult.Result: expected stored raw result")
 	}
 }
 
 // TestDevDone_MissingField rejects a payload that omits required fields.
 func TestDevDone_MissingField(t *testing.T) {
-	_, sockPath := startTestBroker(t, nil)
-
-	result := call(t, sockPath, "gm_dev_done", "c1", map[string]any{"summary": "ok"})
-
-	if result["ok"] != false {
-		t.Errorf("ok: got %v, want false", result["ok"])
+	cases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{"missing commitMsg", map[string]any{"summary": "ok", "prTitle": "T", "prBody": "B"}},
+		{"missing summary", map[string]any{"commitMsg": "fix: (1)", "prTitle": "T", "prBody": "B"}},
+		{"missing prTitle", map[string]any{"summary": "ok", "commitMsg": "fix: (1)", "prBody": "B"}},
+		{"missing prBody", map[string]any{"summary": "ok", "commitMsg": "fix: (1)", "prTitle": "T"}},
 	}
-	if result["code"] != "SCHEMA_INVALID" {
-		t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, sockPath := startTestBroker(t, nil)
+			result := call(t, sockPath, "gm_dev_done", "c1", tc.params)
+			if result["ok"] != false {
+				t.Errorf("ok: got %v, want false", result["ok"])
+			}
+			if result["code"] != "SCHEMA_INVALID" {
+				t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
+			}
+		})
 	}
 }
 
-// TestDevDone_NoSideEffect verifies that a stub call does not create files, git
-// commits, or any other observable mutation.
-func TestDevDone_NoSideEffect(t *testing.T) {
+// TestDevDone_NoFileSystemSideEffect verifies that a gm_dev_done call does not
+// create files or any file-system mutations (params are stored in memory only).
+func TestDevDone_NoFileSystemSideEffect(t *testing.T) {
 	dir := t.TempDir()
 	before, _ := os.ReadDir(dir)
 
@@ -239,11 +409,139 @@ func TestDevDone_NoSideEffect(t *testing.T) {
 	call(t, sockPath, "gm_dev_done", "c1", map[string]any{
 		"summary":   "done",
 		"commitMsg": "feat: done (001)",
+		"prTitle":   "feat: done",
+		"prBody":    "Closes #1",
 	})
 
 	after, _ := os.ReadDir(dir)
 	if len(before) != len(after) {
 		t.Errorf("unexpected file system change: %d entries before, %d after", len(before), len(after))
+	}
+}
+
+// TestDevDone_ResultAbsentBeforeCall verifies that DevDoneResult returns false
+// before gm_dev_done has been called.
+func TestDevDone_ResultAbsentBeforeCall(t *testing.T) {
+	broker, _ := startTestBroker(t, nil)
+	if _, ok := broker.DevDoneResult(); ok {
+		t.Error("DevDoneResult: expected false before any gm_dev_done call")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// §10 acceptance gate
+// ---------------------------------------------------------------------------
+
+// devDoneParams returns a valid gm_dev_done param map.
+func devDoneParams() map[string]any {
+	return map[string]any{
+		"summary":   "Implement the feature",
+		"commitMsg": "feat(test): implement (42)",
+		"prTitle":   "feat: implement",
+		"prBody":    "Closes #42",
+	}
+}
+
+// TestDevDone_Gate_NoPriorCheck verifies BR-2: no prior gm_project_check → DEV_GATE.
+func TestDevDone_Gate_NoPriorCheck(t *testing.T) {
+	_, sockPath := startTestBrokerDev(t)
+
+	result := call(t, sockPath, "gm_dev_done", "c1", devDoneParams())
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "DEV_GATE" {
+		t.Errorf("code: got %v, want DEV_GATE", result["code"])
+	}
+	if msg, _ := result["message"].(string); !strings.Contains(msg, "no prior") {
+		t.Errorf("message: got %q, want mention of no prior check", msg)
+	}
+}
+
+// TestDevDone_Gate_LastCheckRed verifies BR-2: last check red → DEV_GATE.
+func TestDevDone_Gate_LastCheckRed(t *testing.T) {
+	b, sockPath := startTestBrokerDev(t)
+	b.SetProjectCheckFn(func(_ ProjectCheckConfig, _ string) (*ProjectCheckResult, error) {
+		return &ProjectCheckResult{OK: false, WorkingTreeFingerprint: "fp1"}, nil
+	})
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return "fp1", nil })
+
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
+	result := call(t, sockPath, "gm_dev_done", "c1", devDoneParams())
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "DEV_GATE" {
+		t.Errorf("code: got %v, want DEV_GATE", result["code"])
+	}
+	if msg, _ := result["message"].(string); !strings.Contains(msg, "not green") {
+		t.Errorf("message: got %q, want mention of not green", msg)
+	}
+}
+
+// TestDevDone_Gate_RedAfterGreen verifies BR-2: red check after last green → DEV_GATE.
+func TestDevDone_Gate_RedAfterGreen(t *testing.T) {
+	b, sockPath := startTestBrokerDev(t)
+	callCount := 0
+	b.SetProjectCheckFn(func(_ ProjectCheckConfig, _ string) (*ProjectCheckResult, error) {
+		callCount++
+		ok := callCount == 1 // first call green, second red
+		return &ProjectCheckResult{OK: ok, WorkingTreeFingerprint: "fp1"}, nil
+	})
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return "fp1", nil })
+
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{}) // green
+	call(t, sockPath, "gm_project_check", "c1", map[string]any{}) // red — becomes lastCheck
+	result := call(t, sockPath, "gm_dev_done", "c2", devDoneParams())
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "DEV_GATE" {
+		t.Errorf("code: got %v, want DEV_GATE", result["code"])
+	}
+}
+
+// TestDevDone_Gate_TreeMutated verifies BR-2: tree changed after last green check → DEV_GATE.
+func TestDevDone_Gate_TreeMutated(t *testing.T) {
+	b, sockPath := startTestBrokerDev(t)
+	b.SetProjectCheckFn(func(_ ProjectCheckConfig, _ string) (*ProjectCheckResult, error) {
+		return &ProjectCheckResult{OK: true, WorkingTreeFingerprint: "fp-before"}, nil
+	})
+	// computeFingerprintFn returns a different fingerprint — simulates a file change.
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return "fp-after", nil })
+
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
+	result := call(t, sockPath, "gm_dev_done", "c1", devDoneParams())
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "DEV_GATE" {
+		t.Errorf("code: got %v, want DEV_GATE", result["code"])
+	}
+	if msg, _ := result["message"].(string); !strings.Contains(msg, "changed") {
+		t.Errorf("message: got %q, want mention of tree change", msg)
+	}
+}
+
+// TestDevDone_Gate_GateRejectedAccessors verifies DevDoneGateRejected/DevDoneGateReason.
+func TestDevDone_Gate_GateRejectedAccessors(t *testing.T) {
+	b, sockPath := startTestBrokerDev(t) // no projectCheckFn → gate will reject (no prior check)
+
+	if b.DevDoneGateRejected() {
+		t.Error("DevDoneGateRejected: expected false before any call")
+	}
+
+	call(t, sockPath, "gm_dev_done", "c1", devDoneParams()) // rejects: no prior check
+
+	if !b.DevDoneGateRejected() {
+		t.Error("DevDoneGateRejected: expected true after rejection")
+	}
+	if b.DevDoneGateReason() == "" {
+		t.Error("DevDoneGateReason: expected non-empty after rejection")
 	}
 }
 

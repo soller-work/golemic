@@ -168,6 +168,7 @@ type RoleConfig struct {
 	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
 	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
 	Env               []string      // additional "KEY=VALUE" pairs merged into the subprocess environment
+	TerminalDone      chan struct{} // closed when gm_dev_done reaches a terminal result
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.
@@ -433,7 +434,7 @@ func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File
 // newPiCmd builds and configures the pi subprocess without starting it.
 // shimDir, when non-empty, is prepended to PATH so its gh shim takes precedence
 // over any system gh binary, blocking direct gh usage from agent bash.
-func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
+func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir string, stdoutFile, stderrFile *os.File, terminalDone chan struct{}) *exec.Cmd {
 	cmd := CommandFactory("pi", args...)
 	cmd.Dir = cfg.WorktreeDir
 	agentPath := golemicDir + string(filepath.ListSeparator) + loginShellPATHResolver()
@@ -454,7 +455,14 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir s
 	env = append(env, cfg.Env...)
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = &lineFilterWriter{dst: stdoutFile}
+	cmd.Stdout = &lineFilterWriter{dst: stdoutFile, onLine: func(line []byte) {
+		if terminalDone != nil && terminalDoneFromLine(line) {
+			select {
+			case terminalDone <- struct{}{}:
+			default:
+			}
+		}
+	}}
 	cmd.Stderr = stderrFile
 	return cmd
 }
@@ -475,13 +483,15 @@ func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, gole
 		if fileErr != nil {
 			return 0, fileErr
 		}
-		cmd := newPiCmd(cfg, args, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile)
+		terminalDone := make(chan struct{}, 1)
+		cfg.TerminalDone = terminalDone
+		cmd := newPiCmd(cfg, args, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile, terminalDone)
 		if startErr := cmd.Start(); startErr != nil {
 			stdoutFile.Close() //nolint:errcheck
 			stderrFile.Close() //nolint:errcheck
 			return 0, fmt.Errorf("agent: failed to start pi process: %w", startErr)
 		}
-		exitCode, stallReason, waitErr := waitForProcess(ctx, cfg, cmd, stdoutFile, stderrFile, attempt, idleTimeout)
+		exitCode, stallReason, waitErr := waitForProcess(ctx, cfg, cmd, stdoutFile, stderrFile, terminalDone, attempt, idleTimeout)
 		if stallReason == "" {
 			return exitCode, waitErr
 		}
@@ -537,59 +547,87 @@ func resolveWaitError(waitErr error) (int, error) {
 	return 0, fmt.Errorf("agent: process wait failed: %w", waitErr)
 }
 
+func terminalWaitResult(cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, done <-chan error, cancel context.CancelFunc) (int, string, error) {
+	killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
+	cancel()
+	if killErr != nil && !errors.Is(killErr, syscall.ESRCH) {
+		return 0, "", fmt.Errorf("agent: terminal process group kill failed for role %q: %w", cfg.Role, killErr)
+	}
+	return 0, "", nil
+}
+
+func timeoutWaitResult(cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, done <-chan error, cancel context.CancelFunc) (int, string, error) {
+	killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
+	cancel()
+	if killErr != nil {
+		return 0, "", fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
+			ErrTimeout, cfg.Role, cfg.Timeout, killErr)
+	}
+	return 0, "", fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
+}
+
+func handlePollTick(cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, done <-chan error, pollTicker *time.Ticker, cancel context.CancelFunc, toolState *toolProgressState, lastProgress *time.Time, lastStreamOffset *int64, attempt int, idleTimeout time.Duration) (int, string, error) {
+	newlyCompleted, inFlight := readToolProgress(stdoutFile.Name(), toolState)
+	if newlyCompleted > 0 {
+		*lastProgress = time.Now()
+		*lastStreamOffset = toolState.offset
+	}
+	if !inFlight && time.Since(*lastProgress) >= idleTimeout {
+		reason := classifyStall(cfg.Role, attempt, time.Since(*lastProgress), idleTimeout, toolState.offset, *lastStreamOffset)
+		pollErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
+		pollTicker.Stop()
+		cancel()
+		if pollErr != nil {
+			return 0, "", fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, pollErr)
+		}
+		return 0, reason, nil
+	}
+	return 0, "", nil
+}
+
+func doneWaitResult(waitErr error, stdoutFile, stderrFile *os.File, cancel context.CancelFunc) (int, string, error) {
+	stdoutFile.Close() //nolint:errcheck
+	stderrFile.Close() //nolint:errcheck
+	cancel()
+	code, resolveErr := resolveWaitError(waitErr)
+	return code, "", resolveErr
+}
+
 // waitForProcess runs the timeout/stall/wait loop after cmd has been started.
 // It closes stdoutFile and stderrFile in all code paths.
 // Returns (exitCode, stallReason, err): stallReason is "" on non-stall exit,
 // "hang" when the stream was frozen (retry eligible), "thinking_loop" when the
 // stream kept growing without tool progress (terminal, no retry).
-func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, attempt int, idleTimeout time.Duration) (exitCode int, reason string, err error) {
+func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, terminalDone <-chan struct{}, attempt int, idleTimeout time.Duration) (exitCode int, reason string, err error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	pollTicker := time.NewTicker(pollInterval)
 	lastProgress := time.Now()
 	var toolState toolProgressState
-	var waitErr error
 	// lastStreamOffset tracks stream offset when last tool completed, to detect
 	// whether the activity file grew since then (thinking_loop) or froze (hang).
 	lastStreamOffset := toolState.offset
 
 	for {
 		select {
+		case <-terminalDone:
+			pollTicker.Stop()
+			return terminalWaitResult(cfg, cmd, stdoutFile, stderrFile, done, cancel)
+
 		case <-timeoutCtx.Done():
 			pollTicker.Stop()
-			killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
-			cancel()
-			if killErr != nil {
-				return 0, "", fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
-					ErrTimeout, cfg.Role, cfg.Timeout, killErr)
-			}
-			return 0, "", fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
+			return timeoutWaitResult(cfg, cmd, stdoutFile, stderrFile, done, cancel)
 
 		case <-pollTicker.C:
-			newlyCompleted, inFlight := readToolProgress(stdoutFile.Name(), &toolState)
-			if newlyCompleted > 0 {
-				lastProgress = time.Now()
-				lastStreamOffset = toolState.offset
-			}
-			if !inFlight && time.Since(lastProgress) >= idleTimeout {
-				r := classifyStall(cfg.Role, attempt, time.Since(lastProgress), idleTimeout, toolState.offset, lastStreamOffset)
-				killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
-				pollTicker.Stop()
-				cancel()
-				if killErr != nil {
-					return 0, "", fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, killErr)
-				}
-				return 0, r, nil
+			exitCode, reason, err := handlePollTick(cfg, cmd, stdoutFile, stderrFile, done, pollTicker, cancel, &toolState, &lastProgress, &lastStreamOffset, attempt, idleTimeout)
+			if err != nil || reason != "" {
+				return exitCode, reason, err
 			}
 
-		case waitErr = <-done:
+		case err := <-done:
 			pollTicker.Stop()
-			stdoutFile.Close() //nolint:errcheck
-			stderrFile.Close() //nolint:errcheck
-			cancel()
-			code, resolveErr := resolveWaitError(waitErr)
-			return code, "", resolveErr
+			return doneWaitResult(err, stdoutFile, stderrFile, cancel)
 		}
 	}
 }

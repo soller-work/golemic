@@ -90,17 +90,17 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 
 ` + scaffoldFrame + `
 
-1. **First, fetch the authoritative task specification:** run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The output is either a structured JSON slice or the raw issue body — treat that output as the source of truth. Do not rely on any summary rendered in the issue's web UI.
+1. **First, fetch the authoritative task specification:** run ` + "`" + `gm_slice_get` + "`" + ` for issue ` + "`" + `{{.Issue.Number}}` + "`" + `. The output is the source of truth — do not rely on any summary rendered in the issue's web UI.
 2. Understand the spec and the guidelines above.
 3. Implement the necessary changes on branch ` + "`" + `{{.Branch}}` + "`" + `.
-4. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-5. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
-6. Push the branch: ` + "`" + `git push -u origin {{.Branch}}` + "`" + `
-7. **Only after ` + "`" + `{{.VerifyCommand}}` + "`" + ` exits 0**, open the PR:
-   ` + "`" + `golemic open-pr --title "..." --body "..."` + "`" + `
-   The body **must** include a closing keyword so merging auto-closes the issue, e.g. ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `.
+4. Run ` + "`" + `gm_project_check` + "`" + ` iteratively until it returns ` + "`" + `ok: true` + "`" + `. Fix any failures before proceeding.
+5. Once ` + "`" + `gm_project_check` + "`" + ` returns ` + "`" + `ok: true` + "`" + `, call ` + "`" + `gm_dev_done` + "`" + ` with:
+   - ` + "`" + `summary` + "`" + `: a brief description of the changes made
+   - ` + "`" + `commitMsg` + "`" + `: a Conventional Commit message, e.g. ` + "`" + `feat(scope): description ({{.Issue.Number}})` + "`" + `
+   - ` + "`" + `prTitle` + "`" + `: a concise PR title
+   - ` + "`" + `prBody` + "`" + `: the PR description — **must** include ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `
 
-> **Important:** Do not run ` + "`" + `gh pr create` + "`" + ` — the runner requires the ` + "`" + `pr_opened` + "`" + ` event that only ` + "`" + `golemic open-pr` + "`" + ` writes. ` + "`" + `golemic open-pr` + "`" + ` is the **sole** permitted method to open a PR.
+> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, ` + "`" + `git push` + "`" + `, or ` + "`" + `golemic open-pr` + "`" + `. The runner performs all of those steps automatically after ` + "`" + `gm_dev_done` + "`" + ` is accepted.
 `
 
 const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
@@ -237,12 +237,77 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 {{end}}
 ` + scaffoldFrame + `
 
-1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
+1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `gm_slice_get` + "`" + ` for issue ` + "`" + `{{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
 2. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
-3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
-5. Push the branch: ` + "`" + `git push origin {{.Branch}}` + "`" + `
+3. Run ` + "`" + `gm_project_check` + "`" + ` iteratively until it returns ` + "`" + `ok: true` + "`" + `. Fix any failures before proceeding.
+4. Once ` + "`" + `gm_project_check` + "`" + ` returns ` + "`" + `ok: true` + "`" + `, call ` + "`" + `gm_dev_done` + "`" + ` with summary, commitMsg, prTitle, and prBody.
+
+> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, ` + "`" + `git push` + "`" + `, or ` + "`" + `golemic open-pr` + "`" + `. The runner handles those steps. Do **not** open a new PR — the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will be updated automatically.
 `
+
+// devGateRetryTemplateData holds the template variables for a gate-retry dev prompt.
+type devGateRetryTemplateData struct {
+	Issue         Issue
+	Branch        string
+	VerifyCommand string
+	GateReason    string
+	Guidelines    string
+	Directives    string
+}
+
+const devGateRetryUserTemplate = `# Gate Retry: Fix Verification Before Completing Issue #{{.Issue.Number}}
+
+**Title:** {{.Issue.Title}}
+
+**Branch:** {{.Branch}}
+
+**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
+
+**Previous gm_dev_done rejection:** {{.GateReason}}
+
+` + scaffoldFrame + `
+
+Your previous ` + "`" + `gm_dev_done` + "`" + ` call was rejected by the acceptance gate. To proceed:
+
+1. Run ` + "`" + `gm_project_check` + "`" + `. It must return ` + "`" + `ok: true` + "`" + `. Fix any failures.
+2. Do **not** modify files after ` + "`" + `gm_project_check` + "`" + ` returns ` + "`" + `ok: true` + "`" + ` — the runner recomputes the working-tree fingerprint at ` + "`" + `gm_dev_done` + "`" + ` time and requires it to match.
+3. Call ` + "`" + `gm_dev_done` + "`" + ` with summary, commitMsg, prTitle, and prBody.
+   - ` + "`" + `prBody` + "`" + ` must include ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `.
+
+> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, ` + "`" + `git push` + "`" + `, or ` + "`" + `golemic open-pr` + "`" + `. The runner handles all of that.
+`
+
+// RenderDevGateRetry renders a gate-retry dev user prompt explaining the gate
+// rejection reason and instructing the agent to re-run gm_project_check then
+// gm_dev_done. Returns an error if the guidelines file cannot be read or template
+// execution fails.
+func RenderDevGateRetry(gateReason string, issue Issue, branch, verifyCommand, guidelinesPath string) (string, error) {
+	guidelines, err := readGuidelines(guidelinesPath)
+	if err != nil {
+		return "", err
+	}
+
+	data := devGateRetryTemplateData{
+		Issue:         issue,
+		Branch:        branch,
+		VerifyCommand: verifyCommand,
+		GateReason:    gateReason,
+		Guidelines:    guidelines,
+		Directives:    workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
+	}
+
+	tmpl, err := template.New("devGateRetry").Parse(devGateRetryUserTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse dev gate retry prompt template: %w", err)
+	}
+
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return "", fmt.Errorf("failed to render dev gate retry prompt template: %w", err)
+	}
+
+	return sb.String(), nil
+}
 
 // RenderDevRetry renders a dev retry user prompt injecting the verbatim reviewer findings
 // and optional structured FindingsJSON from inline review comments.
@@ -311,7 +376,7 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 
 ` + scaffoldFrame + `
 
-1. The failing checks above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
+1. The failing checks above are the primary input for this retry. If you need the original task specification, run ` + "`" + `gm_slice_get` + "`" + ` for issue ` + "`" + `{{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
 2. Diagnose and fix the failing CI checks described above on branch ` + "`" + `{{.Branch}}` + "`" + `.
 3. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `

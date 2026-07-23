@@ -115,14 +115,11 @@ func TestRenderDev_OpenPRFlags(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	if !strings.Contains(userPrompt, "golemic open-pr --title") {
-		t.Error("dev prompt missing 'golemic open-pr --title'")
+	// Dev prompt cutover: must reference gm_project_check + gm_dev_done, not git/open-pr.
+	mustContain(t, userPrompt, []string{"gm_project_check", "gm_dev_done", "gm_slice_get"})
+	if strings.Contains(userPrompt, "golemic slice --issue") {
+		t.Error("dev prompt must not mention golemic slice CLI")
 	}
-	if !strings.Contains(userPrompt, "--body") {
-		t.Error("dev prompt missing '--body' flag for open-pr")
-	}
-	// --issue is now a legitimate flag on `golemic slice --issue N` (spec fetch),
-	// so it is not part of the banned set.
 	for _, banned := range []string{"title-b64", "body-b64", "TitleB64", "BodyB64", "TITLE_B64", "BODY_B64"} {
 		if strings.Contains(userPrompt, banned) {
 			t.Errorf("dev prompt must not contain %q", banned)
@@ -144,15 +141,12 @@ func TestRenderDev_ContainsAllFacts(t *testing.T) {
 		"42", "Fix bug",
 		"golemic/issue-42", "go test ./...",
 		"# Dev Guidelines (Test)", "Go 1.21, standard library",
-		"golemic open-pr",
-		"golemic slice --issue 42",
+		"gm_project_check", "gm_dev_done",
+		"gm_slice_get",
 	})
-	if !strings.Contains(userPrompt, "Only after") && !strings.Contains(userPrompt, "only after") {
-		t.Error("userPrompt missing condition that open-pr is only allowed after verify exits 0")
-	}
 }
 
-// AC-002: Dev step list has commit and push before open-pr
+// AC-002: Dev step list has gm_project_check before gm_dev_done (cutover from git+open-pr)
 func TestRenderDev_CommitAndPushBeforeOpenPR(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 
@@ -161,9 +155,16 @@ func TestRenderDev_CommitAndPushBeforeOpenPR(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	mustContain(t, userPrompt, []string{"git commit", "git push", "golemic open-pr", "git push -u origin golemic/issue-42"})
-	assertBefore(t, userPrompt, "git commit", "golemic open-pr")
-	assertBefore(t, userPrompt, "git push", "golemic open-pr")
+	// gm_project_check must appear before gm_dev_done in the step list.
+	mustContain(t, userPrompt, []string{"gm_project_check", "gm_dev_done"})
+	assertBefore(t, userPrompt, "gm_project_check", "gm_dev_done")
+	// Banned terms must not appear as affirmative step instructions (numbered or backtick-command lines).
+	// They may appear in prohibition notes ("Do not run `git add`...").
+	for _, banned := range []string{"git add -A", "git push -u", "golemic open-pr --title"} {
+		if strings.Contains(userPrompt, banned) {
+			t.Errorf("dev prompt must not contain affirmative instruction %q after cutover", banned)
+		}
+	}
 }
 
 // AC-003 (facts): Reviewer prompt contains all run-specific data
@@ -534,13 +535,12 @@ func TestRenderDev_StepListEndsWithOpenPR(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	if !strings.Contains(userPrompt, "golemic open-pr") {
-		t.Error("step list must contain 'golemic open-pr'")
+	// After cutover: step list ends with gm_dev_done, not golemic open-pr.
+	if !strings.Contains(userPrompt, "gm_dev_done") {
+		t.Error("step list must contain 'gm_dev_done'")
 	}
-
-	// open-pr should appear near the end, after other steps
-	if strings.LastIndex(userPrompt, "golemic open-pr") < strings.LastIndex(userPrompt, "Instructions") {
-		t.Error("'golemic open-pr' should appear near the end of the user prompt")
+	if strings.LastIndex(userPrompt, "gm_dev_done") < strings.LastIndex(userPrompt, "Instructions") {
+		t.Error("'gm_dev_done' should appear near the end of the user prompt")
 	}
 }
 
@@ -601,30 +601,23 @@ func TestRenderDev_GhPrCreateProhibition(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	// AS-1: 'gh pr create' must appear in a sentence with a negative directive
-	lower := strings.ToLower(userPrompt)
-	ghIdx := strings.Index(lower, "gh pr create")
-	if ghIdx < 0 {
-		t.Fatal("dev prompt missing 'gh pr create'")
-	}
-	// Check that 'do not', 'must not', or 'never' appears in the same sentence (within 80 chars before or after)
-	window := lower[max(0, ghIdx-80):min(len(lower), ghIdx+80)]
-	foundNegative := strings.Contains(window, "do not") || strings.Contains(window, "must not") || strings.Contains(window, "never")
-	if !foundNegative {
-		t.Error("'gh pr create' must appear near a negative directive ('do not', 'must not', or 'never')")
+	// After cutover: neither gh pr create nor golemic open-pr appear as affirmative instructions.
+	// The prompt must reference gm_dev_done as the terminal tool.
+	if !strings.Contains(userPrompt, "gm_dev_done") {
+		t.Fatal("dev prompt missing 'gm_dev_done'")
 	}
 
-	// AS-2: 'golemic open-pr' must be bound to exclusivity ('only', 'sole', or 'exclusively')
-	openPRIdx := strings.Index(lower, "golemic open-pr")
-	if openPRIdx < 0 {
-		t.Fatal("dev prompt missing 'golemic open-pr'")
-	}
-	// Search around the last occurrence of 'golemic open-pr' for the exclusivity clause
-	lastOpenPRIdx := strings.LastIndex(lower, "golemic open-pr")
-	exclusiveWindow := lower[max(0, lastOpenPRIdx-80):min(len(lower), lastOpenPRIdx+80)]
-	foundExclusive := strings.Contains(exclusiveWindow, "only") || strings.Contains(exclusiveWindow, "sole") || strings.Contains(exclusiveWindow, "exclusively")
-	if !foundExclusive {
-		t.Error("dev prompt must bind 'golemic open-pr' to an exclusivity word ('only', 'sole', or 'exclusively')")
+	// gh pr create and golemic open-pr must only appear in a prohibition context (if at all).
+	lower := strings.ToLower(userPrompt)
+	for _, term := range []string{"gh pr create", "golemic open-pr"} {
+		if idx := strings.Index(lower, term); idx >= 0 {
+			window := lower[max(0, idx-100):min(len(lower), idx+100)]
+			hasNeg := strings.Contains(window, "do not") || strings.Contains(window, "must not") ||
+				strings.Contains(window, "never") || strings.Contains(window, "do **not**")
+			if !hasNeg {
+				t.Errorf("%q appears in dev prompt without a nearby negative directive; context: %q", term, window)
+			}
+		}
 	}
 }
 
@@ -660,8 +653,8 @@ func TestRenderDev_AdversarialInput(t *testing.T) {
 			t.Errorf("rendered prompt must not contain %q", banned)
 		}
 	}
-	if !strings.Contains(userPrompt, "golemic open-pr") {
-		t.Error("golemic open-pr missing from rendered prompt")
+	if !strings.Contains(userPrompt, "gm_dev_done") {
+		t.Error("gm_dev_done missing from rendered prompt after cutover")
 	}
 	if !strings.Contains(userPrompt, `it's a fix`) {
 		t.Error("adversarial title not present in rendered prompt")
@@ -698,9 +691,12 @@ func TestRenderDevCIRetry_ContainsFailedCheckInfo(t *testing.T) {
 		"golemic/issue-42",
 		"go test",
 		"Do not open a new PR",
-		"golemic slice --issue 42",
+		"gm_slice_get",
 		"authoritative spec",
 	})
+	if strings.Contains(p, "golemic slice --issue") {
+		t.Error("dev CI retry prompt must not mention golemic slice CLI")
+	}
 }
 
 func TestRenderDevCIRetry_EmptyInfoError(t *testing.T) {
@@ -721,7 +717,10 @@ func TestRenderDevCIRetry_InjectedIssueContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"99", "Test CI retry", "make test", "golemic slice --issue 99"})
+	mustContain(t, p, []string{"99", "Test CI retry", "make test", "gm_slice_get"})
+	if strings.Contains(p, "golemic slice --issue") {
+		t.Error("dev CI retry prompt must not mention golemic slice CLI")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -840,9 +839,12 @@ func TestRenderDevRetry_ContainsFindingsJSON(t *testing.T) {
 		findings,
 		"FindingsJSON",
 		findingsJSON,
-		"golemic slice --issue 42",
+		"gm_slice_get",
 		"authoritative spec",
 	})
+	if strings.Contains(p, "golemic slice --issue") {
+		t.Error("dev retry prompt must not mention golemic slice CLI")
+	}
 }
 
 func TestRenderDevRetry_NoFindingsJSONSectionWhenEmpty(t *testing.T) {

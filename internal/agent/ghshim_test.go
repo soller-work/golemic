@@ -197,7 +197,7 @@ func TestGHGuard_NewPiCmdShimPrependedToPath(t *testing.T) {
 	}
 	t.Cleanup(func() { CommandFactory = exec.Command })
 
-	cmd := newPiCmd(cfg, nil, golemicDir, "", shimDir, stdoutFile, stderrFile)
+	cmd := newPiCmd(cfg, nil, golemicDir, "", shimDir, stdoutFile, stderrFile, nil)
 
 	// newPiCmd appends its custom PATH at the end of cmd.Env (after os.Environ()).
 	// We find the LAST PATH entry, which is the one we injected.

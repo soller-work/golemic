@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"golemic/internal/agent"
+	"golemic/internal/credentials"
 	"golemic/internal/telemetry"
 )
 
@@ -139,10 +140,10 @@ func assertRunSpanAttrs(t *testing.T, records []telemetry.Record, runID string) 
 	} else if int(pid.(float64)) != os.Getpid() {
 		t.Errorf("run span pid: got %v, want %d", pid, os.Getpid())
 	}
-	expectedTraceID := telemetry.TraceID(runID)
+	traceID := records[0].TraceID
 	for i, rec := range records {
-		if rec.TraceID != expectedTraceID {
-			t.Errorf("record[%d] trace_id: got %q, want %q", i, rec.TraceID, expectedTraceID)
+		if rec.TraceID != traceID {
+			t.Errorf("record[%d] trace_id: got %q, want %q", i, rec.TraceID, traceID)
 		}
 	}
 }
@@ -193,6 +194,36 @@ func createGuidelines(t *testing.T, repoRoot string) {
 	}
 }
 
+func configureShortTelemetryIdentity(t *testing.T, homeDir, project, repoRoot string) (string, string, string) {
+	t.Helper()
+	loader := credentials.NewLoader(homeDir)
+	creds, err := loader.Load(project)
+	if err != nil {
+		t.Fatalf("load credentials: %v", err)
+	}
+
+	shortHome := ppHome
+	shortProject := ppProject
+	shortRunID := ppRunID
+	t.Cleanup(func() { os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) }) //nolint:errcheck
+
+	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":false}}`, shortProject)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	credDir := filepath.Join(shortHome, ".golemic", shortProject)
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	credJSON := fmt.Sprintf(`{"dev_token":%q,"reviewer_token":%q}`, creds.DevToken(), creds.ReviewerToken())
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	return shortHome, shortProject, shortRunID
+}
+
 // attrRound extracts the round attribute as int, tolerating both int and float64
 // (recording sinks store int; JSON-parsed records store float64).
 func attrRound(attrs map[string]any) int {
@@ -219,7 +250,7 @@ func telemetryGitHandler(repoRoot string, args []string) (string, error) {
 			return "abc123\n", nil // worktree base SHA
 		}
 		return repoRoot + "\n", nil // for resolveHostRepo
-	case "fetch", "worktree", "config", "branch", "status", "ls-remote":
+	case "fetch", "worktree", "config", "branch", "status", "ls-remote", "add", "commit", "push":
 		return "", nil
 	case "merge-base":
 		return "", nil // branch is up-to-date
@@ -246,6 +277,8 @@ func telemetryGhHandler(args []string) (string, error) {
 			return ciTestHeadSHA + "\n", nil
 		case "merge":
 			return "sha-tel\n", nil
+		case "create":
+			return "https://github.com/testowner/testrepo/pull/99\n", nil
 		}
 		return "[]", nil // pr list → no collision
 	case "repo":
@@ -277,6 +310,9 @@ func setupTelemetryFullRunExecutor(repoRoot string) *fakeExecutor {
 			return telemetryGitHandler(repoRoot, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "git" {
+				return telemetryGitHandler(repoRoot, args)
+			}
 			if name != "gh" {
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			}
@@ -286,16 +322,18 @@ func setupTelemetryFullRunExecutor(repoRoot string) *fakeExecutor {
 }
 
 // makeTelemetryFakeAgent returns a fake agent that drives a successful single-round
-// run: dev writes pr_opened, reviewer writes review approved.
+// run: dev satisfies the §10 gate (runner writes pr_opened), reviewer writes approved.
 func makeTelemetryFakeAgent(t *testing.T) func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 	t.Helper()
-	devCalled := false
 	return func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		switch cfg.Role {
 		case "dev":
-			if !devCalled {
-				devCalled = true
-				writePROpenedEvent(t, cfg.EventLogPath, 99)
+			// Satisfy the §10 gate; runner writes pr_opened.
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("makeTelemetryFakeAgent: sendGMProjectCheck failed")
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("makeTelemetryFakeAgent: sendGMDevDone failed")
 			}
 		case "reviewer":
 			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
@@ -313,8 +351,13 @@ func TestTelemetry_FullRun_PairedSpansInFile_AC001(t *testing.T) {
 	exec := setupTelemetryFullRunExecutor(repoRoot)
 
 	createGuidelines(t, repoRoot)
+	injectFakeGMBrokerPP(t)
+	homeDir, project, runID := configureShortTelemetryIdentity(t, homeDir, project, repoRoot)
 
 	r := New(exec, homeDir, repoRoot, 42)
+	r.project = project
+	r.homeDir = homeDir
+	r.runID = runID
 	r.SetPreflighter(passingPreflighter{})
 	r.SetRunAgentFn(makeTelemetryFakeAgent(t))
 	var stdout, stderr bytes.Buffer
@@ -332,8 +375,8 @@ func TestTelemetry_FullRun_PairedSpansInFile_AC001(t *testing.T) {
 	if err != nil || len(entries) == 0 {
 		t.Fatalf("no run directory found in %s: %v", runsDir, err)
 	}
-	runID := entries[0].Name()
-	telemetryPath := filepath.Join(runsDir, runID, "telemetry.jsonl")
+	foundRunID := entries[0].Name()
+	telemetryPath := filepath.Join(runsDir, foundRunID, "telemetry.jsonl")
 	if _, err := os.Stat(telemetryPath); err != nil {
 		t.Fatalf("telemetry.jsonl not created: %v", err)
 	}
@@ -415,8 +458,17 @@ func TestTelemetry_Disabled_NoFileCreated_AC003(t *testing.T) {
 
 	exec := setupTelemetryFullRunExecutor(repoRoot)
 	createGuidelines(t, repoRoot)
+	injectFakeGMBrokerPP(t)
+	homeDir, project, runID := configureShortTelemetryIdentity(t, homeDir, project, repoRoot)
+	configJSON = fmt.Sprintf(`{"project":%q,"verify_command":"go test","telemetry":{"enabled":false},"codebase_memory":{"enabled":false}}`, project)
+	if err := os.WriteFile(configPath, []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	r := New(exec, homeDir, repoRoot, 42)
+	r.project = project
+	r.homeDir = homeDir
+	r.runID = runID
 	r.SetPreflighter(passingPreflighter{})
 	r.SetRunAgentFn(makeTelemetryFakeAgent(t))
 	var stdout, stderr bytes.Buffer
@@ -466,11 +518,16 @@ func TestTelemetry_FailingSink_DoesNotAbortRun_AC004(t *testing.T) {
 // TestTelemetry_FailingSink_ViaRun_AC004 verifies the failing sink at the full
 // Run() level: StartSpan errors are swallowed and the exit code is unaffected.
 func TestTelemetry_FailingSink_ViaRun_AC004(t *testing.T) {
-	homeDir, repoRoot, _ := setupRunnerTest(t)
+	homeDir, repoRoot, project := setupRunnerTest(t)
 	exec := setupTelemetryFullRunExecutor(repoRoot)
 	createGuidelines(t, repoRoot)
+	injectFakeGMBrokerPP(t)
+	homeDir, project, runID := configureShortTelemetryIdentity(t, homeDir, project, repoRoot)
 
 	r := New(exec, homeDir, repoRoot, 42)
+	r.project = project
+	r.homeDir = homeDir
+	r.runID = runID
 	r.SetPreflighter(passingPreflighter{})
 	r.SetRunAgentFn(makeTelemetryFakeAgent(t))
 	r.SetSink(telemetryFailingSink{})
@@ -516,7 +573,7 @@ func TestTelemetry_NoSecretsInRecords_AC006(t *testing.T) {
 
 	allowedAttrKeys := map[string]bool{
 		"run_id": true, "issue": true, "project": true, "role": true,
-		"round": true, "model": true, "status": true, "outcome": true,
+		"round": true, "attempt": true, "model": true, "status": true, "outcome": true,
 		"pid": true, "worktree": true,
 	}
 

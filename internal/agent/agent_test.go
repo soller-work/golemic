@@ -719,6 +719,80 @@ func TestRunRole_ProcessGroupKilled(t *testing.T) {
 	}
 }
 
+func TestRunRole_DevDoneAcceptedStopsInvocationBeforePostGateMutation_AC006(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+	markerFile := filepath.Join(t.TempDir(), "mutated.txt")
+	cfg.Env = append(cfg.Env, "MUTATION_MARKER="+markerFile)
+
+	scriptContent := `printf '%s\n' '{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}'
+printf '%s\n' '{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}'
+sleep 1
+echo mutated > "$MUTATION_MARKER"
+`
+	scriptPath := writeScript(t, scriptContent)
+	var capturedArgs []string
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
+
+	ctx := context.Background()
+	exitCode, _, err := RunRole(ctx, cfg)
+	if err != nil {
+		t.Fatalf("RunRole failed: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code: got %d, want 0", exitCode)
+	}
+	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected post-terminal mutation to be prevented, stat err=%v", err)
+	}
+}
+
+func TestRunRole_DevDoneRejectedOrInvalidStopsInvocationBeforePostGateMutation_AC006(t *testing.T) {
+	cases := []struct {
+		name   string
+		result string
+	}{
+		{
+			name:   "gate_rejected",
+			result: `{"ok":false,"code":"DEV_GATE","message":"gm_dev_done: last gm_project_check was not green"}`,
+		},
+		{
+			name:   "schema_invalid",
+			result: `{"ok":false,"code":"SCHEMA_INVALID","message":"gm_dev_done: prBody is required"}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultRoleConfig(t, "dev")
+			cfg.Timeout = 5 * time.Second
+			markerFile := filepath.Join(t.TempDir(), "mutated.txt")
+			cfg.Env = append(cfg.Env, "MUTATION_MARKER="+markerFile)
+
+			scriptContent := `printf '%s\n' '{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}'
+printf '%s\n' '{"type":"tool_execution_end","toolName":"gm_dev_done","result":` + tc.result + `}'
+sleep 1
+echo mutated > "$MUTATION_MARKER"
+`
+			scriptPath := writeScript(t, scriptContent)
+			var capturedArgs []string
+			fakeCommandFactory(t, scriptPath, &capturedArgs)
+
+			ctx := context.Background()
+			exitCode, _, err := RunRole(ctx, cfg)
+			if err != nil {
+				t.Fatalf("RunRole failed: %v", err)
+			}
+			if exitCode != 0 {
+				t.Fatalf("exit code: got %d, want 0", exitCode)
+			}
+			if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("expected post-terminal mutation to be prevented, stat err=%v", err)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Exit code is returned without semantic interpretation (BR-006)
 // ---------------------------------------------------------------------------
@@ -789,8 +863,6 @@ func TestMain(m *testing.M) {
 	CommandFactory = exec.Command
 	os.Exit(code)
 }
-
-
 
 // argContains checks if args contains flag followed by want value.
 func argContains(args []string, flag, want string) bool {
@@ -1874,7 +1946,7 @@ func TestNewPiCmd_PathContainsLoginShellToolchain_AndShimFirst(t *testing.T) {
 	t.Cleanup(func() { CommandFactory = oldCF })
 
 	cfg := RoleConfig{WorktreeDir: t.TempDir()}
-	cmd := newPiCmd(cfg, nil, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile)
+	cmd := newPiCmd(cfg, nil, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile, nil)
 
 	var agentPath string
 	for _, e := range cmd.Env {

@@ -54,9 +54,25 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 		t.Fatalf("load credentials: %v", err)
 	}
 
-	runID := "issue-42-20240101T000000Z"
-	runsDir := filepath.Join(homeDir, ".golemic", project, "runs")
-	logPath := filepath.Join(runsDir, runID, "events.jsonl")
+	shortHome := "/tmp"
+	shortProject := "excp"
+	shortRunID := "issue-42-20240101T000000Z"
+	t.Cleanup(func() { os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) }) //nolint:errcheck
+
+	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":false}}`, shortProject)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	credDir := filepath.Join(shortHome, ".golemic", shortProject)
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	credJSON := fmt.Sprintf(`{"dev_token":%q,"reviewer_token":%q}`, creds.DevToken(), creds.ReviewerToken())
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	logPath := filepath.Join(shortHome, ".golemic", shortProject, "runs", shortRunID, "events.jsonl")
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -65,11 +81,11 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 	if err != nil {
 		t.Fatal(err)
 	}
-	startPayload, _ := json.Marshal(map[string]interface{}{"issue": 42, "runId": runID})
+	startPayload, _ := json.Marshal(map[string]interface{}{"issue": 42, "runId": shortRunID})
 	_ = w.Write(eventlog.Event{
 		Type:    eventlog.EventRunStarted,
 		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   runID,
+		RunID:   shortRunID,
 		Payload: startPayload,
 	})
 	if role == "reviewer" {
@@ -77,7 +93,7 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 		_ = w.Write(eventlog.Event{
 			Type:    eventlog.EventPROpened,
 			Ts:      time.Now().Format(time.RFC3339),
-			RunID:   runID,
+			RunID:   shortRunID,
 			Payload: prPayload,
 		})
 	}
@@ -85,15 +101,18 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 		t.Fatal(err)
 	}
 
-	runner := New(nil, homeDir, repoRoot, 42)
+	injectFakeGMBrokerPP(t)
+
+	runner := New(nil, shortHome, repoRoot, 42)
 	runner.repoRoot = repoRoot
-	runner.project = project
-	runner.homeDir = homeDir
-	runner.runID = runID
+	runner.project = shortProject
+	runner.homeDir = shortHome
+	runner.runID = shortRunID
 	runner.creds = creds
 	runner.issue = &issueData{Number: 42, Title: "t"}
 	runner.cfg = &config.Config{
-		VerifyCommand: "go test",
+		VerifyCommand:  "go test",
+		CodebaseMemory: config.CodebaseMemoryConfig{Enabled: false},
 	}
 	runner.branchName = "golemic/issue-42"
 

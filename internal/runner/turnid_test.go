@@ -18,16 +18,15 @@ func TestRunnerTurnIDMonotonic_AC006(t *testing.T) {
 	var captured []agent.RoleConfig
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		captured = append(captured, cfg)
-		inner := makeOrchestrateFakeAgent(t, []agentRoundConfig{
-			{role: "dev", exitCode: 0},
-			{role: "reviewer", verdict: "approved", body: "LGTM"},
-		}, nil)
-		// Delegate to inner for this call.
-		_ = inner
-		// Write the expected event side-effects inline.
 		switch cfg.Role {
 		case "dev":
-			writePROpenedEvent(t, cfg.EventLogPath, 99)
+			// Satisfy the §10 gate; runner writes pr_opened.
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("TestRunnerTurnIDMonotonic_AC006: sendGMProjectCheck failed")
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("TestRunnerTurnIDMonotonic_AC006: sendGMDevDone failed")
+			}
 		case "reviewer":
 			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
 		}
@@ -59,15 +58,17 @@ func TestRunnerTurnIDMonotonicPingPong_AC006(t *testing.T) {
 	r, logPath, _ := setupPingPongRunner(t, exec)
 
 	var captured []agent.RoleConfig
-	devCallCount := 0
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		captured = append(captured, cfg)
 		switch cfg.Role {
 		case "dev":
-			if devCallCount == 0 {
-				writePROpenedEvent(t, cfg.EventLogPath, 99)
+			// Satisfy the §10 gate; runner writes pr_opened on the first call.
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("TestRunnerTurnIDMonotonicPingPong_AC006: sendGMProjectCheck failed")
 			}
-			devCallCount++
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("TestRunnerTurnIDMonotonicPingPong_AC006: sendGMDevDone failed")
+			}
 		case "reviewer":
 			if len(captured) == 2 { // first reviewer round
 				writeReviewEvent(t, cfg.EventLogPath, "changes_requested", "please fix")
@@ -117,8 +118,12 @@ func TestRunnerWorktreeCreatedAcrossRoundsNotDeduped_AC008(t *testing.T) { //nol
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		switch cfg.Role {
 		case "dev":
-			if devCallCount == 0 {
-				writePROpenedEvent(t, cfg.EventLogPath, 99)
+			// Satisfy the §10 gate; runner writes pr_opened on the first call.
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("TestRunnerWorktreeCreated: sendGMProjectCheck failed")
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("TestRunnerWorktreeCreated: sendGMDevDone failed")
 			}
 			devCallCount++
 		case "reviewer":

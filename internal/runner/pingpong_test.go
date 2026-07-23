@@ -63,7 +63,8 @@ func writeReviewEvent(t *testing.T, logPath, verdict, body string) {
 	}
 }
 
-// handleGitCmd responds to all git subcommands needed by worktree helpers.
+// handleGitCmd responds to all git subcommands needed by worktree helpers and the
+// commit/push/open-PR runner flow.
 func handleGitCmd(args []string) (string, error) {
 	sub := ""
 	if len(args) >= 3 && args[0] == "-C" {
@@ -73,6 +74,8 @@ func handleGitCmd(args []string) (string, error) {
 	}
 	switch sub {
 	case "fetch", "worktree", "config", "branch", "ls-remote":
+		return "", nil
+	case "add", "commit":
 		return "", nil
 	case "rev-parse":
 		return "abc123\n", nil
@@ -105,6 +108,12 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 			return "", fmt.Errorf("not mocked: %s %v", name, args)
 		},
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "git" {
+				if len(args) >= 1 && args[0] == "push" {
+					return "", nil
+				}
+				return handleGitCmd(args)
+			}
 			if name != "gh" {
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			}
@@ -138,6 +147,8 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 				return "[]", nil
 			}
 			switch args[1] {
+			case "create":
+				return "https://github.com/testowner/testrepo/pull/99\n", nil
 			case "merge":
 				return "sha-pp\n", nil
 			case "edit":
@@ -158,7 +169,15 @@ func pingPongExecutor(commentFails bool, commentCalls *[]string) *fakeExecutor {
 	}
 }
 
+// ppHome / ppProject / ppRunID are short constants so the unix socket path
+// stays within the 104-byte sun_path limit on macOS.
+const ppHome = "/tmp"
+const ppProject = "pptest"
+const ppRunID = "r42"
+
 // setupPingPongRunner creates a minimal Runner configured for orchestrate unit tests.
+// It uses short paths for the GM broker socket and injects a fake GM broker so the
+// §10 acceptance gate is exercised deterministically on all platforms.
 func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *bytes.Buffer) {
 	t.Helper()
 	homeDir, repoRoot, project := setupRunnerTest(t)
@@ -169,7 +188,13 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 		t.Fatalf("load credentials: %v", err)
 	}
 
-	// Write guidelines so RenderDev, RenderDevRetry, and RenderReviewer can read them
+	// Use /tmp-based short paths for socket files; clean up after the test.
+	t.Cleanup(func() { os.RemoveAll(filepath.Join(ppHome, ".golemic", ppProject)) }) //nolint:errcheck
+
+	// Inject fake GM broker so the gate is active and exercised on all platforms.
+	injectFakeGMBrokerPP(t)
+
+	// Write guidelines so RenderDev, RenderDevRetry, and RenderReviewer can read them.
 	golemicDir := filepath.Join(repoRoot, ".golemic")
 	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
@@ -182,7 +207,7 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 		t.Fatal(err)
 	}
 
-	// Write agent files so resolveAgentFile can read model+persona
+	// Write agent files so resolveAgentFile can read model+persona.
 	agentsDir := filepath.Join(golemicDir, "agents")
 	if err := os.MkdirAll(agentsDir, 0755); err != nil {
 		t.Fatal(err)
@@ -193,10 +218,10 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 		}
 	}
 
-	r := New(exec, homeDir, repoRoot, 42)
+	r := New(exec, ppHome, repoRoot, 42)
 	r.repoRoot = repoRoot
-	r.project = project
-	r.runID = "issue-42-test"
+	r.project = ppProject
+	r.runID = ppRunID
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
 	r.cfg = &config.Config{
@@ -209,7 +234,8 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 	var stderr bytes.Buffer
 	r.SetStderr(&stderr)
 
-	return r, filepath.Join(homeDir, ".golemic", project, "runs", "issue-42-test", "events.jsonl"), &stderr
+	logPath := filepath.Join(ppHome, ".golemic", ppProject, "runs", ppRunID, "events.jsonl")
+	return r, logPath, &stderr
 }
 
 // makeOrchestrateFakeAgent returns a runAgentFn that simulates agent behavior.
@@ -229,12 +255,19 @@ type promptCapture struct {
 }
 
 // writeAgentEvents writes the expected event-log side-effects for a fake agent call.
-func writeAgentEvents(t *testing.T, cfg agent.RoleConfig, round agentRoundConfig, isFirstDevCall bool) {
+// For successful dev calls it satisfies the §10 gate via the broker socket; the runner
+// then performs commit/push/open-PR and writes the pr_opened event itself.
+func writeAgentEvents(t *testing.T, cfg agent.RoleConfig, round agentRoundConfig) {
 	t.Helper()
 	switch cfg.Role {
 	case "dev":
-		if isFirstDevCall {
-			writePROpenedEvent(t, cfg.EventLogPath, 99)
+		if round.exitCode == 0 {
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("sendGMProjectCheck: broker unavailable or rejected; GOLEMIC_GM_SOCK=%s", gmSockFromEnv(cfg.Env))
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("sendGMDevDone: gate rejected; broker must be pre-configured with injectFakeGMBrokerPP")
+			}
 		}
 	case "reviewer":
 		if round.verdict != "" {
@@ -246,7 +279,6 @@ func writeAgentEvents(t *testing.T, cfg agent.RoleConfig, round agentRoundConfig
 func makeOrchestrateFakeAgent(t *testing.T, rounds []agentRoundConfig, capture *promptCapture) func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 	t.Helper()
 	callIdx := 0
-	devCallCount := 0
 	return func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		if callIdx >= len(rounds) {
 			t.Errorf("unexpected agent call #%d (only %d configured)", callIdx+1, len(rounds))
@@ -267,11 +299,7 @@ func makeOrchestrateFakeAgent(t *testing.T, rounds []agentRoundConfig, capture *
 		if round.doStalled {
 			return 0, agent.TranscriptPaths{}, agent.ErrStalled
 		}
-		isFirst := cfg.Role == "dev" && devCallCount == 0
-		if cfg.Role == "dev" {
-			devCallCount++
-		}
-		writeAgentEvents(t, cfg, round, isFirst)
+		writeAgentEvents(t, cfg, round)
 		return round.exitCode, agent.TranscriptPaths{Stderr: "/tmp/stderr"}, nil
 	}
 }
@@ -569,7 +597,7 @@ func TestRenderDevRetry_VerbatimFindings(t *testing.T) {
 	if !strings.Contains(p, findings) {
 		t.Errorf("dev retry prompt must contain verbatim findings %q, got: %s", findings, p)
 	}
-	for _, want := range []string{"golemic slice --issue 42", "authoritative spec"} {
+	for _, want := range []string{"gm_slice_get", "authoritative spec"} {
 		if !strings.Contains(p, want) {
 			t.Errorf("dev retry prompt must contain %q, got: %s", want, p)
 		}

@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,11 +212,11 @@ func TestGMReviewerToolsExcludesReviewSubmit(t *testing.T) {
 	}
 }
 
-// TestGMDevToolsExcludesDevDone verifies the dev is not handed the skeleton
-// gm_dev_done tool, which only echoes its params.
-func TestGMDevToolsExcludesDevDone(t *testing.T) {
-	if containsTool(gmDevToolNames, "gm_dev_done") {
-		t.Fatalf("gmDevToolNames unexpectedly includes gm_dev_done: %v", gmDevToolNames)
+// TestGMDevToolsIncludesDevDone verifies the dev is handed gm_dev_done now that
+// it is the terminal §10-gated completion tool.
+func TestGMDevToolsIncludesDevDone(t *testing.T) {
+	if !containsTool(gmDevToolNames, "gm_dev_done") {
+		t.Fatalf("gmDevToolNames missing gm_dev_done: %v", gmDevToolNames)
 	}
 }
 
@@ -225,4 +227,132 @@ func containsTool(tools []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Shared GM broker injection helpers for runner-level tests
+// ---------------------------------------------------------------------------
+
+// injectFakeGMBrokerWithConfig overrides startGMBrokerFn with a broker that
+// uses the given projectCheckFn and computeFingerprintFn. Pass nil to use defaults.
+// The broker includes gm_project_check in its allowlist.
+func injectFakeGMBrokerWithConfig(
+	t *testing.T,
+	checkFn func(gmbroker.ProjectCheckConfig, string) (*gmbroker.ProjectCheckResult, error),
+	computeFn func(string) (string, error),
+) {
+	t.Helper()
+	orig := startGMBrokerFn
+	t.Cleanup(func() { startGMBrokerFn = orig })
+	devTools := []string{"gm_slice_get", "gm_project_check", "gm_dev_done"}
+	startGMBrokerFn = func(sockPath string, _ int, _ string) (*gmbroker.Broker, error) {
+		b, err := gmbroker.StartWithFetcherAndProjectCheck(
+			sockPath,
+			func(_ context.Context) (string, error) { return "fake spec", nil },
+			gmbroker.ProjectCheckConfig{},
+			devTools,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if checkFn != nil {
+			b.SetProjectCheckFn(checkFn)
+		}
+		if computeFn != nil {
+			b.SetComputeFingerprintFn(computeFn)
+		}
+		return b, nil
+	}
+}
+
+// injectFakeGMBrokerPP injects a fake GM broker pre-configured for pingpong-style
+// tests: project_check returns OK=true with fingerprint "pp-test-fp" and the
+// fingerprint computation also returns "pp-test-fp", so gm_dev_done always passes
+// after a single project_check call.
+func injectFakeGMBrokerPP(t *testing.T) {
+	t.Helper()
+	injectFakeGMBrokerWithConfig(t,
+		func(_ gmbroker.ProjectCheckConfig, _ string) (*gmbroker.ProjectCheckResult, error) {
+			return &gmbroker.ProjectCheckResult{
+				OK:                     true,
+				WorkingTreeFingerprint: "pp-test-fp",
+				Summary:                "verify passed",
+			}, nil
+		},
+		func(_ string) (string, error) { return "pp-test-fp", nil },
+	)
+}
+
+// gmSockFromEnv extracts the GOLEMIC_GM_SOCK path from the env slice.
+func gmSockFromEnv(env []string) string {
+	for _, e := range env {
+		if strings.HasPrefix(e, "GOLEMIC_GM_SOCK=") {
+			return strings.TrimPrefix(e, "GOLEMIC_GM_SOCK=")
+		}
+	}
+	return ""
+}
+
+// callGMTool sends a single gm_ tool call to the broker socket and returns the
+// parsed result map. Returns nil on any error.
+func callGMTool(sockPath, tool, callID string, params any) map[string]any {
+	raw, _ := json.Marshal(params)
+	req, _ := json.Marshal(map[string]any{
+		"tool":   tool,
+		"callId": callID,
+		"params": json.RawMessage(raw),
+	})
+	req = append(req, '\n')
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		return nil
+	}
+	defer conn.Close() //nolint:errcheck
+	if _, err := conn.Write(req); err != nil {
+		return nil
+	}
+	var resp struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return nil
+	}
+	var result map[string]any
+	json.Unmarshal(resp.Result, &result) //nolint:errcheck
+	return result
+}
+
+// sendGMProjectCheck sends gm_project_check via GOLEMIC_GM_SOCK in env.
+// Returns true if the call returned ok==true.
+func sendGMProjectCheck(env []string) bool {
+	sockPath := gmSockFromEnv(env)
+	if sockPath == "" {
+		return false
+	}
+	result := callGMTool(sockPath, "gm_project_check", "test-check", map[string]any{})
+	if result == nil {
+		return false
+	}
+	ok, _ := result["ok"].(bool)
+	return ok
+}
+
+// sendGMDevDone sends gm_dev_done via GOLEMIC_GM_SOCK in env.
+// Returns true if the gate accepted (ok==true, accepted==true).
+func sendGMDevDone(env []string) bool {
+	sockPath := gmSockFromEnv(env)
+	if sockPath == "" {
+		return false
+	}
+	result := callGMTool(sockPath, "gm_dev_done", "test-done", map[string]string{
+		"summary":   "Implement the feature",
+		"commitMsg": "feat(test): implement feature (42)",
+		"prTitle":   "feat: implement feature",
+		"prBody":    "Closes #42",
+	})
+	if result == nil {
+		return false
+	}
+	ok, _ := result["ok"].(bool)
+	return ok
 }
