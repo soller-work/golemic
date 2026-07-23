@@ -21,21 +21,21 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	EventRunStarted             = "run_started"
-	EventWorktreeCreated        = "worktree_created"
-	EventDevStarted             = "dev_started"
-	EventPROpened               = "pr_opened"
-	EventReviewSubmitted        = "review_submitted"
-	EventRunFinished            = "run_finished"
-	EventAgentCompleted         = "agent_completed"
-	EventCIWaitFinished         = "ci_wait_finished"
-	EventPRMerged               = "pr_merged"
-	EventAutomergeSkipped       = "automerge_skipped"
-	EventAutomergeFailed        = "automerge_failed"
+	EventRunStarted              = "run_started"
+	EventWorktreeCreated         = "worktree_created"
+	EventDevStarted              = "dev_started"
+	EventPROpened                = "pr_opened"
+	EventReviewSubmitted         = "review_submitted"
+	EventRunFinished             = "run_finished"
+	EventAgentCompleted          = "agent_completed"
+	EventCIWaitFinished          = "ci_wait_finished"
+	EventPRMerged                = "pr_merged"
+	EventAutomergeSkipped        = "automerge_skipped"
+	EventAutomergeFailed         = "automerge_failed"
 	EventAutomergeConflictRetry  = "automerge_conflict_retry"
 	EventAutomergeOutOfDateRetry = "automerge_out_of_date_retry"
 	EventIssueClaimed            = "issue_claimed"
-	EventIssueReleased          = "issue_released"
+	EventIssueReleased           = "issue_released"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.

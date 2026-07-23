@@ -542,11 +542,7 @@ func (r *Runner) mergeWithOutOfDateRetry(writer worktree.EventWriter, prNumber i
 			return outcomeSuccess
 		}
 		if !isHeadBranchOutOfDate(mergeErr) {
-			reason := mergeErr.Error()
-			fmt.Fprintf(r.stderr, "merge_failed: %s\n", reason)
-			r.postMergeFailureComment(prNumber, reason)
-			r.writeAutomergeFailed(writer, reason)
-			return outcomeMergeFailed
+			return r.failMerge(writer, prNumber, mergeErr.Error())
 		}
 		if attempt == maxOutOfDateRetries {
 			break

@@ -368,7 +368,7 @@ func TestValidateReviewSubmitted_MissingInlineCommentCount_AC008(t *testing.T) {
 func TestValidateReviewSubmitted_NegativeInlineCommentCount_AC008(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
 		"verdict": "approved", "mergeConfidence": "high",
-		"reviewId": "PRR_abc",
+		"reviewId":           "PRR_abc",
 		"inlineCommentCount": -1,
 	})
 	if err := ValidateReviewSubmittedPayload(raw); err == nil {
@@ -380,7 +380,7 @@ func TestValidateReviewSubmitted_ZeroInlineCommentCount_Valid_AC008(t *testing.T
 	zero := 0
 	raw, _ := json.Marshal(map[string]interface{}{
 		"verdict": "approved", "mergeConfidence": "high",
-		"reviewId": "PRR_abc",
+		"reviewId":           "PRR_abc",
 		"inlineCommentCount": &zero,
 	})
 	if err := ValidateReviewSubmittedPayload(raw); err != nil {
@@ -392,7 +392,7 @@ func TestValidateReviewSubmitted_MediumConfidence_Valid(t *testing.T) {
 	zero := 0
 	raw, _ := json.Marshal(map[string]interface{}{
 		"verdict": "approved", "mergeConfidence": "medium",
-		"reviewId": "PRR_abc",
+		"reviewId":           "PRR_abc",
 		"inlineCommentCount": &zero,
 	})
 	if err := ValidateReviewSubmittedPayload(raw); err != nil {
@@ -404,7 +404,7 @@ func TestValidateReviewSubmitted_BogusConfidence_Invalid(t *testing.T) {
 	zero := 0
 	raw, _ := json.Marshal(map[string]interface{}{
 		"verdict": "approved", "mergeConfidence": "bogus",
-		"reviewId": "PRR_abc",
+		"reviewId":           "PRR_abc",
 		"inlineCommentCount": &zero,
 	})
 	if err := ValidateReviewSubmittedPayload(raw); err == nil {
@@ -632,6 +632,7 @@ func searchString(s, substr string) bool {
 	}
 	return false
 }
+
 // ---------------------------------------------------------------------------
 // automerge_conflict_retry payload validation
 // ---------------------------------------------------------------------------
