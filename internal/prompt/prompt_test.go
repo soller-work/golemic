@@ -877,9 +877,11 @@ func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
 // CodebaseMemory prompt tests (issue-92)
 // ---------------------------------------------------------------------------
 
-var oldCBMSubNames = []string{
-	"search_graph", "search_code", "get_code_snippet", "trace_call_path",
-	"query_graph", "get_architecture", "get_graph_schema", "detect_changes",
+// codeToolNames are the gm_code_* tool names that appear in prompts when CBM is on.
+var codeToolNames = []string{
+	"gm_code_search_graph", "gm_code_search", "gm_code_get_snippet",
+	"gm_code_trace_call_path", "gm_code_query_graph", "gm_code_get_architecture",
+	"gm_code_get_graph_schema", "gm_code_detect_changes",
 }
 
 func TestRenderDev_CodebaseMemoryOff_NoSection(t *testing.T) {
@@ -888,7 +890,7 @@ func TestRenderDev_CodebaseMemoryOff_NoSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, word := range append(oldCBMSubNames, "Code Intelligence") {
+	for _, word := range append(codeToolNames, "Code Intelligence") {
 		if strings.Contains(p, word) {
 			t.Errorf("flag-off dev prompt must not contain %q", word)
 		}
@@ -901,14 +903,12 @@ func TestRenderDev_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"Code Intelligence", "golemic cbm help"})
-	if strings.Count(p, "golemic cbm help") != 1 {
-		t.Error("dev prompt must contain 'golemic cbm help' exactly once")
+	mustContain(t, p, append([]string{"Code Intelligence"}, codeToolNames...))
+	if strings.Count(p, "gm_code_search_graph") != 1 {
+		t.Error("dev prompt must contain gm_code_search_graph exactly once")
 	}
-	for _, sub := range oldCBMSubNames {
-		if strings.Contains(p, sub) {
-			t.Errorf("dev prompt must not mention old sub %q; use 'golemic cbm help' instead", sub)
-		}
+	if strings.Contains(p, "golemic cbm") {
+		t.Error("dev prompt must not contain golemic cbm instruction (BR-6)")
 	}
 }
 
@@ -918,7 +918,7 @@ func TestRenderReviewer_CodebaseMemoryOff_NoSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, word := range append(oldCBMSubNames, "Code Intelligence") {
+	for _, word := range append(codeToolNames, "Code Intelligence") {
 		if strings.Contains(p, word) {
 			t.Errorf("flag-off reviewer prompt must not contain %q", word)
 		}
@@ -931,14 +931,9 @@ func TestRenderReviewer_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"Code Intelligence", "golemic cbm help"})
-	if strings.Count(p, "golemic cbm help") != 1 {
-		t.Error("reviewer prompt must contain 'golemic cbm help' exactly once")
-	}
-	for _, sub := range oldCBMSubNames {
-		if strings.Contains(p, sub) {
-			t.Errorf("reviewer prompt must not mention old sub %q", sub)
-		}
+	mustContain(t, p, append([]string{"Code Intelligence"}, codeToolNames...))
+	if strings.Contains(p, "golemic cbm") {
+		t.Error("reviewer prompt must not contain golemic cbm instruction (BR-6)")
 	}
 }
 
@@ -948,14 +943,9 @@ func TestRenderDevRetry_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	mustContain(t, p, []string{"Code Intelligence", "golemic cbm help"})
-	if strings.Count(p, "golemic cbm help") != 1 {
-		t.Error("dev retry prompt must contain 'golemic cbm help' exactly once")
-	}
-	for _, sub := range oldCBMSubNames {
-		if strings.Contains(p, sub) {
-			t.Errorf("dev retry prompt must not mention old sub %q", sub)
-		}
+	mustContain(t, p, append([]string{"Code Intelligence"}, codeToolNames...))
+	if strings.Contains(p, "golemic cbm") {
+		t.Error("dev retry prompt must not contain golemic cbm instruction (BR-6)")
 	}
 }
 
@@ -965,7 +955,7 @@ func TestRenderDevRetry_CodebaseMemoryOff_NoSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	for _, word := range append(oldCBMSubNames, "Code Intelligence") {
+	for _, word := range append(codeToolNames, "Code Intelligence") {
 		if strings.Contains(p, word) {
 			t.Errorf("flag-off dev retry prompt must not contain %q", word)
 		}

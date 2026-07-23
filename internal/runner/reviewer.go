@@ -523,10 +523,20 @@ func tailBytes(s string, n int) (string, bool) {
 // gm_ reviewer tools are added if the GM broker socket is present in the environment.
 func buildReviewerToolList(brokerEnv []string) []string {
 	tools := []string{"read", "bash"}
+	hasGMSock := false
+	hasCBMSock := false
 	for _, e := range brokerEnv {
-		if len(e) > len("GOLEMIC_GM_SOCK=") && e[:len("GOLEMIC_GM_SOCK=")] == "GOLEMIC_GM_SOCK=" {
-			tools = append(tools, gmReviewerToolNames...)
-			break
+		if strings.HasPrefix(e, "GOLEMIC_GM_SOCK=") {
+			hasGMSock = true
+		}
+		if strings.HasPrefix(e, "CBM_SOCK=") {
+			hasCBMSock = true
+		}
+	}
+	if hasGMSock {
+		tools = append(tools, gmReviewerToolNames...)
+		if hasCBMSock {
+			tools = append(tools, gmCodeToolNames...)
 		}
 	}
 	return tools
@@ -559,6 +569,7 @@ func (r *Runner) buildReviewerRoleConfig(systemPromptFile, userPrompt, worktreeP
 // Returns cbmEnabled, the combined broker environment, and a cleanup function.
 func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, prNumber int) (cbmEnabled bool, brokerEnv []string, cleanup func()) {
 	var cleanups []func()
+	var cbmCfg gmbroker.CBMConfig
 	if r.cfg.CodebaseMemory.Enabled {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
 		projectName := fmt.Sprintf("golemic-issue-%d-reviewer", r.issueNum)
@@ -567,6 +578,7 @@ func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, 
 			cleanups = append(cleanups, b.Shutdown)
 			brokerEnv = env
 			cbmEnabled = true
+			cbmCfg = gmbroker.CBMConfig{SockPath: sockPath, Project: projectName}
 		}
 	}
 	gmSockPath := filepath.Join(runsDir, r.runID, "gm-reviewer.sock")
@@ -577,6 +589,10 @@ func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, 
 			RepoRoot:      r.repoRoot,
 			PRNumber:      prNumber,
 		})
+		if cbmCfg.SockPath != "" {
+			gmb.ConfigureCBM(cbmCfg)
+			gmb.SetAllowedTools(append(gmReviewerToolNames, gmCodeToolNames...))
+		}
 		cleanups = append(cleanups, gmb.Shutdown)
 		brokerEnv = append(brokerEnv, gmEnv...)
 	}

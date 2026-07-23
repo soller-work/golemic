@@ -56,7 +56,7 @@ const editOverWriteDirective = "## File Edits\n\nPrefer the `edit` tool over `wr
 
 // noReReadDirective is injected into every dev prompt before ## Instructions.
 // Nudges the dev agent to avoid re-reading unchanged files at full length to keep token usage low.
-const noReReadDirective = "## File Re-reads\n\nKeep track of files you have already read during this run. Do **not** re-read an unchanged file in full — re-reading re-emits the whole file into the run context and grows tokens over a long run. If you only need part of a file, use a targeted `read` range (offset/limit) or a `golemic cbm` lookup instead. A fresh full read is correct when the file has changed since you last read it (e.g. after an `edit`, `write`, or a command that rewrote it)."
+const noReReadDirective = "## File Re-reads\n\nKeep track of files you have already read during this run. Do **not** re-read an unchanged file in full — re-reading re-emits the whole file into the run context and grows tokens over a long run. If you only need part of a file, use a targeted `read` range (offset/limit) or a code-intelligence tool lookup instead. A fresh full read is correct when the file has changed since you last read it (e.g. after an `edit`, `write`, or a command that rewrote it)."
 
 // scaffoldFrame is the shared middle section of every renderer: Guidelines block,
 // optional Code Intelligence block, injected Directives, and the ## Instructions header.
@@ -71,7 +71,16 @@ const scaffoldFrame = `---
 
 ## Code Intelligence
 
-Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intelligence tools and their arguments.
+The worktree is indexed into a code-intelligence graph. Use the following tools for structural exploration — they answer in one call instead of many:
+
+- ` + "`gm_code_search_graph`" + ` — find functions, classes, routes, variables (BM25 / regex / vector)
+- ` + "`gm_code_search`" + ` — grep + graph enrichment for text patterns
+- ` + "`gm_code_get_snippet`" + ` — read source for a qualified name
+- ` + "`gm_code_trace_call_path`" + ` — trace callers/callees or data-flow paths
+- ` + "`gm_code_query_graph`" + ` — Cypher query for multi-hop patterns
+- ` + "`gm_code_get_architecture`" + ` — high-level overview: packages, clusters, entry points
+- ` + "`gm_code_get_graph_schema`" + ` — node labels and edge types
+- ` + "`gm_code_detect_changes`" + ` — detect files/symbols changed since a ref
 {{end}}
 ---
 
