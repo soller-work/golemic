@@ -56,12 +56,19 @@ func parseAndNormalizePayload(typeFlag, payloadFlag string, stderr io.Writer) (j
 	return normalized, true
 }
 
-// formatGHError formats a preflight.ErrExit as its stderr text; for other errors
-// it returns err.Error(). Used for consistent gh CLI error messages.
+// formatGHError formats a preflight.ErrExit as its combined stdout+stderr text;
+// for other errors it returns err.Error(). Used for consistent gh CLI error messages.
 func formatGHError(err error) string {
 	var ee *preflight.ErrExit
 	if errors.As(err, &ee) {
-		return strings.TrimSpace(ee.Stderr)
+		var parts []string
+		if s := strings.TrimSpace(ee.Stdout); s != "" {
+			parts = append(parts, s)
+		}
+		if s := strings.TrimSpace(ee.Stderr); s != "" {
+			parts = append(parts, s)
+		}
+		return strings.Join(parts, "\n")
 	}
 	return err.Error()
 }

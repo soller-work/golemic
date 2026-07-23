@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -855,15 +856,17 @@ type osExecutor struct{}
 
 func (e osExecutor) Run(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
-	out, err := cmd.Output()
-	if err != nil {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return "", &preflight.ErrExit{ExitCode: exitErr.ExitCode(), Stderr: string(exitErr.Stderr)}
+			return "", &preflight.ErrExit{ExitCode: exitErr.ExitCode(), Stdout: stdout.String(), Stderr: stderr.String()}
 		}
 		return "", err
 	}
-	return string(out), nil
+	return stdout.String(), nil
 }
 
 func (e osExecutor) RunWithEnv(env map[string]string, name string, args ...string) (string, error) {

@@ -767,3 +767,49 @@ func TestRunOpenPR_VerifySucceeds_PROpened(t *testing.T) { //nolint:cyclop
 		t.Errorf("expected one pr_opened event; got: %v", events)
 	}
 }
+
+// TestRunOpenPR_VerifyFails_StdoutSurfaced verifies that when the verify command
+// exits non-zero and writes diagnostics to stdout (e.g. golangci-lint), the
+// emitted "verify_command failed:" message includes that stdout content.
+func TestRunOpenPR_VerifyFails_StdoutSurfaced(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+
+	env := map[string]string{
+		"GOLEMIC_RUN_ID":    "run-verify-stdout",
+		"GOLEMIC_EVENT_LOG": logPath,
+		"GOLEMIC_TURN_ID":   "1",
+	}
+
+	const marker = "lint: missing error check on line 42"
+
+	exec := fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "sh" {
+				return "", &preflight.ErrExit{ExitCode: 1, Stdout: marker, Stderr: ""}
+			}
+			return "", fmt.Errorf("should not be called: %s", name)
+		},
+		runWithEnvFunc: func(_ map[string]string, name string, args ...string) (string, error) {
+			return "", fmt.Errorf("should not be called: %s", name)
+		},
+	}
+
+	loadConfig := func() (*config.Config, error) {
+		return &config.Config{VerifyCommand: "make lint"}, nil
+	}
+
+	var stdout, stderr bytes.Buffer
+	args := []string{"golemic", "open-pr", "--title", "T", "--body", "B"}
+	got := runOpenPR(args, &stdout, &stderr, func(k string) string { return env[k] }, exec, loadConfig)
+
+	if got == 0 {
+		t.Fatalf("exit code: got 0, want non-zero")
+	}
+	if !strings.Contains(stderr.String(), "verify_command failed") {
+		t.Errorf("stderr missing 'verify_command failed'; got: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), marker) {
+		t.Errorf("stderr missing stdout marker %q from verify command; got: %q", marker, stderr.String())
+	}
+}
