@@ -123,17 +123,16 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 
 1. **First, fetch the authoritative task specification:** call ` + "`" + `gm_slice_get` + "`" + ` — its output is the source of truth for what the PR is supposed to do; do not rely on any summary in the web UI.
 2. **Fetch the PR:** call ` + "`" + `gm_pr_view` + "`" + ` — it returns PR metadata, the unified diff, and the changed-files list.
-3. **Navigate the repo:** use ` + "`" + `gm_repo_tree` + "`" + ` (directory listing) and ` + "`" + `read` + "`" + ` (file contents) to explore context around changed files. Do not shell out for the diff or repo discovery.
+3. **Navigate the repo:** use ` + "`" + `gm_repo_tree` + "`" + ` (directory listing) and ` + "`" + `read` + "`" + ` (file contents) to explore context around changed files.
 4. Review the changes against the spec and the guidelines above. Do **not** run the verify command — the runner has already run it; see the Precheck Result above.
-5. For each finding that can be anchored to a specific file and line, call:
-   ` + "`" + `golemic review-comment --pr {{.PRNumber}} --path <file> --line <line> --body "<finding>"` + "`" + `
-   - If the command exits 2 (ANCHOR_FAILED), retry **once** with corrected coordinates.
-   - If the second attempt also exits 2, include the finding in the ` + "`" + `--body` + "`" + ` of ` + "`" + `submit-review` + "`" + ` instead.
-   - Any other error (exit 1) is fatal; do not retry.
-6. After posting all inline comments, call **exactly one**:
-   ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}} --merge-confidence high|medium|low` + "`" + `
-   The ` + "`" + `--body` + "`" + ` must summarise all findings, including any that could not be anchored as inline comments.
-   **If the Precheck Result above was not ok, you MUST submit ` + "`" + `changes_requested` + "`" + ` and explain why.**
+5. For each finding that can be anchored to a specific file and line, call ` + "`" + `gm_review_submit_comment` + "`" + ` with ` + "`" + `{ path, line, body, severity }` + "`" + `.
+   - If it returns ` + "`" + `{ ok: false, code: "ANCHOR_INVALID" }` + "`" + `, retry **once** with corrected coordinates.
+   - If the second attempt also returns ANCHOR_INVALID, include the finding in the ` + "`" + `body` + "`" + ` of ` + "`" + `gm_review_submit` + "`" + ` instead.
+6. After posting all inline comments, call **exactly one** ` + "`" + `gm_review_submit` + "`" + ` with ` + "`" + `{ verdict, mergeConfidence, body }` + "`" + `.
+   - ` + "`" + `verdict` + "`" + `: ` + "`" + `"approved"` + "`" + ` or ` + "`" + `"changes_requested"` + "`" + `
+   - ` + "`" + `mergeConfidence` + "`" + `: ` + "`" + `"high"` + "`" + `, ` + "`" + `"medium"` + "`" + `, or ` + "`" + `"low"` + "`" + `
+   - ` + "`" + `body` + "`" + ` must summarise all findings, including any that could not be anchored as inline comments.
+   - **If the Precheck Result above was not ok, you MUST use ` + "`" + `changes_requested` + "`" + ` and explain why.**
 `
 
 // RenderDev renders a dev user prompt with all run-specific facts injected.
@@ -317,6 +316,72 @@ func RenderDevGateRetry(gateReason string, issue Issue, branch, verifyCommand, g
 	var sb strings.Builder
 	if err := tmpl.Execute(&sb, data); err != nil {
 		return "", fmt.Errorf("failed to render dev gate retry prompt template: %w", err)
+	}
+
+	return sb.String(), nil
+}
+
+// reviewerGateRetryTemplateData holds the template variables for the reviewer gate-retry prompt.
+type reviewerGateRetryTemplateData struct {
+	GateReason     string
+	PRNumber       int
+	Issue          Issue
+	VerifyCommand  string
+	Guidelines     string
+	CodebaseMemory bool
+	Directives     string
+	PrecheckBlock  string
+}
+
+const reviewerGateRetryUserTemplate = `# Reviewer Gate Retry: Re-review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
+
+**Issue Title:** {{.Issue.Title}}
+
+**Previous approval rejected:** {{.GateReason}}
+
+` + scaffoldFrame + `
+
+{{.PrecheckBlock}}
+
+Your previous ` + "`" + `gm_review_submit` + "`" + ` with ` + "`" + `verdict="approved"` + "`" + ` was rejected by the runner.
+` + "`" + `approved` + "`" + ` is only valid when the precheck was ok, the tree was not mutated, and the tree has not changed since the precheck.
+
+Please re-review and submit a valid verdict:
+
+1. Re-read the precheck result above carefully.
+2. If the precheck was not ok: you **must** submit ` + "`" + `changes_requested` + "`" + ` and explain the failures in the body.
+3. If the precheck was ok and the tree is unchanged: you may submit ` + "`" + `approved` + "`" + `.
+4. Call ` + "`" + `gm_review_submit` + "`" + ` with ` + "`" + `{ verdict, mergeConfidence, body }` + "`" + `. The body must justify your verdict.
+   Do **not** call any other tools first unless you need more context from ` + "`" + `gm_pr_view` + "`" + ` or ` + "`" + `read` + "`" + `.
+`
+
+// RenderReviewerGateRetry renders a reviewer gate-retry prompt explaining why the approval
+// was rejected and instructing the agent to re-review and submit a valid verdict.
+func RenderReviewerGateRetry(gateReason string, prNumber int, issue Issue, verifyCommand, guidelinesPath, precheckBlock string, cbmEnabled bool) (string, error) {
+	guidelines, err := readGuidelines(guidelinesPath)
+	if err != nil {
+		return "", err
+	}
+
+	data := reviewerGateRetryTemplateData{
+		GateReason:     gateReason,
+		PRNumber:       prNumber,
+		Issue:          issue,
+		VerifyCommand:  verifyCommand,
+		Guidelines:     guidelines,
+		CodebaseMemory: cbmEnabled,
+		Directives:     workingDirDirective,
+		PrecheckBlock:  precheckBlock,
+	}
+
+	tmpl, err := template.New("reviewerGateRetry").Parse(reviewerGateRetryUserTemplate)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse reviewer gate retry prompt template: %w", err)
+	}
+
+	var sb strings.Builder
+	if err := tmpl.Execute(&sb, data); err != nil {
+		return "", fmt.Errorf("failed to render reviewer gate retry prompt template: %w", err)
 	}
 
 	return sb.String(), nil

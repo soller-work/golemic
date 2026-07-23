@@ -100,7 +100,7 @@ func TestRunReviewerAgent_ChainExhausted_NonZeroAgentCompleted(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "")
+	outcome, _ := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "", nil, "")
 
 	if outcome != outcomeReviewFailed {
 		t.Errorf("expected %q, got %q", outcomeReviewFailed, outcome)
@@ -137,7 +137,7 @@ func TestRunReviewerAgent_ChainExhausted_WithPR_PostsOneComment(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "")
+	outcome, _ := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "", nil, "")
 
 	if outcome != outcomeReviewFailed {
 		t.Errorf("expected %q, got %q", outcomeReviewFailed, outcome)
@@ -254,7 +254,7 @@ func TestRunReviewerAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "")
+	r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "", nil, "")
 
 	// Verify exact ordered chain is preserved in cfg.Model
 	expectedChain := "model-a, model-b, model-c"

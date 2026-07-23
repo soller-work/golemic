@@ -729,7 +729,7 @@ func TestCBMBrokerSkippedWhenIndexingFailsReviewer(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	outcome := r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, "")
+	outcome, _ := r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, "", nil, "")
 	if outcome != outcomeSuccess {
 		t.Fatalf("expected success outcome without CBM, got %q", outcome)
 	}

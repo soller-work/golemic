@@ -436,10 +436,9 @@ var gmCodeToolNames = []string{
 	"gm_code_detect_changes",
 }
 
-// gmReviewerToolNames are added to the reviewer agent tool allowlist when the GM broker is running.
-// gm_review_submit is intentionally omitted: it only echoes and never writes the review_submitted event,
-// so the reviewer must use golemic submit-review until Slice 5 replaces that CLI path.
-var gmReviewerToolNames = []string{"gm_slice_get", "gm_pr_view", "gm_repo_tree"}
+// gmReviewerToolNames are the gm_ tools available to the reviewer agent.
+// bash/edit/write/gm_project_check are excluded (BR-9 read-only lockdown).
+var gmReviewerToolNames = []string{"gm_slice_get", "gm_pr_view", "gm_repo_tree", "gm_review_submit_comment", "gm_review_submit"}
 
 // startGMBrokerFn is a variable so tests can replace it without a real gh call.
 var startGMBrokerFn = func(sockPath string, issueNum int, devToken string) (*gmbroker.Broker, error) {

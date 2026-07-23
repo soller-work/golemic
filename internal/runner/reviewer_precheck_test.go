@@ -35,7 +35,7 @@ func TestReviewerPrecheck_WritesEvent(t *testing.T) {
 		return buildReviewerPrecheckBlock(res), nil
 	}
 
-	block, err := r.runReviewerPrecheck(worktreePath, logPath)
+	block, _, err := r.runReviewerPrecheck(worktreePath, logPath)
 	if err != nil {
 		t.Fatalf("runReviewerPrecheck returned error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestReviewerPrecheck_OkFalseOnFailedVerify(t *testing.T) {
 		return buildReviewerPrecheckBlock(res), nil
 	}
 
-	block, err := r.runReviewerPrecheck(worktreePath, logPath)
+	block, _, err := r.runReviewerPrecheck(worktreePath, logPath)
 	if err != nil {
 		t.Fatalf("runReviewerPrecheck returned error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestReviewerPrecheck_OkFalseOnTreeMutation(t *testing.T) {
 		return buildReviewerPrecheckBlock(res), nil
 	}
 
-	block, err := r.runReviewerPrecheck(worktreePath, logPath)
+	block, _, err := r.runReviewerPrecheck(worktreePath, logPath)
 	if err != nil {
 		t.Fatalf("runReviewerPrecheck returned error: %v", err)
 	}
@@ -181,15 +181,15 @@ func TestReviewerPrecheck_GreenNoOutputBlock(t *testing.T) {
 // Proof check 5: tool allowlist excludes edit, write, gm_project_check
 // ---------------------------------------------------------------------------
 
-// TestReviewerToolAllowlist_NoEditNoWrite verifies gmReviewerToolNames excludes
-// edit, write, and gm_project_check, and includes gm_pr_view and gm_repo_tree.
-func TestReviewerToolAllowlist_NoEditNoWrite(t *testing.T) {
-	for _, banned := range []string{"edit", "write", "gm_project_check"} {
+// TestReviewerToolAllowlist_ReadOnly verifies gmReviewerToolNames excludes
+// bash/edit/write/gm_project_check (BR-9) and includes all required reviewer tools.
+func TestReviewerToolAllowlist_ReadOnly(t *testing.T) {
+	for _, banned := range []string{"bash", "edit", "write", "gm_project_check"} {
 		if containsTool(gmReviewerToolNames, banned) {
 			t.Errorf("gmReviewerToolNames must not include %q; got: %v", banned, gmReviewerToolNames)
 		}
 	}
-	for _, required := range []string{"gm_pr_view", "gm_repo_tree"} {
+	for _, required := range []string{"gm_pr_view", "gm_repo_tree", "gm_review_submit_comment", "gm_review_submit"} {
 		if !containsTool(gmReviewerToolNames, required) {
 			t.Errorf("gmReviewerToolNames must include %q; got: %v", required, gmReviewerToolNames)
 		}
@@ -200,8 +200,8 @@ func TestReviewerToolAllowlist_NoEditNoWrite(t *testing.T) {
 // Proof check 7: reviewer prompt uses gm_pr_view/gm_repo_tree, not verify/git diff
 // ---------------------------------------------------------------------------
 
-// TestReviewerPrompt_DiscoveryTools verifies the rendered reviewer prompt instructs
-// gm_pr_view/gm_repo_tree/read for discovery and retains the CLI submit terminal step.
+// TestReviewerPrompt_DiscoveryTools verifies the rendered reviewer prompt uses
+// gm_ tools for discovery and verdict (BR-9/§12/§13), and excludes bash/CLI submit.
 func TestReviewerPrompt_DiscoveryTools(t *testing.T) {
 	_, repoRoot, _ := setupRunnerTest(t)
 	guidelinesPath := filepath.Join(repoRoot, ".golemic", "guidelines", "reviewer.md")
@@ -217,7 +217,7 @@ func TestReviewerPrompt_DiscoveryTools(t *testing.T) {
 		t.Fatalf("RenderReviewer: %v", err)
 	}
 
-	for _, required := range []string{"gm_pr_view", "gm_repo_tree", "gm_slice_get"} {
+	for _, required := range []string{"gm_pr_view", "gm_repo_tree", "gm_slice_get", "gm_review_submit_comment", "gm_review_submit"} {
 		if !strings.Contains(p, required) {
 			t.Errorf("reviewer prompt must contain %q", required)
 		}
@@ -228,11 +228,11 @@ func TestReviewerPrompt_DiscoveryTools(t *testing.T) {
 	if strings.Contains(p, "git diff") {
 		t.Error("reviewer prompt must not instruct git diff")
 	}
-	if !strings.Contains(p, "golemic submit-review") {
-		t.Error("reviewer prompt must retain 'golemic submit-review' terminal step")
+	if strings.Contains(p, "golemic submit-review") {
+		t.Error("reviewer prompt must not contain 'golemic submit-review' (bash cutover BR-9)")
 	}
-	if !strings.Contains(p, "golemic review-comment") {
-		t.Error("reviewer prompt must retain 'golemic review-comment' step")
+	if strings.Contains(p, "golemic review-comment") {
+		t.Error("reviewer prompt must not contain 'golemic review-comment' (bash cutover BR-9)")
 	}
 }
 

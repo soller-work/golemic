@@ -54,12 +54,22 @@ type ProjectCheckConfig struct {
 	Env           map[string]string
 }
 
-// ReviewerConfig configures gm_pr_view and gm_repo_tree for a reviewer invocation.
+// PrecheckState holds the reviewer precheck result injected before an agent invocation.
+// It is used by the §12 approval gate in gm_review_submit.
+type PrecheckState struct {
+	OK                bool
+	BeforeFingerprint string
+	AfterFingerprint  string
+}
+
+// ReviewerConfig configures reviewer tools (gm_pr_view, gm_repo_tree, gm_review_submit_comment,
+// gm_review_submit) for a reviewer invocation.
 type ReviewerConfig struct {
 	WorktreePath  string
 	ReviewerToken string
 	RepoRoot      string
 	PRNumber      int
+	Precheck      *PrecheckState // §12 approval gate; nil when no precheck ran
 }
 
 // ProjectCheckResult is the result of a gm_project_check call.
@@ -113,10 +123,23 @@ type Broker struct {
 
 	reviewer ReviewerConfig
 
+	// §12/§13 reviewer terminal state (per invocation)
+	reviewerMu                  sync.Mutex
+	pendingReviewID             string              // Pending Review node ID for this invocation
+	reviewSubmit                *ReviewSubmitParams // non-nil when gate passed
+	reviewSubmitGateRejected    bool
+	reviewSubmitGateMsg         string
+	reviewSubmitTerminalCallID  string
+	reviewSubmitTerminalRaw     json.RawMessage
+	reviewSubmitTerminalResult  json.RawMessage
+	reviewSubmitTerminalPending bool
+
 	// Injectable functions — set to non-nil in tests for deterministic behavior.
-	projectCheckFn       func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)
-	computeFingerprintFn func(worktreePath string) (string, error)
-	prViewFn             func(cfg ReviewerConfig) (json.RawMessage, error)
+	projectCheckFn             func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)
+	computeFingerprintFn       func(worktreePath string) (string, error)
+	prViewFn                   func(cfg ReviewerConfig) (json.RawMessage, error)
+	getOrCreatePendingReviewFn func(cfg ReviewerConfig) (string, error)
+	addReviewCommentFn         func(cfg ReviewerConfig, reviewID, path, body string, line int) (commentID, threadID string, anchorInvalid bool, err error)
 }
 
 // gmRequest is the payload the pi extension sends for each tool call.
@@ -132,7 +155,7 @@ type gmResponse struct {
 	Result json.RawMessage `json:"result"`
 }
 
-var defaultTools = []string{"gm_slice_get", "gm_dev_done", "gm_review_submit"}
+var defaultTools = []string{"gm_slice_get", "gm_dev_done", "gm_review_submit", "gm_review_submit_comment"}
 
 // Start creates and returns a Broker that fetches issue body via gh CLI using
 // devToken. The socket dir is created with 0700 permissions.
@@ -241,6 +264,22 @@ func (b *Broker) SetPRViewFn(fn func(cfg ReviewerConfig) (json.RawMessage, error
 	b.prViewFn = fn
 }
 
+// SetGetOrCreatePendingReviewFn replaces the pending-review discover-or-create function.
+func (b *Broker) SetGetOrCreatePendingReviewFn(fn func(cfg ReviewerConfig) (string, error)) {
+	if b == nil {
+		return
+	}
+	b.getOrCreatePendingReviewFn = fn
+}
+
+// SetAddReviewCommentFn replaces the inline-comment add function.
+func (b *Broker) SetAddReviewCommentFn(fn func(cfg ReviewerConfig, reviewID, path, body string, line int) (commentID, threadID string, anchorInvalid bool, err error)) {
+	if b == nil {
+		return
+	}
+	b.addReviewCommentFn = fn
+}
+
 // Shutdown stops the broker listener and removes the socket file.
 func (b *Broker) Shutdown() {
 	if b.listener != nil {
@@ -286,7 +325,9 @@ func (b *Broker) dispatch(req gmRequest) json.RawMessage {
 	case "gm_dev_done":
 		return b.handleDevDone(req.CallID, req.Params)
 	case "gm_review_submit":
-		return handleReviewSubmit(req.Params)
+		return b.handleReviewSubmit(req.CallID, req.Params)
+	case "gm_review_submit_comment":
+		return b.handleReviewSubmitComment(req.Params)
 	case "gm_project_check":
 		return b.handleProjectCheck(req.Params)
 	case "gm_pr_view":
@@ -539,21 +580,257 @@ type ReviewSubmitParams struct {
 	Body            string `json:"body"`
 }
 
-func handleReviewSubmit(raw json.RawMessage) json.RawMessage {
+// ReviewSubmitCommentParams is the expected payload for gm_review_submit_comment.
+type ReviewSubmitCommentParams struct {
+	Path     string `json:"path"`
+	Line     int    `json:"line"`
+	Body     string `json:"body"`
+	Severity string `json:"severity"` // optional: "blocking" | "non_blocking"
+}
+
+// ReviewSubmitState captures the stored terminal response for gm_review_submit.
+type ReviewSubmitState struct {
+	Params       *ReviewSubmitParams
+	GateRejected bool
+	GateMsg      string
+}
+
+// handleReviewSubmit is the terminal gm_review_submit handler (§12/§14).
+// It validates schema, checks the §12 approval gate for approved verdicts,
+// stores the result, and returns {ok:true,accepted:true} on success.
+func (b *Broker) handleReviewSubmit(callID string, raw json.RawMessage) json.RawMessage {
+	rawCopy := cloneRawMessage(raw)
+	if res := b.reserveReviewSubmitTerminal(callID, rawCopy); res != nil {
+		return res
+	}
+
+	p, res := b.validateReviewSubmitParams(rawCopy)
+	if res != nil {
+		b.finalizeReviewSubmitTerminal(callID, rawCopy, res)
+		return res
+	}
+
+	if p.Verdict == "approved" {
+		if res := b.checkReviewerGate(); res != nil {
+			b.finalizeReviewSubmitTerminal(callID, rawCopy, res)
+			return res
+		}
+	}
+
+	b.reviewerMu.Lock()
+	b.reviewSubmit = p
+	b.reviewerMu.Unlock()
+
+	out, _ := json.Marshal(map[string]any{"ok": true, "accepted": true})
+	result := json.RawMessage(out)
+	b.finalizeReviewSubmitTerminal(callID, rawCopy, result)
+	return result
+}
+
+func (b *Broker) reserveReviewSubmitTerminal(callID string, raw json.RawMessage) json.RawMessage {
+	b.reviewerMu.Lock()
+	defer b.reviewerMu.Unlock()
+
+	if b.reviewSubmitTerminalResult != nil {
+		if b.reviewSubmitTerminalCallID == callID && bytes.Equal(b.reviewSubmitTerminalRaw, raw) {
+			return cloneRawMessage(b.reviewSubmitTerminalResult)
+		}
+		return errResult("PROTOCOL_ERROR", "gm_review_submit: terminal gm_review_submit already called in this invocation")
+	}
+	if b.reviewSubmitTerminalPending {
+		return errResult("PROTOCOL_ERROR", "gm_review_submit: terminal gm_review_submit already in progress")
+	}
+	b.reviewSubmitTerminalPending = true
+	b.reviewSubmitTerminalCallID = callID
+	b.reviewSubmitTerminalRaw = cloneRawMessage(raw)
+	return nil
+}
+
+func (b *Broker) finalizeReviewSubmitTerminal(callID string, raw, result json.RawMessage) {
+	b.reviewerMu.Lock()
+	b.reviewSubmitTerminalPending = false
+	b.reviewSubmitTerminalCallID = callID
+	b.reviewSubmitTerminalRaw = cloneRawMessage(raw)
+	b.reviewSubmitTerminalResult = cloneRawMessage(result)
+	b.reviewerMu.Unlock()
+}
+
+func (b *Broker) validateReviewSubmitParams(raw json.RawMessage) (*ReviewSubmitParams, json.RawMessage) {
 	var p ReviewSubmitParams
 	if err := json.Unmarshal(raw, &p); err != nil {
-		return errResult("SCHEMA_INVALID", "gm_review_submit: "+err.Error())
+		return nil, errResult("SCHEMA_INVALID", "gm_review_submit: "+err.Error())
 	}
 	if p.Verdict != "approved" && p.Verdict != "changes_requested" {
-		return errResult("SCHEMA_INVALID", `gm_review_submit: verdict must be "approved" or "changes_requested"`)
+		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: verdict must be "approved" or "changes_requested"`)
 	}
-	if p.MergeConfidence == "" {
-		return errResult("SCHEMA_INVALID", "gm_review_submit: mergeConfidence is required")
+	if p.MergeConfidence != "high" && p.MergeConfidence != "medium" && p.MergeConfidence != "low" {
+		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: mergeConfidence must be "high", "medium", or "low"`)
 	}
 	if p.Body == "" {
-		return errResult("SCHEMA_INVALID", "gm_review_submit: body is required")
+		return nil, errResult("SCHEMA_INVALID", "gm_review_submit: body is required")
 	}
-	out, _ := json.Marshal(map[string]any{"ok": true, "echo": p})
+	return &p, nil
+}
+
+// checkReviewerGate validates the §12 approval gate:
+// precheck.ok && beforeFingerprint==afterFingerprint && currentFingerprint==afterFingerprint.
+func (b *Broker) checkReviewerGate() json.RawMessage {
+	b.reviewerMu.Lock()
+	precheck := b.reviewer.Precheck
+	worktreePath := b.reviewer.WorktreePath
+	b.reviewerMu.Unlock()
+
+	if precheck == nil {
+		return b.rejectReviewerGate("no precheck result for this invocation; run verify first")
+	}
+	if !precheck.OK {
+		return b.rejectReviewerGate("precheck was not ok (verify failed or tree was mutated)")
+	}
+	if precheck.BeforeFingerprint != precheck.AfterFingerprint {
+		return b.rejectReviewerGate("precheck mutated the working tree")
+	}
+	if worktreePath == "" {
+		return b.rejectReviewerGate("reviewer worktree path not configured")
+	}
+	currentFP, err := b.getComputeFingerprintFn()(worktreePath)
+	if err != nil {
+		return b.rejectReviewerGate("failed to compute current working-tree fingerprint: " + err.Error())
+	}
+	if currentFP != precheck.AfterFingerprint {
+		return b.rejectReviewerGate("working tree changed since precheck")
+	}
+	return nil
+}
+
+func (b *Broker) rejectReviewerGate(msg string) json.RawMessage {
+	b.reviewerMu.Lock()
+	b.reviewSubmitGateRejected = true
+	b.reviewSubmitGateMsg = msg
+	b.reviewerMu.Unlock()
+	return errResult("REVIEWER_GATE", "gm_review_submit: "+msg)
+}
+
+// ReviewSubmitResult returns the stored ReviewSubmitParams if gm_review_submit
+// was called successfully (gate passed) during this broker's lifetime.
+func (b *Broker) ReviewSubmitResult() (*ReviewSubmitParams, bool) {
+	b.reviewerMu.Lock()
+	p := b.reviewSubmit
+	b.reviewerMu.Unlock()
+	if p == nil {
+		return nil, false
+	}
+	return p, true
+}
+
+// ReviewSubmitGateRejected reports whether gm_review_submit was called but
+// the §12 approval gate rejected it during this broker's lifetime.
+func (b *Broker) ReviewSubmitGateRejected() bool {
+	b.reviewerMu.Lock()
+	defer b.reviewerMu.Unlock()
+	return b.reviewSubmitGateRejected
+}
+
+// ReviewSubmitGateReason returns the human-readable reason the §12 gate was rejected.
+func (b *Broker) ReviewSubmitGateReason() string {
+	b.reviewerMu.Lock()
+	defer b.reviewerMu.Unlock()
+	return b.reviewSubmitGateMsg
+}
+
+// PendingReviewID returns the GitHub Pending Review node ID created for this
+// invocation via gm_review_submit_comment, or empty string if none was created.
+func (b *Broker) PendingReviewID() string {
+	b.reviewerMu.Lock()
+	defer b.reviewerMu.Unlock()
+	return b.pendingReviewID
+}
+
+// handleReviewSubmitComment handles gm_review_submit_comment (non-terminal, BR-1).
+// It creates/reuses a Pending Review for this invocation and adds an inline comment.
+func (b *Broker) handleReviewSubmitComment(raw json.RawMessage) json.RawMessage {
+	if res := b.rejectReviewSubmitCommentAfterTerminal(); res != nil {
+		return res
+	}
+	p, errRes := b.validateReviewSubmitCommentParams(raw)
+	if errRes != nil {
+		return errRes
+	}
+	reviewID, errRes := b.ensurePendingReview()
+	if errRes != nil {
+		return errRes
+	}
+	return b.addInlineComment(reviewID, p)
+}
+
+func (b *Broker) rejectReviewSubmitCommentAfterTerminal() json.RawMessage {
+	b.reviewerMu.Lock()
+	defer b.reviewerMu.Unlock()
+	if b.reviewSubmit == nil {
+		return nil
+	}
+	return errResult("PROTOCOL_ERROR", "gm_review_submit_comment: terminal gm_review_submit already accepted in this invocation")
+}
+
+func (b *Broker) validateReviewSubmitCommentParams(raw json.RawMessage) (*ReviewSubmitCommentParams, json.RawMessage) {
+	var p ReviewSubmitCommentParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, errResult("SCHEMA_INVALID", "gm_review_submit_comment: "+err.Error())
+	}
+	if p.Path == "" {
+		return nil, errResult("SCHEMA_INVALID", "gm_review_submit_comment: path is required")
+	}
+	if p.Line == 0 {
+		return nil, errResult("SCHEMA_INVALID", "gm_review_submit_comment: line is required")
+	}
+	if p.Body == "" {
+		return nil, errResult("SCHEMA_INVALID", "gm_review_submit_comment: body is required")
+	}
+	return &p, nil
+}
+
+func (b *Broker) ensurePendingReview() (string, json.RawMessage) {
+	b.reviewerMu.Lock()
+	reviewID := b.pendingReviewID
+	cfg := b.reviewer
+	b.reviewerMu.Unlock()
+	if reviewID != "" {
+		return reviewID, nil
+	}
+	getOrCreate := b.getOrCreatePendingReviewFn
+	if getOrCreate == nil {
+		getOrCreate = getOrCreatePendingReview
+	}
+	id, err := getOrCreate(cfg)
+	if err != nil {
+		return "", errResult("GITHUB_ERROR", "gm_review_submit_comment: "+err.Error())
+	}
+	b.reviewerMu.Lock()
+	b.pendingReviewID = id
+	b.reviewerMu.Unlock()
+	return id, nil
+}
+
+func (b *Broker) addInlineComment(reviewID string, p *ReviewSubmitCommentParams) json.RawMessage {
+	b.reviewerMu.Lock()
+	cfg := b.reviewer
+	b.reviewerMu.Unlock()
+	addComment := b.addReviewCommentFn
+	if addComment == nil {
+		addComment = addReviewComment
+	}
+	commentID, threadID, anchorInvalid, err := addComment(cfg, reviewID, p.Path, p.Body, p.Line)
+	if err != nil {
+		return errResult("GITHUB_ERROR", "gm_review_submit_comment: "+err.Error())
+	}
+	if anchorInvalid {
+		out, _ := json.Marshal(map[string]any{
+			"ok": false, "code": "ANCHOR_INVALID",
+			"message": "line is not commentable in the current PR diff",
+			"path":    p.Path, "line": p.Line,
+		})
+		return json.RawMessage(out)
+	}
+	out, _ := json.Marshal(map[string]any{"ok": true, "commentId": commentID, "threadId": threadID})
 	return json.RawMessage(out)
 }
 
@@ -568,20 +845,14 @@ func (b *Broker) handleProjectCheck(raw json.RawMessage) json.RawMessage {
 		return errResult("SCHEMA_INVALID", "gm_project_check: "+err.Error())
 	}
 
-	mode := "capped"
-	if p.Output != nil && *p.Output != "" {
-		mode = *p.Output
-	}
-	if mode != "capped" && mode != "full" {
-		return errResult("SCHEMA_INVALID", `gm_project_check: output must be "capped" or "full"`)
-	}
-	if b.projectCheckFn == nil && (b.projectCheck.WorktreePath == "" || b.projectCheck.VerifyCommand == "") {
-		return errResult("PROJECT_CHECK_NOT_AVAILABLE", "gm_project_check is not configured for this broker")
+	mode, errRes := projectCheckMode(p.Output)
+	if errRes != nil {
+		return errRes
 	}
 
-	checkFn := b.projectCheckFn
-	if checkFn == nil {
-		checkFn = runProjectCheck
+	checkFn, errRes := b.projectCheckFnOrError()
+	if errRes != nil {
+		return errRes
 	}
 
 	res, err := checkFn(b.projectCheck, mode)
@@ -589,13 +860,34 @@ func (b *Broker) handleProjectCheck(raw json.RawMessage) json.RawMessage {
 		return errResult("PROJECT_CHECK_FAILED", err.Error())
 	}
 
-	// Record for §10 gate check.
 	b.lastCheckMu.Lock()
 	b.lastCheck = res
 	b.lastCheckMu.Unlock()
 
 	out, _ := json.Marshal(res)
 	return json.RawMessage(out)
+}
+
+func projectCheckMode(output *string) (string, json.RawMessage) {
+	mode := "capped"
+	if output != nil && *output != "" {
+		mode = *output
+	}
+	if mode != "capped" && mode != "full" {
+		return "", errResult("SCHEMA_INVALID", `gm_project_check: output must be "capped" or "full"`)
+	}
+	return mode, nil
+}
+
+func (b *Broker) projectCheckFnOrError() (func(ProjectCheckConfig, string) (*ProjectCheckResult, error), json.RawMessage) {
+	if b.projectCheckFn == nil && (b.projectCheck.WorktreePath == "" || b.projectCheck.VerifyCommand == "") {
+		return nil, errResult("PROJECT_CHECK_NOT_AVAILABLE", "gm_project_check is not configured for this broker")
+	}
+	checkFn := b.projectCheckFn
+	if checkFn == nil {
+		checkFn = runProjectCheck
+	}
+	return checkFn, nil
 }
 
 func (b *Broker) getComputeFingerprintFn() func(string) (string, error) {
@@ -1198,4 +1490,177 @@ func buildTreeEntries(entries []os.DirEntry) []RepoTreeEntry {
 		result = append(result, RepoTreeEntry{Name: e.Name(), Type: t})
 	}
 	return result
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer GitHub API helpers
+// ---------------------------------------------------------------------------
+
+// graphqlDiscoverOrCreateReview queries viewer login, PR node ID, and pending reviews.
+const graphqlDiscoverOrCreateReview = `query($owner:String!,$name:String!,$prNumber:Int!){viewer{login}repository(owner:$owner,name:$name){pullRequest(number:$prNumber){id reviews(first:10,states:[PENDING]){nodes{id author{login}}}}}}` //nolint:lll
+
+// graphqlCreatePendingReview creates an empty pending review on a PR.
+const graphqlCreatePendingReview = `mutation($prId:ID!){addPullRequestReview(input:{pullRequestId:$prId}){pullRequestReview{id}}}` //nolint:lll
+
+// graphqlAddReviewThread adds an inline thread to a pending review (RIGHT side).
+const graphqlAddReviewThreadBroker = `mutation($reviewId:ID!,$path:String!,$line:Int!,$side:DiffSide!,$body:String!){addPullRequestReviewThread(input:{pullRequestReviewId:$reviewId,path:$path,line:$line,side:$side,body:$body}){thread{id}}}` //nolint:lll
+
+// getOrCreatePendingReview discovers the viewer's existing PENDING review or creates one.
+func getOrCreatePendingReview(cfg ReviewerConfig) (string, error) {
+	env := append(os.Environ(), "GH_TOKEN="+cfg.ReviewerToken)
+
+	out, err := runGHWithEnv(env, cfg.RepoRoot, "api", "graphql",
+		"-f", fmt.Sprintf("query=%s", graphqlDiscoverOrCreateReview),
+		"-f", "owner="+ownerFromNWO(cfg.RepoRoot, cfg.ReviewerToken),
+		"-f", "name="+nameFromNWO(cfg.RepoRoot, cfg.ReviewerToken),
+		"-F", fmt.Sprintf("prNumber=%d", cfg.PRNumber),
+	)
+	if err != nil {
+		return "", fmt.Errorf("discover pending review: %w", err)
+	}
+
+	var discoverResp struct {
+		Data struct {
+			Viewer struct {
+				Login string `json:"login"`
+			} `json:"viewer"`
+			Repository struct {
+				PullRequest struct {
+					ID      string `json:"id"`
+					Reviews struct {
+						Nodes []struct {
+							ID     string `json:"id"`
+							Author struct {
+								Login string `json:"login"`
+							} `json:"author"`
+						} `json:"nodes"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &discoverResp); err != nil {
+		return "", fmt.Errorf("parse discover response: %w", err)
+	}
+	viewerLogin := discoverResp.Data.Viewer.Login
+	prID := discoverResp.Data.Repository.PullRequest.ID
+	if prID == "" {
+		return "", fmt.Errorf("PR #%d not found", cfg.PRNumber)
+	}
+	for _, node := range discoverResp.Data.Repository.PullRequest.Reviews.Nodes {
+		if node.Author.Login == viewerLogin {
+			return node.ID, nil
+		}
+	}
+	return createPendingReview(env, cfg.RepoRoot, prID)
+}
+
+func createPendingReview(env []string, repoRoot, prID string) (string, error) {
+	out, err := runGHWithEnv(env, repoRoot, "api", "graphql",
+		"-f", fmt.Sprintf("query=%s", graphqlCreatePendingReview),
+		"-f", "prId="+prID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create pending review: %w", err)
+	}
+	var resp struct {
+		Data struct {
+			AddPullRequestReview struct {
+				PullRequestReview struct {
+					ID string `json:"id"`
+				} `json:"pullRequestReview"`
+			} `json:"addPullRequestReview"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return "", fmt.Errorf("parse create review response: %w", err)
+	}
+	id := resp.Data.AddPullRequestReview.PullRequestReview.ID
+	if id == "" {
+		return "", fmt.Errorf("create pending review returned empty id")
+	}
+	return id, nil
+}
+
+// addReviewComment adds an inline thread to the pending review.
+// Returns anchorInvalid=true (and no error) when the line is not in the PR diff.
+func addReviewComment(cfg ReviewerConfig, reviewID, path, body string, line int) (commentID, threadID string, anchorInvalid bool, err error) {
+	env := append(os.Environ(), "GH_TOKEN="+cfg.ReviewerToken)
+	out, runErr := runGHWithEnv(env, cfg.RepoRoot, "api", "graphql",
+		"-f", fmt.Sprintf("query=%s", graphqlAddReviewThreadBroker),
+		"-f", "reviewId="+reviewID,
+		"-f", "path="+path,
+		"-F", fmt.Sprintf("line=%d", line),
+		"-f", "side=RIGHT",
+		"-f", "body="+body,
+	)
+	if runErr != nil {
+		if isReviewAnchorError(runErr.Error() + out) {
+			return "", "", true, nil
+		}
+		return "", "", false, fmt.Errorf("add review thread: %w", runErr)
+	}
+
+	var resp struct {
+		Data struct {
+			AddPullRequestReviewThread struct {
+				Thread struct {
+					ID string `json:"id"`
+				} `json:"thread"`
+			} `json:"addPullRequestReviewThread"`
+		} `json:"data"`
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return "", "", false, fmt.Errorf("parse add thread response: %w", err)
+	}
+	if len(resp.Errors) > 0 {
+		msg := resp.Errors[0].Message
+		if isReviewAnchorError(msg) {
+			return "", "", true, nil
+		}
+		return "", "", false, fmt.Errorf("add review thread: %s", msg)
+	}
+	tid := resp.Data.AddPullRequestReviewThread.Thread.ID
+	return tid, tid, false, nil
+}
+
+// isReviewAnchorError returns true when the error indicates the line is not in the diff.
+func isReviewAnchorError(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "part of the diff") ||
+		strings.Contains(lower, "pull request review thread") ||
+		strings.Contains(lower, "not part of")
+}
+
+// ownerFromNWO extracts the owner from "owner/name" via gh repo view.
+// Falls back to empty string on error (caller will get a useful error from GitHub API).
+func ownerFromNWO(repoRoot, token string) string {
+	owner, _ := repoOwnerName(repoRoot, token)
+	return owner
+}
+
+func nameFromNWO(repoRoot, token string) string {
+	_, name := repoOwnerName(repoRoot, token)
+	return name
+}
+
+func repoOwnerName(repoRoot, token string) (owner, name string) {
+	env := append(os.Environ(), "GH_TOKEN="+token)
+	out, err := runGHWithEnv(env, repoRoot, "repo", "view", "--json", "owner,name")
+	if err != nil {
+		return "", ""
+	}
+	var v struct {
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		return "", ""
+	}
+	return v.Owner.Login, v.Name
 }
