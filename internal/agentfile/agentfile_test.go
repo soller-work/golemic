@@ -149,5 +149,3 @@ Implement the explicitly requested repository change.
 		t.Error("body must not be empty")
 	}
 }
-
-

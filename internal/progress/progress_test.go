@@ -109,10 +109,10 @@ func TestFormatLifecycleLine_RunFinished(t *testing.T) {
 // TestFormatToolCallLine verifies bash, read, edit, write, and unknown tools.
 func TestFormatToolCallLine(t *testing.T) {
 	tests := []struct {
-		role     string
-		tool     string
-		args     string
-		wantPfx  string
+		role    string
+		tool    string
+		args    string
+		wantPfx string
 	}{
 		{"dev", "bash", `{"command":"go test ./..."}`, "dev · bash: go test ./..."},
 		{"dev", "read", `{"path":"internal/foo.go"}`, "dev · read: internal/foo.go"},

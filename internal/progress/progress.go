@@ -90,7 +90,9 @@ func fmtRunStarted(p json.RawMessage) string {
 }
 
 func fmtWorktreeCreated(p json.RawMessage) string {
-	var v struct{ Role string `json:"role"` }
+	var v struct {
+		Role string `json:"role"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.Role != "" {
 		return fmt.Sprintf("▶ worktree ready (%s)", v.Role)
 	}
@@ -109,7 +111,9 @@ func fmtAgentCompleted(p json.RawMessage) string {
 }
 
 func fmtPROpened(p json.RawMessage) string {
-	var v struct{ PRNumber string `json:"prNumber"` }
+	var v struct {
+		PRNumber string `json:"prNumber"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.PRNumber != "" {
 		return fmt.Sprintf("▶ PR #%s opened", v.PRNumber)
 	}
@@ -117,7 +121,9 @@ func fmtPROpened(p json.RawMessage) string {
 }
 
 func fmtReviewSubmitted(p json.RawMessage) string {
-	var v struct{ Verdict string `json:"verdict"` }
+	var v struct {
+		Verdict string `json:"verdict"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.Verdict != "" {
 		return fmt.Sprintf("▶ review: %s", v.Verdict)
 	}
@@ -125,7 +131,9 @@ func fmtReviewSubmitted(p json.RawMessage) string {
 }
 
 func fmtCIWaitFinished(p json.RawMessage) string {
-	var v struct{ Result string `json:"result"` }
+	var v struct {
+		Result string `json:"result"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.Result != "" {
 		return fmt.Sprintf("▶ CI %s", v.Result)
 	}
@@ -133,7 +141,9 @@ func fmtCIWaitFinished(p json.RawMessage) string {
 }
 
 func fmtPRMerged(p json.RawMessage) string {
-	var v struct{ PRNumber interface{} `json:"prNumber"` }
+	var v struct {
+		PRNumber interface{} `json:"prNumber"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.PRNumber != nil {
 		return fmt.Sprintf("▶ PR #%v merged", v.PRNumber)
 	}
@@ -141,7 +151,9 @@ func fmtPRMerged(p json.RawMessage) string {
 }
 
 func fmtAutomergeSkipped(p json.RawMessage) string {
-	var v struct{ Reason string `json:"reason"` }
+	var v struct {
+		Reason string `json:"reason"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.Reason != "" {
 		return fmt.Sprintf("▶ automerge skipped (%s)", v.Reason)
 	}
@@ -149,7 +161,9 @@ func fmtAutomergeSkipped(p json.RawMessage) string {
 }
 
 func fmtAutomergeFailed(p json.RawMessage) string {
-	var v struct{ Reason string `json:"reason"` }
+	var v struct {
+		Reason string `json:"reason"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.Reason != "" {
 		return fmt.Sprintf("▶ automerge failed (%s)", v.Reason)
 	}
@@ -157,7 +171,9 @@ func fmtAutomergeFailed(p json.RawMessage) string {
 }
 
 func fmtConflictRetry(p json.RawMessage) string {
-	var v struct{ Result string `json:"result"` }
+	var v struct {
+		Result string `json:"result"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.Result != "" {
 		return fmt.Sprintf("▶ conflict retry (%s)", v.Result)
 	}
@@ -165,7 +181,9 @@ func fmtConflictRetry(p json.RawMessage) string {
 }
 
 func fmtIssueClaimed(p json.RawMessage) string {
-	var v struct{ IssueNumber int `json:"issue_number"` }
+	var v struct {
+		IssueNumber int `json:"issue_number"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.IssueNumber > 0 {
 		return fmt.Sprintf("▶ issue #%d claimed", v.IssueNumber)
 	}
@@ -184,7 +202,9 @@ func fmtIssueReleased(p json.RawMessage) string {
 }
 
 func fmtRunFinished(p json.RawMessage) string {
-	var v struct{ Outcome string `json:"outcome"` }
+	var v struct {
+		Outcome string `json:"outcome"`
+	}
 	if json.Unmarshal(p, &v) == nil && v.Outcome != "" {
 		return fmt.Sprintf("▶ run finished (%s)", v.Outcome)
 	}

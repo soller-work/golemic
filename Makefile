@@ -27,8 +27,18 @@ lint-no-prod-nolint: ## Ban complexity //nolint directives in production Go file
 		exit 1; \
 	fi
 
+.PHONY: lint-gofmt
+lint-gofmt: ## Fail if any .go file is not gofmt-clean
+	@dirty=$$(gofmt -l ./internal/ ./cmd/ ./test/ 2>/dev/null); \
+	if [ -n "$$dirty" ]; then \
+		echo "$$dirty" >&2; \
+		echo "gofmt: the files above are not formatted — run: gofmt -w ./internal/ ./cmd/ ./test/" >&2; \
+		exit 1; \
+	fi
+
 .PHONY: lint
 lint: $(GOBIN)/golangci-lint ## Run golangci-lint: changed-lines (complexity/standard) + repo-wide architecture rules; bans complexity nolint directives in production code (cyclop, gocognit, funlen, nestif, maintidx, interfacebloat)
+	$(MAKE) lint-gofmt
 	$(GOBIN)/golangci-lint run --new-from-rev=$(LINT_BASE_REF)
 	$(GOBIN)/golangci-lint run -c .golangci-arch.yml
 	$(MAKE) lint-no-prod-nolint

@@ -33,7 +33,7 @@ func TestRunOpenPR_Success(t *testing.T) { //nolint:cyclop,gocognit // moved ver
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-1",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -113,7 +113,7 @@ func TestRunOpenPR_Success_StdoutPRURL(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-prurl",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -149,7 +149,7 @@ func TestRunOpenPR_GhFailure(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-2",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -193,12 +193,14 @@ func TestRunOpenPR_MissingEnvVar_RunID(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
-		runFunc:        func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runFunc: func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			return "", fmt.Errorf("should not be called")
+		},
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -259,8 +261,10 @@ func TestRunOpenPR_MissingBothEnvVars(t *testing.T) {
 	}
 
 	exec := fakeExecutor{
-		runFunc:        func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runFunc: func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			return "", fmt.Errorf("should not be called")
+		},
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -283,12 +287,14 @@ func TestRunOpenPR_EmptyTitle(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-empty-title",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
-		runFunc:        func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runFunc: func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			return "", fmt.Errorf("should not be called")
+		},
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -315,12 +321,14 @@ func TestRunOpenPR_EmptyBody(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-empty-body",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
-		runFunc:        func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runFunc: func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			return "", fmt.Errorf("should not be called")
+		},
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -344,7 +352,7 @@ func TestRunOpenPR_BranchResolutionFailure(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-branch-fail",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -385,7 +393,7 @@ func TestRunOpenPR_DetachedHead(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-detached",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -417,7 +425,7 @@ func TestRunOpenPR_PRParseFailure_EmptyOutput(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-parse",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -452,7 +460,7 @@ func TestRunOpenPR_PRParseFailure_NoNumericSuffix(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-parse2",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -487,7 +495,7 @@ func TestRunOpenPR_ArbitraryFlagOrder(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-pr-order",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	exec := fakeExecutor{
@@ -535,8 +543,10 @@ func TestRunOpenPR_ErrorsToStderrOnly(t *testing.T) {
 	}
 
 	exec := fakeExecutor{
-		runFunc:        func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
-		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runFunc: func(name string, args ...string) (string, error) { return "", fmt.Errorf("should not be called") },
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			return "", fmt.Errorf("should not be called")
+		},
 	}
 
 	var stdout, stderr bytes.Buffer

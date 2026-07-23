@@ -18,7 +18,7 @@ func TestRunEmit_Success(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-1",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -68,7 +68,7 @@ func TestRunEmit_EmptyType(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-2",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -97,7 +97,7 @@ func TestRunEmit_InvalidPayloadJSON(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-3",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -126,7 +126,7 @@ func TestRunEmit_PayloadNotObject(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-4",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	tests := []struct {
@@ -163,7 +163,7 @@ func TestRunEmit_MissingRunID(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -239,7 +239,7 @@ func TestRunEmit_WriteFailure(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-6",
 		"GOLEMIC_EVENT_LOG": t.TempDir(),
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -261,7 +261,7 @@ func TestRunEmit_NormalizesPayload(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-7",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -294,7 +294,7 @@ func TestRunEmit_UnknownEventTypeAllowed(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-8",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -325,7 +325,7 @@ func TestRunEmit_WithPayload(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-9",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -363,7 +363,7 @@ func TestRunEmit_ArbitraryOrderFlags(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-10",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -416,7 +416,7 @@ func TestRunEmit_EmptyTypeCheckedBeforePayloadParse(t *testing.T) {
 	env := map[string]string{
 		"GOLEMIC_RUN_ID":    "run-emit-11",
 		"GOLEMIC_EVENT_LOG": logPath,
-		"GOLEMIC_TURN_ID":    "1",
+		"GOLEMIC_TURN_ID":   "1",
 	}
 
 	var stdout, stderr bytes.Buffer

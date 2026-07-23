@@ -15,7 +15,6 @@ import (
 // emptyLookup is an env lookup that returns nothing — used to isolate tests from GOLEMIC_* env.
 func emptyLookup(string) (string, bool) { return "", false }
 
-
 // fakeExecutor simulates external commands with configurable results.
 type fakeExecutor struct {
 	runFunc        func(name string, args ...string) (string, error)

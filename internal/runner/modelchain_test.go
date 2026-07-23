@@ -262,5 +262,3 @@ func TestRunReviewerAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
 		t.Errorf("cfg.Model = %q, want %q (exact ordered chain not preserved)", capturedCfg.Model, expectedChain)
 	}
 }
-
-

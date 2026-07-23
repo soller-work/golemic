@@ -201,9 +201,9 @@ func TestTopLevelInternalFileCaught(t *testing.T) {
 func TestViolationCountLine(t *testing.T) {
 	dir := t.TempDir()
 	fixtureRepo(t, dir, map[string]string{
-		"cmd/a.go":        "package main\n\nfunc a() {} //nolint:cyclop\n",
-		"internal/b.go":   "package internal\n\nfunc b() {} //nolint:funlen\n",
-		"cmd/sub/c.go":    "package sub\n\nfunc c() {} //nolint:nestif\n",
+		"cmd/a.go":      "package main\n\nfunc a() {} //nolint:cyclop\n",
+		"internal/b.go": "package internal\n\nfunc b() {} //nolint:funlen\n",
+		"cmd/sub/c.go":  "package sub\n\nfunc c() {} //nolint:nestif\n",
 	})
 
 	out, err := runTarget(t, dir, "lint-no-prod-nolint")
