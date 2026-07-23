@@ -9,8 +9,9 @@ import (
 // lineFilterWriter buffers pi subprocess stdout and applies filterPiLine to
 // each complete newline-terminated line before forwarding to dst.
 type lineFilterWriter struct {
-	dst io.Writer
-	buf []byte
+	dst    io.Writer
+	buf    []byte
+	onLine func([]byte)
 }
 
 func (w *lineFilterWriter) Write(p []byte) (int, error) {
@@ -23,6 +24,9 @@ func (w *lineFilterWriter) Write(p []byte) (int, error) {
 		out := filterPiLine(w.buf[:i+1])
 		if _, err := w.dst.Write(out); err != nil {
 			return 0, err
+		}
+		if w.onLine != nil {
+			w.onLine(out)
 		}
 		w.buf = w.buf[i+1:]
 	}
@@ -86,6 +90,14 @@ type muOutput struct {
 // assistantMessageEvent.partial.content and top-level message fields are
 // dropped. Returns nil on any unmarshal/marshal failure (caller falls back to
 // verbatim).
+func terminalDoneFromLine(line []byte) bool {
+	var ev struct {
+		Type     string `json:"type"`
+		ToolName string `json:"toolName"`
+	}
+	return json.Unmarshal(bytes.TrimSpace(line), &ev) == nil && ev.Type == "tool_execution_end" && ev.ToolName == "gm_dev_done"
+}
+
 func projectMessageUpdate(data []byte) []byte {
 	var in muInput
 	if err := json.Unmarshal(data, &in); err != nil {

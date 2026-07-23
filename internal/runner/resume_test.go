@@ -32,6 +32,24 @@ func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 		t.Fatalf("load credentials: %v", err)
 	}
 
+	shortHome := "/tmp"
+	shortProject := "rs"
+	shortRunID := "issue-42-resume"
+	t.Cleanup(func() { os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) }) //nolint:errcheck
+
+	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":false}}`, shortProject)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	credDir := filepath.Join(shortHome, ".golemic", shortProject)
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	credJSON := fmt.Sprintf(`{"dev_token":%q,"reviewer_token":%q}`, creds.DevToken(), creds.ReviewerToken())
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
 	golemicDir := filepath.Join(repoRoot, ".golemic")
 	guidelinesDir := filepath.Join(golemicDir, "guidelines")
 	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
@@ -54,10 +72,11 @@ func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 		}
 	}
 
-	r := New(exec, homeDir, repoRoot, 42)
+	r := New(exec, shortHome, repoRoot, 42)
 	r.repoRoot = repoRoot
-	r.project = project
-	r.runID = "issue-42-resume"
+	r.project = shortProject
+	r.homeDir = shortHome
+	r.runID = shortRunID
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
 	r.cfg = &config.Config{
@@ -70,7 +89,9 @@ func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 	var stderr bytes.Buffer
 	r.SetStderr(&stderr)
 
-	return r, filepath.Join(homeDir, ".golemic", project, "runs", "issue-42-resume", "events.jsonl"), &stderr
+	injectFakeGMBrokerPP(t)
+
+	return r, filepath.Join(shortHome, ".golemic", shortProject, "runs", shortRunID, "events.jsonl"), &stderr
 }
 
 // runResumeOrchestrate prepares the event log and runs resumeOrchestrate.
@@ -184,6 +205,12 @@ func baseResumeWithEnvFunc(
 		nodes = []map[string]interface{}{}
 	}
 	return func(env map[string]string, name string, args ...string) (string, error) {
+		if name == "git" && len(args) >= 1 && args[0] == "push" {
+			return "", nil
+		}
+		if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "create" {
+			return "https://github.com/testowner/testrepo/pull/99\n", nil
+		}
 		if name != "gh" {
 			return "", fmt.Errorf("not mocked: %s %v", name, args)
 		}
@@ -310,6 +337,14 @@ func makeResumeFakeAgent(t *testing.T, rounds []agentRoundConfig, capture *promp
 		}
 		if round.doStalled {
 			return 0, agent.TranscriptPaths{}, agent.ErrStalled
+		}
+		if cfg.Role == "dev" {
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Fatalf("makeResumeFakeAgent: sendGMProjectCheck failed")
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Fatalf("makeResumeFakeAgent: sendGMDevDone failed")
+			}
 		}
 		if cfg.Role == "reviewer" && round.verdict != "" {
 			writeReviewEvent(t, cfg.EventLogPath, round.verdict, round.body)

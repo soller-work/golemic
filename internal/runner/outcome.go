@@ -18,6 +18,11 @@ const (
 	outcomeMergeFailed  = "merge_failed"
 	outcomeSkipped      = "skipped"
 	branchPrefix        = "golemic/issue-"
+
+	// outcomeDevGateRejected is an internal signal (never written to the event log)
+	// returned when the §10 broker gate rejected gm_dev_done. The caller retries
+	// the dev agent with a gate-explaining prompt.
+	outcomeDevGateRejected = "dev_gate_rejected"
 )
 
 // countReviewSubmittedEvents counts the number of review_submitted events in the log.

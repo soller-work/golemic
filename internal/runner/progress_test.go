@@ -26,13 +26,15 @@ import (
 // The reviewer call writes review_submitted + optional tool calls.
 func makeProgressFakeAgent(t *testing.T, devActivityLines, reviewerActivityLines []string) func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 	t.Helper()
-	devCalls := 0
 	return func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		switch cfg.Role {
 		case "dev":
-			devCalls++
-			if devCalls == 1 {
-				writePROpenedEvent(t, cfg.EventLogPath, 99)
+			// Satisfy the §10 gate; runner writes pr_opened on the first call.
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("makeProgressFakeAgent: sendGMProjectCheck failed")
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("makeProgressFakeAgent: sendGMDevDone failed")
 			}
 			if len(devActivityLines) > 0 {
 				writeActivityLines(t, filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl"), devActivityLines)
@@ -152,10 +154,10 @@ func TestProgress_HappyPath(t *testing.T) {
 		"▶ worktree ready (dev)",
 		"▶ dev started",
 		"▶ dev completed (exit 0)",
-		"▶ PR #99 opened",
 		"▶ CI green",
 		"▶ worktree ready (reviewer)",
 		"▶ reviewer completed (exit 0)",
+		"▶ PR #99 opened",
 		"▶ review: approved",
 		"▶ PR #99 merged",
 	}
@@ -236,11 +238,17 @@ type Renderer struct {
 func TestProgress_FollowReaderError(t *testing.T) {
 	r, logPath, stderrBuf, _ := setupProgressRunner(t)
 
-	// Fake agent that writes NO activity.jsonl (simulates failure to create it)
+	// Fake agent that writes NO activity.jsonl (simulates failure to create it).
 	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		switch cfg.Role {
 		case "dev":
-			writePROpenedEvent(t, cfg.EventLogPath, 99)
+			// Satisfy the §10 gate; runner writes pr_opened.
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("TestProgress_FollowReaderError: sendGMProjectCheck failed")
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("TestProgress_FollowReaderError: sendGMDevDone failed")
+			}
 		case "reviewer":
 			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
 		}

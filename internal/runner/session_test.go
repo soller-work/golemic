@@ -95,16 +95,18 @@ func TestRunnerDevAndReviewerSessionIDsDiffer_Issue147(t *testing.T) {
 // Returns captured dev and reviewer RoleConfigs in order.
 func runPingPongWithCapture(t *testing.T, r *Runner, logPath, firstVerdict string) (devCfgs, reviewerCfgs []agent.RoleConfig) { //nolint:cyclop
 	t.Helper()
-	devCallCount := 0
 	reviewerCallCount := 0
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		switch cfg.Role {
 		case "dev":
 			devCfgs = append(devCfgs, cfg)
-			if devCallCount == 0 {
-				writePROpenedEvent(t, cfg.EventLogPath, 99)
+			// Satisfy the §10 gate; runner writes pr_opened on the first call.
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("runPingPongWithCapture: sendGMProjectCheck failed")
 			}
-			devCallCount++
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("runPingPongWithCapture: sendGMDevDone failed")
+			}
 		case "reviewer":
 			reviewerCfgs = append(reviewerCfgs, cfg)
 			if reviewerCallCount == 0 && firstVerdict != "approved" {

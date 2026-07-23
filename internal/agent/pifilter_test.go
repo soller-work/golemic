@@ -174,6 +174,27 @@ func TestFilterPiLine_NonMessageUpdateVerbatim(t *testing.T) {
 	}
 }
 
+func TestTerminalDoneFromLine(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want bool
+	}{
+		{name: "accepted", line: `{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}` + "\n", want: true},
+		{name: "gate rejected", line: `{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"DEV_GATE"}}` + "\n", want: true},
+		{name: "schema invalid", line: `{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"SCHEMA_INVALID"}}` + "\n", want: true},
+		{name: "other tool", line: `{"type":"tool_execution_end","toolName":"bash","result":"ok"}` + "\n", want: false},
+		{name: "other event", line: `{"type":"message_end"}` + "\n", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := terminalDoneFromLine([]byte(tc.line)); got != tc.want {
+				t.Fatalf("terminalDoneFromLine() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFilterPiLine_MalformedJSONVerbatim(t *testing.T) {
 	cases := []string{
 		"not json at all\n",

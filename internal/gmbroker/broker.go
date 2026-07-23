@@ -7,6 +7,7 @@
 package gmbroker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -32,6 +33,18 @@ type ProjectCheckConfig struct {
 	Env           map[string]string
 }
 
+// ProjectCheckResult is the result of a gm_project_check call.
+// Exported so tests can inject a fake ProjectCheckFn.
+type ProjectCheckResult struct {
+	OK                     bool   `json:"ok"`
+	Command                string `json:"command"`
+	ExitCode               int    `json:"exitCode"`
+	Stdout                 string `json:"stdout"`
+	Stderr                 string `json:"stderr"`
+	Summary                string `json:"summary"`
+	WorkingTreeFingerprint string `json:"workingTreeFingerprint"`
+}
+
 // Broker listens on a unix socket and dispatches gm_ tool calls.
 type Broker struct {
 	sockPath string
@@ -45,8 +58,24 @@ type Broker struct {
 	cachedBody string
 	fetchErr   error
 
-	devDoneMu sync.Mutex
-	devDone   *DevDoneParams
+	// §10 gate state (per invocation)
+	lastCheckMu            sync.Mutex
+	lastCheck              *ProjectCheckResult // nil until first gm_project_check in this invocation
+	devDoneMu              sync.Mutex
+	devDone                *DevDoneParams
+	devDoneGateRejected    bool
+	devDoneGateMsg         string
+	devDoneFingerprint     string
+	devDoneTerminalCallID  string
+	devDoneTerminalRaw     json.RawMessage
+	devDoneTerminalResult  json.RawMessage
+	devDoneTerminalStatus  string
+	devDoneTerminalMessage string
+	devDoneTerminalPending bool
+
+	// Injectable functions — set to non-nil in tests for deterministic behavior.
+	projectCheckFn       func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)
+	computeFingerprintFn func(worktreePath string) (string, error)
 }
 
 // gmRequest is the payload the pi extension sends for each tool call.
@@ -128,6 +157,24 @@ func (b *Broker) SetAllowedTools(tools []string) {
 	b.allowedTools = toolSet(tools)
 }
 
+// SetProjectCheckFn replaces the project-check function. Used in tests to return
+// a deterministic result without running real commands or accessing a git repo.
+func (b *Broker) SetProjectCheckFn(fn func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)) {
+	if b == nil {
+		return
+	}
+	b.projectCheckFn = fn
+}
+
+// SetComputeFingerprintFn replaces the fingerprint computation function. Used in
+// tests to return a fixed fingerprint matching the fake project-check result.
+func (b *Broker) SetComputeFingerprintFn(fn func(worktreePath string) (string, error)) {
+	if b == nil {
+		return
+	}
+	b.computeFingerprintFn = fn
+}
+
 // Shutdown stops the broker listener and removes the socket file.
 func (b *Broker) Shutdown() {
 	if b.listener != nil {
@@ -171,7 +218,7 @@ func (b *Broker) dispatch(req gmRequest) json.RawMessage {
 	case "gm_slice_get":
 		return b.handleSliceGet()
 	case "gm_dev_done":
-		return b.handleDevDone(req.Params)
+		return b.handleDevDone(req.CallID, req.Params)
 	case "gm_review_submit":
 		return handleReviewSubmit(req.Params)
 	case "gm_project_check":
@@ -209,32 +256,122 @@ type DevDoneParams struct {
 	PrBody    string `json:"prBody"`
 }
 
-func (b *Broker) handleDevDone(raw json.RawMessage) json.RawMessage {
-	var p DevDoneParams
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return errResult("SCHEMA_INVALID", "gm_dev_done: "+err.Error())
+// DevDoneTerminalState captures the stored terminal response for gm_dev_done.
+type DevDoneTerminalState struct {
+	Result  json.RawMessage
+	Status  string
+	Message string
+}
+
+func (b *Broker) handleDevDone(callID string, raw json.RawMessage) json.RawMessage {
+	rawCopy := cloneRawMessage(raw)
+	if res := b.reserveDevDoneTerminal(callID, rawCopy); res != nil {
+		return res
 	}
-	if p.Summary == "" {
-		return errResult("SCHEMA_INVALID", "gm_dev_done: summary is required")
+
+	p, res := b.validateDevDoneParams(rawCopy)
+	if res != nil {
+		b.finalizeDevDoneTerminal(callID, rawCopy, res)
+		return res
 	}
-	if p.CommitMsg == "" {
-		return errResult("SCHEMA_INVALID", "gm_dev_done: commitMsg is required")
-	}
-	if p.PrTitle == "" {
-		return errResult("SCHEMA_INVALID", "gm_dev_done: prTitle is required")
-	}
-	if p.PrBody == "" {
-		return errResult("SCHEMA_INVALID", "gm_dev_done: prBody is required")
+	if res := b.checkDevDoneGate(); res != nil {
+		b.finalizeDevDoneTerminal(callID, rawCopy, res)
+		return res
 	}
 	b.devDoneMu.Lock()
-	b.devDone = &p
+	b.devDone = p
 	b.devDoneMu.Unlock()
-	out, _ := json.Marshal(map[string]any{"ok": true, "echo": p})
-	return json.RawMessage(out)
+	out, _ := json.Marshal(map[string]any{"ok": true, "accepted": true})
+	result := json.RawMessage(out)
+	b.finalizeDevDoneTerminal(callID, rawCopy, result)
+	return result
+}
+
+func (b *Broker) reserveDevDoneTerminal(callID string, raw json.RawMessage) json.RawMessage {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+
+	if b.devDoneTerminalResult != nil {
+		if b.devDoneTerminalCallID == callID && bytes.Equal(b.devDoneTerminalRaw, raw) {
+			return cloneRawMessage(b.devDoneTerminalResult)
+		}
+		return errResult("PROTOCOL_ERROR", "gm_dev_done: terminal gm_dev_done already called in this invocation")
+	}
+	if b.devDoneTerminalPending {
+		return errResult("PROTOCOL_ERROR", "gm_dev_done: terminal gm_dev_done already in progress")
+	}
+
+	b.devDoneTerminalPending = true
+	b.devDoneTerminalCallID = callID
+	b.devDoneTerminalRaw = cloneRawMessage(raw)
+	return nil
+}
+
+func (b *Broker) finalizeDevDoneTerminal(callID string, raw, result json.RawMessage) {
+	status, message := parseDevDoneTerminalResult(result)
+	b.devDoneMu.Lock()
+	b.devDoneTerminalPending = false
+	b.devDoneTerminalCallID = callID
+	b.devDoneTerminalRaw = cloneRawMessage(raw)
+	b.devDoneTerminalResult = cloneRawMessage(result)
+	b.devDoneTerminalStatus = status
+	b.devDoneTerminalMessage = message
+	b.devDoneMu.Unlock()
+}
+
+func (b *Broker) validateDevDoneParams(raw json.RawMessage) (*DevDoneParams, json.RawMessage) {
+	var p DevDoneParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, errResult("SCHEMA_INVALID", "gm_dev_done: "+err.Error())
+	}
+	if p.Summary == "" {
+		return nil, errResult("SCHEMA_INVALID", "gm_dev_done: summary is required")
+	}
+	if p.CommitMsg == "" {
+		return nil, errResult("SCHEMA_INVALID", "gm_dev_done: commitMsg is required")
+	}
+	if p.PrTitle == "" {
+		return nil, errResult("SCHEMA_INVALID", "gm_dev_done: prTitle is required")
+	}
+	if p.PrBody == "" {
+		return nil, errResult("SCHEMA_INVALID", "gm_dev_done: prBody is required")
+	}
+	return &p, nil
+}
+
+func (b *Broker) checkDevDoneGate() json.RawMessage {
+	b.lastCheckMu.Lock()
+	lastCheck := b.lastCheck
+	b.lastCheckMu.Unlock()
+	if lastCheck == nil {
+		return b.rejectDevDoneGate("no prior gm_project_check in this invocation")
+	}
+	if !lastCheck.OK {
+		return b.rejectDevDoneGate("last gm_project_check was not green")
+	}
+	currentFP, err := b.getComputeFingerprintFn()(b.projectCheck.WorktreePath)
+	if err != nil {
+		return b.rejectDevDoneGate("failed to compute working-tree fingerprint: " + err.Error())
+	}
+	if currentFP != lastCheck.WorkingTreeFingerprint {
+		return b.rejectDevDoneGate("working tree changed since last gm_project_check")
+	}
+	b.devDoneMu.Lock()
+	b.devDoneFingerprint = currentFP
+	b.devDoneMu.Unlock()
+	return nil
+}
+
+func (b *Broker) rejectDevDoneGate(msg string) json.RawMessage {
+	b.devDoneMu.Lock()
+	b.devDoneGateRejected = true
+	b.devDoneGateMsg = msg
+	b.devDoneMu.Unlock()
+	return errResult("DEV_GATE", "gm_dev_done: "+msg)
 }
 
 // DevDoneResult returns the stored DevDoneParams if gm_dev_done was called
-// successfully during this broker's lifetime, and false otherwise.
+// successfully (gate passed) during this broker's lifetime, and false otherwise.
 func (b *Broker) DevDoneResult() (*DevDoneParams, bool) {
 	b.devDoneMu.Lock()
 	p := b.devDone
@@ -243,6 +380,83 @@ func (b *Broker) DevDoneResult() (*DevDoneParams, bool) {
 		return nil, false
 	}
 	return p, true
+}
+
+// DevDoneTerminalResult returns the stored terminal gm_dev_done response,
+// including schema/protocol failures, if any terminal call occurred.
+func (b *Broker) DevDoneTerminalResult() (DevDoneTerminalState, bool) {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+	if b.devDoneTerminalResult == nil {
+		return DevDoneTerminalState{}, false
+	}
+	return DevDoneTerminalState{
+		Result:  cloneRawMessage(b.devDoneTerminalResult),
+		Status:  b.devDoneTerminalStatus,
+		Message: b.devDoneTerminalMessage,
+	}, true
+}
+
+// DevDoneFingerprint returns the working-tree fingerprint captured when
+// gm_dev_done passed the §10 gate.
+func (b *Broker) DevDoneFingerprint() (string, bool) {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+	if b.devDone == nil || b.devDoneFingerprint == "" {
+		return "", false
+	}
+	return b.devDoneFingerprint, true
+}
+
+// CurrentFingerprint recomputes the broker's configured worktree fingerprint.
+// Returns false when the broker is not configured for fingerprinting.
+func (b *Broker) CurrentFingerprint() (string, bool) {
+	if b.projectCheck.WorktreePath == "" {
+		return "", false
+	}
+	fp, err := b.getComputeFingerprintFn()(b.projectCheck.WorktreePath)
+	if err != nil {
+		return "", false
+	}
+	return fp, true
+}
+
+// DevDoneGateRejected reports whether gm_dev_done was called but the §10 gate
+// rejected it during this broker's lifetime.
+func (b *Broker) DevDoneGateRejected() bool {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+	return b.devDoneGateRejected
+}
+
+// DevDoneTerminalStatus returns the stored terminal gm_dev_done status code.
+// Returns false if no terminal call has completed.
+func (b *Broker) DevDoneTerminalStatus() (string, bool) {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+	if b.devDoneTerminalResult == nil {
+		return "", false
+	}
+	return b.devDoneTerminalStatus, true
+}
+
+// DevDoneTerminalMessage returns the stored terminal gm_dev_done message.
+// Returns false if no terminal call has completed.
+func (b *Broker) DevDoneTerminalMessage() (string, bool) {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+	if b.devDoneTerminalResult == nil {
+		return "", false
+	}
+	return b.devDoneTerminalMessage, true
+}
+
+// DevDoneGateReason returns the human-readable reason the §10 gate was rejected.
+// Returns empty string if the gate was not rejected.
+func (b *Broker) DevDoneGateReason() string {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+	return b.devDoneGateMsg
 }
 
 // ReviewSubmitParams is the expected payload for gm_review_submit.
@@ -275,16 +489,6 @@ type ProjectCheckParams struct {
 	Output *string `json:"output"`
 }
 
-type projectCheckResult struct {
-	OK                     bool   `json:"ok"`
-	Command                string `json:"command"`
-	ExitCode               int    `json:"exitCode"`
-	Stdout                 string `json:"stdout"`
-	Stderr                 string `json:"stderr"`
-	Summary                string `json:"summary"`
-	WorkingTreeFingerprint string `json:"workingTreeFingerprint"`
-}
-
 func (b *Broker) handleProjectCheck(raw json.RawMessage) json.RawMessage {
 	var p ProjectCheckParams
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -298,19 +502,37 @@ func (b *Broker) handleProjectCheck(raw json.RawMessage) json.RawMessage {
 	if mode != "capped" && mode != "full" {
 		return errResult("SCHEMA_INVALID", `gm_project_check: output must be "capped" or "full"`)
 	}
-	if b.projectCheck.WorktreePath == "" || b.projectCheck.VerifyCommand == "" {
+	if b.projectCheckFn == nil && (b.projectCheck.WorktreePath == "" || b.projectCheck.VerifyCommand == "") {
 		return errResult("PROJECT_CHECK_NOT_AVAILABLE", "gm_project_check is not configured for this broker")
 	}
 
-	res, err := runProjectCheck(b.projectCheck, mode)
+	checkFn := b.projectCheckFn
+	if checkFn == nil {
+		checkFn = runProjectCheck
+	}
+
+	res, err := checkFn(b.projectCheck, mode)
 	if err != nil {
 		return errResult("PROJECT_CHECK_FAILED", err.Error())
 	}
+
+	// Record for §10 gate check.
+	b.lastCheckMu.Lock()
+	b.lastCheck = res
+	b.lastCheckMu.Unlock()
+
 	out, _ := json.Marshal(res)
 	return json.RawMessage(out)
 }
 
-func runProjectCheck(cfg ProjectCheckConfig, mode string) (*projectCheckResult, error) {
+func (b *Broker) getComputeFingerprintFn() func(string) (string, error) {
+	if b.computeFingerprintFn != nil {
+		return b.computeFingerprintFn
+	}
+	return fingerprintAfterVerify
+}
+
+func runProjectCheck(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error) {
 	cmd := exec.Command("sh", "-c", cfg.VerifyCommand)
 	cmd.Dir = cfg.WorktreePath
 	cmd.Env = mergeEnv(os.Environ(), cfg.Env)
@@ -347,7 +569,7 @@ func runProjectCheck(cfg ProjectCheckConfig, mode string) (*projectCheckResult, 
 
 	logProjectCheck(cfg.VerifyCommand, exitCode, fullStdout, fullStderr, fingerprint)
 
-	return &projectCheckResult{
+	return &ProjectCheckResult{
 		OK:                     exitCode == 0,
 		Command:                cfg.VerifyCommand,
 		ExitCode:               exitCode,
@@ -466,9 +688,28 @@ func mergeEnv(base []string, extra map[string]string) []string {
 	return out
 }
 
+func cloneRawMessage(raw json.RawMessage) json.RawMessage {
+	return append(json.RawMessage(nil), raw...)
+}
+
 func errResult(code, message string) json.RawMessage {
 	out, _ := json.Marshal(map[string]any{"ok": false, "code": code, "message": message})
 	return json.RawMessage(out)
+}
+
+func parseDevDoneTerminalResult(result json.RawMessage) (string, string) {
+	var decoded struct {
+		OK      bool   `json:"ok"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(result, &decoded); err != nil {
+		return "", ""
+	}
+	if decoded.OK {
+		return "OK", ""
+	}
+	return decoded.Code, decoded.Message
 }
 
 func writeResult(conn net.Conn, callID string, result json.RawMessage) {

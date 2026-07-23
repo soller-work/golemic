@@ -19,7 +19,6 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
-	"golemic/internal/gmbroker"
 )
 
 // hasCBMEnv reports whether any entry in env is a CBM_* variable.
@@ -41,6 +40,24 @@ func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner,
 	creds, err := loader.Load(project)
 	if err != nil {
 		t.Fatalf("load credentials: %v", err)
+	}
+
+	shortHome := "/tmp"
+	shortProject := "cbm"
+	shortRunID := "issue-42-cbm"
+	t.Cleanup(func() { os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) }) //nolint:errcheck
+
+	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":%v}}`, shortProject, cbmEnabled)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	credDir := filepath.Join(shortHome, ".golemic", shortProject)
+	if err := os.MkdirAll(credDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	credJSON := fmt.Sprintf(`{"dev_token":%q,"reviewer_token":%q}`, creds.DevToken(), creds.ReviewerToken())
+	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
+		t.Fatal(err)
 	}
 
 	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
@@ -66,10 +83,11 @@ func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner,
 		}
 	}
 
-	r := New(exec, homeDir, repoRoot, 42)
+	r := New(exec, shortHome, repoRoot, 42)
 	r.repoRoot = repoRoot
-	r.project = project
-	r.runID = "issue-42-cbm-test"
+	r.project = shortProject
+	r.homeDir = shortHome
+	r.runID = shortRunID
 	r.branchName = "golemic/issue-42"
 	r.creds = creds
 	r.cfg = &config.Config{
@@ -94,13 +112,8 @@ func injectNoopBroker(t *testing.T) {
 	startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.Broker, error) {
 		return nil, fmt.Errorf("noop broker: not started in tests")
 	}
-	origGM := startGMBrokerFn
-	startGMBrokerFn = func(sockPath string, issueNum int, devToken string) (*gmbroker.Broker, error) {
-		return nil, fmt.Errorf("noop gm broker: not started in CBM tests")
-	}
 	t.Cleanup(func() {
 		startCBMBrokerFn = origCBM
-		startGMBrokerFn = origGM
 	})
 }
 
@@ -375,10 +388,11 @@ func TestCBMDevTools_FlagOff(t *testing.T) {
 		t.Fatal("agent was not called")
 	}
 	cfg := captured[0]
-	wantTools := "read,bash,write,edit"
 	gotTools := strings.Join(cfg.ToolAllowlist, ",")
-	if gotTools != wantTools {
-		t.Errorf("ToolAllowlist = %q, want %q", gotTools, wantTools)
+	for _, want := range []string{"read", "bash", "write", "edit"} {
+		if !strings.Contains(gotTools, want) {
+			t.Errorf("ToolAllowlist = %q, missing %q", gotTools, want)
+		}
 	}
 	// CBM_SOCK must not be set when CBM is off.
 	for _, e := range cfg.Env {
@@ -409,10 +423,11 @@ func TestCBMDevTools_FlagOn(t *testing.T) {
 		t.Fatal("agent was not called")
 	}
 	cfg := captured[0]
-	wantTools := "read,bash,write,edit"
 	gotTools := strings.Join(cfg.ToolAllowlist, ",")
-	if gotTools != wantTools {
-		t.Errorf("ToolAllowlist = %q, want %q", gotTools, wantTools)
+	for _, want := range []string{"read", "bash", "write", "edit"} {
+		if !strings.Contains(gotTools, want) {
+			t.Errorf("ToolAllowlist = %q, missing %q", gotTools, want)
+		}
 	}
 	// CBM tools are no longer appended — agents access codebase-memory via golemic cbm <sub>.
 	for _, cbmTool := range []string{"search_graph", "trace_call_path", "detect_changes"} {
