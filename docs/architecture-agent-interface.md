@@ -793,9 +793,17 @@ existiert bereits separat.
   `reviewer_precheck`-Event, gebounded in den Prompt) + Reviewer read-only starten (kein `edit`/`write`;
   `bash` bleibt vorerst nur für den heutigen CLI-Submit) + `gm_pr_view` + `gm_repo_tree` über den #173-Transport.
   Approval-Gate (§12) und `gm_review_submit(_comment)` bleiben Issue 5.
-- [ ] **5. Reviewer-Submit** — `gm_review_submit_comment` (non-terminal, Pending Review) +
-  `gm_review_submit` terminal + Reviewer-Gate. (§12, §13)
-- [ ] **6. Code Intelligence `gm_code_*`** — read-only cbmbroker-backed Tools. (§7)
+- [ ] **5. Reviewer-Submit** ([#181](https://github.com/soller-work/golemic/issues/181), blocked-by #179) — `gm_review_submit_comment`
+  (non-terminal, Pending Review) + `gm_review_submit` terminal + Reviewer-Gate (§12) über den #173-Transport.
+  Approval nur gültig bei grünem/unverändertem #179-Precheck; ungültiges Approval → Reviewer-Neustart,
+  gebounded auf 2 Retries; `changes_requested` immer zulässig. Reviewer-Allowlist final read-only (kein
+  `bash`/`edit`/`write`), Reviewer-Prompt ohne `golemic review-comment`/`submit-review`/`git diff`. Runner
+  schreibt `review_submitted` (breite Eventlog-Migration bleibt Issue 7). (§12, §13, §14)
+- [ ] **6. Code Intelligence `gm_code_*`** ([#182](https://github.com/soller-work/golemic/issues/182), blocked-by #173) — die acht read-only
+  `gm_code_*`-Tools additiv auf dem #173-Transport registriert + schema-validiert (1:1 auf `cbmAllowedSubs`,
+  Forwarding über den per-Rolle cbmbroker → codebase-memory MCP), für **Dev und Reviewer** freigeschaltet.
+  Voller Prompt+Allowlist-Cutover beider Rollen weg von `golemic cbm`; die `cbm`-CLI selbst bleibt bis Issue 8.
+  Read-only, keine Events. (§7, §18)
 - [ ] **7. Eventlog-Umstellung** — Runner schreibt Events nach validierten Tool-Ergebnissen. (§16)
 - [ ] **8. Legacy-Cleanup** — Agent-Shelling-Pfad, CLI-Event-Schreibpfade und die
   #167-Übergangs-Injektion entfernen; entscheiden, welche Subcommands als Operator-CLI
