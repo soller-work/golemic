@@ -243,6 +243,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
+		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
 		Env:               brokerEnv,
@@ -259,6 +260,11 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 			endSpan(telemetry.StatusKilled, nil)
 			fmt.Fprintf(r.stderr, "review_failed: reviewer agent stalled\n") //nolint:errcheck
 			return outcomeStalled
+		}
+		if errors.Is(err, agent.ErrThinkingLoop) {
+			endSpan(telemetry.StatusKilled, nil)
+			fmt.Fprintf(r.stderr, "review_failed: reviewer agent thinking loop\n") //nolint:errcheck
+			return outcomeAborted
 		}
 		var chainErr *agent.ModelChainExhaustedError
 		if errors.As(err, &chainErr) {

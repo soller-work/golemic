@@ -1068,3 +1068,57 @@ func TestRunDevCIRetryAgent_CredTokensInjected(t *testing.T) {
 		t.Errorf("CI-retry RoleConfig.ReviewerToken = %q, want %q", capturedCfg.ReviewerToken, "ghp_rev_pin_test")
 	}
 }
+
+// TestRunDevCIRetryAgent_ErrThinkingLoopMapsToAborted verifies that
+// agent.ErrThinkingLoop from CI retry maps to outcomeAborted.
+func TestRunDevCIRetryAgent_ErrThinkingLoopMapsToAborted(t *testing.T) {
+	homeDir, repoRoot, project := setupRunnerTest(t)
+	creds := loadTestCreds(t, homeDir, project)
+
+	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
+	guidelinesDir := filepath.Join(golemicCfgDir, "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(golemicCfgDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := New(&fakeExecutor{}, homeDir, repoRoot, 42)
+	r.repoRoot = repoRoot
+	r.project = project
+	r.runID = "issue-42-ci-thinking"
+	r.branchName = "golemic/issue-42"
+	r.creds = creds
+	r.cfg = &config.Config{VerifyCommand: "go test"}
+	r.issue = &issueData{Number: 42, Title: "T"}
+
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		return 0, agent.TranscriptPaths{}, agent.ErrThinkingLoop
+	})
+
+	var stderr bytes.Buffer
+	r.SetStderr(&stderr)
+
+	golemicDir := filepath.Join(homeDir, ".golemic", project)
+	logPath := filepath.Join(golemicDir, "runs", "issue-42-ci-thinking", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, "test failed\n")
+
+	if outcome != outcomeAborted {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeAborted)
+	}
+	if !strings.Contains(stderr.String(), "thinking loop") {
+		t.Errorf("stderr should contain 'thinking loop', got: %s", stderr.String())
+	}
+}

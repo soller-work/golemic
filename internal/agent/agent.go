@@ -34,6 +34,11 @@ var ErrTimeout = errors.New("agent execution timed out")
 // allowing pi to resume the session; terminal after maxStallRetries.
 var ErrStalled = errors.New("agent execution stalled")
 
+// ErrThinkingLoop is returned when the agent process continuously emits output
+// (e.g. thinking_delta events) but makes no tool progress for the idle threshold.
+// This is a deterministic failure; the process is killed and no retry is attempted.
+var ErrThinkingLoop = errors.New("agent thinking loop detected")
+
 // ErrModelChainExhausted is the sentinel wrapped inside ModelChainExhaustedError.
 var ErrModelChainExhausted = errors.New("model chain exhausted")
 
@@ -158,6 +163,7 @@ type RoleConfig struct {
 	GolemicBinaryPath string        // path to the golemic binary; its directory is prepended to PATH
 	Model             string        // model identifier passed to --model
 	Timeout           time.Duration // maximum wall-clock time for the subprocess
+	IdleTimeout       time.Duration // idle window for stall detection; 0 means use env/default
 	ToolAllowlist     []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
 	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
 	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
@@ -454,7 +460,10 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir s
 
 func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, golemicDir, golemicPiDir, stdoutPath, stderrPath string) (exitCode int, err error) {
 	args := buildPiArgs(cfg, model, sessionID)
-	idleTimeout := parseIdleTimeout()
+	idleTimeout := cfg.IdleTimeout
+	if idleTimeout <= 0 {
+		idleTimeout = parseIdleTimeout()
+	}
 	maxStallRetries := parseMaxStallRetries()
 
 	shimDir, cleanupShim := ghShimCreator()
@@ -471,12 +480,16 @@ func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, gole
 			stderrFile.Close() //nolint:errcheck
 			return 0, fmt.Errorf("agent: failed to start pi process: %w", startErr)
 		}
-		exitCode, stalled, waitErr := waitForProcess(ctx, cfg, cmd, stdoutFile, stderrFile, attempt, idleTimeout)
-		if !stalled {
+		exitCode, stallReason, waitErr := waitForProcess(ctx, cfg, cmd, stdoutFile, stderrFile, attempt, idleTimeout)
+		if stallReason == "" {
 			return exitCode, waitErr
 		}
 		if waitErr != nil {
 			return 0, waitErr
+		}
+		// thinking_loop is deterministic — no retry.
+		if stallReason == "thinking_loop" {
+			return 0, fmt.Errorf("%w: role %q detected thinking loop (idle timeout %v)", ErrThinkingLoop, cfg.Role, idleTimeout)
 		}
 		if attempt >= maxStallRetries {
 			break
@@ -498,10 +511,37 @@ func killProcessGroup(cmd *exec.Cmd, stdoutFile, stderrFile *os.File, done <-cha
 	return killErr
 }
 
+// classifyStall returns "thinking_loop" if the stream grew since lastStreamOffset
+// (deterministic failure, no retry) or "hang" if frozen (transient, retry eligible).
+// It also logs the diagnostic line.
+func classifyStall(role string, attempt int, idleDuration, idleTimeout time.Duration, currentOffset, lastStreamOffset int64) string {
+	reason := "hang"
+	if currentOffset > lastStreamOffset {
+		reason = "thinking_loop"
+	}
+	fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no tool completion for %v >= %v, reason: %s)\n",
+		role, attempt, idleDuration, idleTimeout, reason)
+	return reason
+}
+
+// resolveWaitError converts a cmd.Wait error into (exitCode, err).
+func resolveWaitError(waitErr error) (int, error) {
+	if waitErr == nil {
+		return 0, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		return exitErr.ExitCode(), nil
+	}
+	return 0, fmt.Errorf("agent: process wait failed: %w", waitErr)
+}
+
 // waitForProcess runs the timeout/stall/wait loop after cmd has been started.
 // It closes stdoutFile and stderrFile in all code paths.
-// Returns (exitCode, stalled, err): when stalled=true and err=nil the caller should retry.
-func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, attempt int, idleTimeout time.Duration) (exitCode int, stalled bool, err error) {
+// Returns (exitCode, stallReason, err): stallReason is "" on non-stall exit,
+// "hang" when the stream was frozen (retry eligible), "thinking_loop" when the
+// stream kept growing without tool progress (terminal, no retry).
+func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.File, attempt int, idleTimeout time.Duration) (exitCode int, reason string, err error) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -509,6 +549,9 @@ func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFi
 	lastProgress := time.Now()
 	var toolState toolProgressState
 	var waitErr error
+	// lastStreamOffset tracks stream offset when last tool completed, to detect
+	// whether the activity file grew since then (thinking_loop) or froze (hang).
+	lastStreamOffset := toolState.offset
 
 	for {
 		select {
@@ -517,27 +560,26 @@ func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFi
 			killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
 			cancel()
 			if killErr != nil {
-				return 0, false, fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
+				return 0, "", fmt.Errorf("%w: role %q timed out after %v, kill failed: %w",
 					ErrTimeout, cfg.Role, cfg.Timeout, killErr)
 			}
-			return 0, false, fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
+			return 0, "", fmt.Errorf("%w: role %q timed out after %v", ErrTimeout, cfg.Role, cfg.Timeout)
 
 		case <-pollTicker.C:
 			newlyCompleted, inFlight := readToolProgress(stdoutFile.Name(), &toolState)
 			if newlyCompleted > 0 {
 				lastProgress = time.Now()
+				lastStreamOffset = toolState.offset
 			}
 			if !inFlight && time.Since(lastProgress) >= idleTimeout {
-				idleDuration := time.Since(lastProgress)
-				fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no tool completion for %v >= %v)\n",
-					cfg.Role, attempt, idleDuration, idleTimeout)
+				r := classifyStall(cfg.Role, attempt, time.Since(lastProgress), idleTimeout, toolState.offset, lastStreamOffset)
 				killErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
 				pollTicker.Stop()
 				cancel()
 				if killErr != nil {
-					return 0, false, fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, killErr)
+					return 0, "", fmt.Errorf("agent: stalled process group kill failed for role %q: %w", cfg.Role, killErr)
 				}
-				return 0, true, nil
+				return 0, r, nil
 			}
 
 		case waitErr = <-done:
@@ -545,14 +587,8 @@ func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFi
 			stdoutFile.Close() //nolint:errcheck
 			stderrFile.Close() //nolint:errcheck
 			cancel()
-			if waitErr == nil {
-				return 0, false, nil
-			}
-			var exitErr *exec.ExitError
-			if errors.As(waitErr, &exitErr) {
-				return exitErr.ExitCode(), false, nil
-			}
-			return 0, false, fmt.Errorf("agent: process wait failed: %w", waitErr)
+			code, resolveErr := resolveWaitError(waitErr)
+			return code, "", resolveErr
 		}
 	}
 }
