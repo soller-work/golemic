@@ -32,8 +32,9 @@ const (
 	EventPRMerged               = "pr_merged"
 	EventAutomergeSkipped       = "automerge_skipped"
 	EventAutomergeFailed        = "automerge_failed"
-	EventAutomergeConflictRetry = "automerge_conflict_retry"
-	EventIssueClaimed           = "issue_claimed"
+	EventAutomergeConflictRetry  = "automerge_conflict_retry"
+	EventAutomergeOutOfDateRetry = "automerge_out_of_date_retry"
+	EventIssueClaimed            = "issue_claimed"
 	EventIssueReleased          = "issue_released"
 )
 
@@ -52,6 +53,7 @@ func AllEventTypes() []string {
 		EventAutomergeSkipped,
 		EventAutomergeFailed,
 		EventAutomergeConflictRetry,
+		EventAutomergeOutOfDateRetry,
 		EventIssueClaimed,
 		EventIssueReleased,
 	}

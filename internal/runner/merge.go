@@ -300,6 +300,26 @@ func (r *Runner) forcePushBranch(devWT string) error {
 	return nil
 }
 
+const maxOutOfDateRetries = 3
+
+// isHeadBranchOutOfDate reports whether err is the GitHub "Head branch is out of date" rejection.
+func isHeadBranchOutOfDate(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "Head branch is out of date")
+}
+
+// writeAutomergeOutOfDateRetry appends an automerge_out_of_date_retry event.
+func (r *Runner) writeAutomergeOutOfDateRetry(writer worktree.EventWriter, attempt int) {
+	payload, _ := json.Marshal(map[string]interface{}{"attempt": attempt})
+	if err := writer.Write(eventlog.Event{
+		Type:    eventlog.EventAutomergeOutOfDateRetry,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   r.runID,
+		Payload: payload,
+	}); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: automerge_out_of_date_retry event write failed: %v\n", err)
+	}
+}
+
 // squashMerge executes gh pr merge --squash with the reviewer token (BR-001).
 func (r *Runner) squashMerge(prNumber int) (string, error) {
 	out, err := r.executor.RunWithEnvInDir(
@@ -391,7 +411,7 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 	}
 	if upToDate {
 		// PS-004: CI gate on up-to-date branch (BR-002, BR-003)
-		return r.mergeIfCIGreen(writer, prNumber)
+		return r.mergeIfCIGreen(writer, prNumber, devWT)
 	}
 
 	// PS-005: Rebase (and resolve conflicts if needed) then push (BR-005)
@@ -402,16 +422,16 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 }
 
 // mergeIfCIGreen runs the CI gate on an up-to-date branch (PS-004).
-// doSquashMerge is only called when pollCIChecks returns green (BR-002).
+// mergeWithOutOfDateRetry is only called when pollCIChecks returns green (BR-002).
 // no_checks is treated as merge_failed rather than falling back to a local verify_command (BR-003).
-func (r *Runner) mergeIfCIGreen(writer worktree.EventWriter, prNumber int) string {
+func (r *Runner) mergeIfCIGreen(writer worktree.EventWriter, prNumber int, devWT string) string {
 	result, failedChecks, err := r.pollCIChecks(prNumber, r.ciTimeout())
 	if err != nil {
 		return r.failMerge(writer, prNumber, fmt.Sprintf("CI check query failed: %v", err))
 	}
 	switch result {
 	case "green":
-		return r.doSquashMerge(writer, prNumber)
+		return r.mergeWithOutOfDateRetry(writer, prNumber, devWT)
 	case "no_checks":
 		return r.failMerge(writer, prNumber, "required check not reported for PR head")
 	default:
@@ -446,7 +466,7 @@ func (r *Runner) verifyAndPush(writer worktree.EventWriter, prNumber int, devWT 
 	if result != "green" {
 		return r.failMerge(writer, prNumber, r.ciFailReason(result, failedChecks))
 	}
-	return r.doSquashMerge(writer, prNumber)
+	return r.mergeWithOutOfDateRetry(writer, prNumber, devWT)
 }
 
 // ciFailReason builds a human-readable failure reason from a CI poll result.
@@ -469,31 +489,75 @@ func (r *Runner) failMerge(writer worktree.EventWriter, prNumber int, reason str
 	return outcomeMergeFailed
 }
 
-// doSquashMerge executes PS-004: squash-merge the PR with the reviewer token.
-func (r *Runner) doSquashMerge(writer worktree.EventWriter, prNumber int) string {
-	mergedSHA, err := r.squashMerge(prNumber)
-	if err != nil {
-		reason := err.Error()
-		fmt.Fprintf(r.stderr, "merge_failed: %s\n", reason)
-		r.postMergeFailureComment(prNumber, reason)
-		r.writeAutomergeFailed(writer, reason)
-		return outcomeMergeFailed // BR-006
+// resyncForOODRetry re-syncs devWT onto origin/main, force-pushes, and waits for CI green.
+// Returns empty string on success, or an outcomeMergeFailed string on failure.
+func (r *Runner) resyncForOODRetry(writer worktree.EventWriter, prNumber int, devWT string, ciTimeout time.Duration) string {
+	if err := r.rebaseBranch(devWT); err != nil {
+		if errors.Is(err, errMergeConflict) {
+			_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
+			return r.failMerge(writer, prNumber, "out-of-date retry: merge conflict during re-sync")
+		}
+		return r.failMerge(writer, prNumber, fmt.Sprintf("out-of-date retry: rebase: %v", err))
 	}
+	if err := r.forcePushBranch(devWT); err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("out-of-date retry: %v", err))
+	}
+	pushedSHA, err := r.getLocalHeadSHA(devWT)
+	if err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("out-of-date retry: read SHA: %v", err))
+	}
+	nwo, err := r.getRepoNWO()
+	if err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("out-of-date retry: get repo: %v", err))
+	}
+	ciResult, failedChecks, err := r.pollCheckRunsForSHA(pushedSHA, nwo, ciTimeout)
+	if err != nil {
+		return r.failMerge(writer, prNumber, fmt.Sprintf("out-of-date retry: CI poll: %v", err))
+	}
+	if ciResult != "green" {
+		return r.failMerge(writer, prNumber, r.ciFailReason(ciResult, failedChecks))
+	}
+	return ""
+}
 
-	payload, _ := json.Marshal(map[string]interface{}{
-		"prNumber":  prNumber,
-		"mergedSHA": mergedSHA,
-	})
-	_ = writer.Write(eventlog.Event{
-		Type:    eventlog.EventPRMerged,
-		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   r.runID,
-		Payload: payload,
-	})
-
-	r.deleteRemoteBranch(r.branchName) // BR-002, BR-005: after pr_merged, before worktree cleanup
-
-	return outcomeSuccess
+// mergeWithOutOfDateRetry squash-merges the PR, automatically re-syncing and retrying
+// when GitHub rejects with "Head branch is out of date" (bounded by maxOutOfDateRetries).
+// Non-OOD failures and an exhausted retry budget both call failMerge as today.
+func (r *Runner) mergeWithOutOfDateRetry(writer worktree.EventWriter, prNumber int, devWT string) string {
+	ciTimeout := r.ciTimeout()
+	for attempt := 1; attempt <= maxOutOfDateRetries; attempt++ {
+		mergedSHA, mergeErr := r.squashMerge(prNumber)
+		if mergeErr == nil {
+			payload, _ := json.Marshal(map[string]interface{}{
+				"prNumber":  prNumber,
+				"mergedSHA": mergedSHA,
+			})
+			_ = writer.Write(eventlog.Event{
+				Type:    eventlog.EventPRMerged,
+				Ts:      time.Now().Format(time.RFC3339),
+				RunID:   r.runID,
+				Payload: payload,
+			})
+			r.deleteRemoteBranch(r.branchName)
+			return outcomeSuccess
+		}
+		if !isHeadBranchOutOfDate(mergeErr) {
+			reason := mergeErr.Error()
+			fmt.Fprintf(r.stderr, "merge_failed: %s\n", reason)
+			r.postMergeFailureComment(prNumber, reason)
+			r.writeAutomergeFailed(writer, reason)
+			return outcomeMergeFailed
+		}
+		if attempt == maxOutOfDateRetries {
+			break
+		}
+		// Re-sync: rebase onto the new origin/main, push, wait for green CI.
+		r.writeAutomergeOutOfDateRetry(writer, attempt)
+		if out := r.resyncForOODRetry(writer, prNumber, devWT, ciTimeout); out != "" {
+			return out
+		}
+	}
+	return r.failMerge(writer, prNumber, "out-of-date retry: branch is still out of date after max attempts")
 }
 
 // collectConflictedFilesForRebase retrieves the list of conflicted files from git.
