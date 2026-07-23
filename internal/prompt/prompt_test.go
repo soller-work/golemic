@@ -173,7 +173,7 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", guidelinesContent)
 
 	prNumber := 123
-	userPrompt, err := RenderReviewer(prNumber, testIssue, "go test ./...", guidelinesPath, false)
+	userPrompt, err := RenderReviewer(prNumber, testIssue, "go test ./...", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -187,11 +187,8 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 	if !strings.Contains(userPrompt, "Fix bug") {
 		t.Error("userPrompt missing issue title 'Fix bug'")
 	}
-	if !strings.Contains(userPrompt, "golemic slice --issue 42") {
-		t.Error("reviewer prompt missing 'golemic slice --issue 42' spec fetch instruction")
-	}
-	if !strings.Contains(userPrompt, "go test ./...") {
-		t.Error("userPrompt missing verify command 'go test ./...'")
+	if !strings.Contains(userPrompt, "gm_slice_get") {
+		t.Error("reviewer prompt missing 'gm_slice_get' spec fetch instruction")
 	}
 	if !strings.Contains(userPrompt, "# Reviewer Guidelines (Test)") {
 		t.Error("userPrompt missing guidelines content")
@@ -208,22 +205,26 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 func TestRenderReviewer_StepList(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
 
-	userPrompt, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false)
+	// Use a unique verify command that won't appear in any shared directive text.
+	userPrompt, err := RenderReviewer(123, testIssue, "my-unique-verify-cmd-12345", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
 
-	if !strings.Contains(userPrompt, "git diff origin/main...HEAD") {
-		t.Error("reviewer prompt missing 'git diff origin/main...HEAD' step")
+	if strings.Contains(userPrompt, "git diff origin/main...HEAD") {
+		t.Error("reviewer prompt must not contain 'git diff origin/main...HEAD'")
 	}
-	if !strings.Contains(userPrompt, "golemic pr-view --pr 123") {
-		t.Error("reviewer prompt missing 'golemic pr-view --pr <PR>' step")
+	if strings.Contains(userPrompt, "golemic pr-view") {
+		t.Error("reviewer prompt must not contain 'golemic pr-view'")
 	}
-	if strings.Contains(userPrompt, "gh pr view") {
-		t.Error("reviewer prompt must not contain raw 'gh pr view' instruction")
+	if !strings.Contains(userPrompt, "gm_pr_view") {
+		t.Error("reviewer prompt missing 'gm_pr_view' step")
 	}
-	if !strings.Contains(userPrompt, "go test ./...") {
-		t.Error("reviewer prompt missing verify command step")
+	if !strings.Contains(userPrompt, "gm_repo_tree") {
+		t.Error("reviewer prompt missing 'gm_repo_tree' step")
+	}
+	if strings.Contains(userPrompt, "my-unique-verify-cmd-12345") {
+		t.Error("reviewer prompt must not instruct agent to run verify command")
 	}
 	if !strings.Contains(userPrompt, "golemic submit-review --verdict") {
 		t.Error("reviewer prompt missing 'golemic submit-review --verdict'")
@@ -261,7 +262,7 @@ func TestRenderDev_MissingGuidelinesError(t *testing.T) {
 func TestRenderReviewer_MissingGuidelinesError(t *testing.T) {
 	nonexistentPath := filepath.Join(t.TempDir(), "nonexistent", "reviewer.md")
 
-	userPrompt, err := RenderReviewer(123, testIssue, "go test ./...", nonexistentPath, false)
+	userPrompt, err := RenderReviewer(123, testIssue, "go test ./...", nonexistentPath, false, "")
 
 	if err == nil {
 		t.Fatal("RenderReviewer() expected error for missing guidelines file, got nil")
@@ -318,7 +319,7 @@ func TestRenderWorkingDirDirective(t *testing.T) {
 		{
 			name: "RenderReviewer",
 			render: func() (string, error) {
-				return RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false)
+				return RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false, "")
 			},
 		},
 		{
@@ -377,7 +378,7 @@ func TestRenderEditOverWriteDirective(t *testing.T) {
 
 	// Reviewer must NOT contain the edit-over-write directive.
 	t.Run("RenderReviewer_NoEditDirective", func(t *testing.T) {
-		out, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false)
+		out, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false, "")
 		if err != nil {
 			t.Fatalf("RenderReviewer: unexpected error: %v", err)
 		}
@@ -428,7 +429,7 @@ func TestRenderNoReReadDirective(t *testing.T) {
 
 	// Reviewer must NOT contain the no-re-read directive.
 	t.Run("RenderReviewer_NoReReadDirective", func(t *testing.T) {
-		out, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false)
+		out, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false, "")
 		if err != nil {
 			t.Fatalf("RenderReviewer: unexpected error: %v", err)
 		}
@@ -467,7 +468,7 @@ func TestRenderWorkingDirDirective_WithEmptyGuidelines(t *testing.T) {
 		{
 			name: "RenderReviewer",
 			render: func() (string, error) {
-				return RenderReviewer(123, testIssue, "go test ./...", emptyGuidelinesPath, false)
+				return RenderReviewer(123, testIssue, "go test ./...", emptyGuidelinesPath, false, "")
 			},
 		},
 		{
@@ -488,7 +489,7 @@ func TestRenderWorkingDirDirective_WithEmptyGuidelines(t *testing.T) {
 func TestRenderReviewer_UserPromptNonEmpty(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Test Guidelines")
 
-	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false)
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -517,7 +518,7 @@ func TestRenderReviewer_GuidelinesVerbatim(t *testing.T) {
 	guidelinesContent := "# Custom Reviewer Guidelines\n\nSome **markdown** content with `code`."
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", guidelinesContent)
 
-	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false)
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -547,7 +548,7 @@ func TestRenderDev_StepListEndsWithOpenPR(t *testing.T) {
 // Step list in reviewer prompt ends with submit-review
 func TestRenderReviewer_StepListEndsWithSubmitReview(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
-	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false)
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -564,7 +565,7 @@ func TestRenderReviewer_StepListEndsWithSubmitReview(t *testing.T) {
 // AC-124: Reviewer prompt exposes all three merge-confidence tiers
 func TestRenderReviewer_MergeConfidenceAllTiers(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
-	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false)
+	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
@@ -664,7 +665,7 @@ func TestRenderDev_AdversarialInput(t *testing.T) {
 func TestRenderReviewer_NonZeroPR(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
 
-	userPrompt, err := RenderReviewer(1, testIssue, "verify", guidelinesPath, false)
+	userPrompt, err := RenderReviewer(1, testIssue, "verify", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error for PR#1: %v", err)
 	}
@@ -913,7 +914,7 @@ func TestRenderDev_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 
 func TestRenderReviewer_CodebaseMemoryOff_NoSection(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
-	p, err := RenderReviewer(42, testIssue, "go test ./...", guidelinesPath, false)
+	p, err := RenderReviewer(42, testIssue, "go test ./...", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -926,7 +927,7 @@ func TestRenderReviewer_CodebaseMemoryOff_NoSection(t *testing.T) {
 
 func TestRenderReviewer_CodebaseMemoryOn_HasCBMHint(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
-	p, err := RenderReviewer(42, testIssue, "go test ./...", guidelinesPath, true)
+	p, err := RenderReviewer(42, testIssue, "go test ./...", guidelinesPath, true, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

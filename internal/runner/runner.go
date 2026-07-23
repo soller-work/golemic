@@ -52,7 +52,8 @@ type Runner struct {
 	issueNum    int
 	preflighter Preflighter // nil = create from executor+homeDir+repoRoot in Run()
 	lookupEnv   func(string) (string, bool)
-	runAgentFn  func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
+	runAgentFn         func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
+	reviewerPrecheckFn func(worktreePath, eventLogPath string) (string, error)
 
 	clean  bool
 	quiet  bool
@@ -586,7 +587,15 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 			return outcomeReviewFailed
 		}
 
-		if outcome := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round); outcome != outcomeSuccess {
+		// §11: run reviewer precheck before spawning the reviewer agent.
+		reviewerWT := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+		precheckBlock, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath)
+		if precheckErr != nil {
+			fmt.Fprintf(r.stderr, "review_failed: %v\n", precheckErr) //nolint:errcheck
+			return outcomeReviewFailed
+		}
+
+		if outcome := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, precheckBlock); outcome != outcomeSuccess {
 			return outcome
 		}
 

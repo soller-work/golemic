@@ -36,6 +36,7 @@ const (
 	EventAutomergeOutOfDateRetry = "automerge_out_of_date_retry"
 	EventIssueClaimed            = "issue_claimed"
 	EventIssueReleased           = "issue_released"
+	EventReviewerPrecheck        = "reviewer_precheck"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -56,6 +57,7 @@ func AllEventTypes() []string {
 		EventAutomergeOutOfDateRetry,
 		EventIssueClaimed,
 		EventIssueReleased,
+		EventReviewerPrecheck,
 	}
 }
 

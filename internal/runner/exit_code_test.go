@@ -207,7 +207,7 @@ func TestRunReviewerAgent_NonZeroExit_ReturnsReviewFailed_AC001(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "")
 
 	if outcome != outcomeReviewFailed {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeReviewFailed)
@@ -273,7 +273,7 @@ func TestRunReviewerAgent_ExitCodeRecordedInEventLog_AC003(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "")
 
 	completedEvents := readAgentCompletedEvents(t, logPath)
 	if len(completedEvents) != 1 {
@@ -305,7 +305,7 @@ func TestRunReviewerAgent_ZeroExit_NoReviewSubmitted_ExistingMessage_AC004(t *te
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "")
 
 	if outcome != outcomeSuccess {
 		t.Fatalf("runReviewerAgent should succeed on zero exit, got %q", outcome)
@@ -357,7 +357,7 @@ func TestRunReviewerAgent_ZeroExit_ReturnsSuccess(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	outcome := r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, "")
 
 	if outcome != outcomeSuccess {
 		t.Errorf("expected outcomeSuccess on zero exit, got %q; stderr: %s", outcome, stderr.String())

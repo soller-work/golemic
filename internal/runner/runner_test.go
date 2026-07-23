@@ -1179,6 +1179,7 @@ func TestReviewerGuidelinesPath_AC002(t *testing.T) {
 		"go test",
 		reviewerPath,
 		false,
+		"",
 	)
 	if err != nil {
 		t.Fatalf("RenderReviewer failed: %v", err)

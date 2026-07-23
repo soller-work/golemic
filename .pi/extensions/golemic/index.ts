@@ -116,6 +116,50 @@ export default function (pi: { registerTool: (def: object) => void }) {
     },
   });
 
+  // gm_pr_view — returns PR metadata, unified diff, and changed-files list.
+  // Reviewer-only: the broker allowlist exposes this tool only to the reviewer role.
+  pi.registerTool({
+    name: "gm_pr_view",
+    label: "View pull request",
+    description:
+      "Fetch PR metadata, the unified diff, and the changed-files list for the current review PR. " +
+      "Fetched runner-side with the reviewer token; no GitHub credential is needed in the agent. " +
+      "Returns { ok: true, pr: { number, title, state, ... }, diff: string, changedFiles: [...] }. Reviewer-only.",
+    parameters: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    async execute(callId: string, params: unknown): Promise<unknown> {
+      return callBroker("gm_pr_view", callId, params);
+    },
+  });
+
+  // gm_repo_tree — returns a read-only directory listing of the reviewer worktree.
+  // Reviewer-only: confined to the worktree root; path escapes return a structured error.
+  pi.registerTool({
+    name: "gm_repo_tree",
+    label: "List repo directory",
+    description:
+      "List a directory inside the reviewer worktree. " +
+      "Input: { path?: string } relative to the worktree root (default: root). " +
+      "Returns { ok: true, path, entries: [ { name, type: 'file'|'dir' } ] }. " +
+      "Returns { ok: false, code: 'PATH_OUTSIDE_WORKTREE' } for paths that escape the root. Reviewer-only.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "string",
+          description: "Relative path inside the reviewer worktree (default: root).",
+        },
+      },
+      additionalProperties: false,
+    },
+    async execute(callId: string, params: unknown): Promise<unknown> {
+      return callBroker("gm_repo_tree", callId, params);
+    },
+  });
+
   // gm_review_submit — submits the reviewer's verdict.
   // Stub in this slice: validates schema and echoes the payload.
   // No GitHub review submission until Slice 5.

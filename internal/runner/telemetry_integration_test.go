@@ -360,6 +360,7 @@ func TestTelemetry_FullRun_PairedSpansInFile_AC001(t *testing.T) {
 	r.runID = runID
 	r.SetPreflighter(passingPreflighter{})
 	r.SetRunAgentFn(makeTelemetryFakeAgent(t))
+	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
 	var stdout, stderr bytes.Buffer
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
@@ -471,6 +472,7 @@ func TestTelemetry_Disabled_NoFileCreated_AC003(t *testing.T) {
 	r.runID = runID
 	r.SetPreflighter(passingPreflighter{})
 	r.SetRunAgentFn(makeTelemetryFakeAgent(t))
+	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
 	var stdout, stderr bytes.Buffer
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
@@ -530,6 +532,7 @@ func TestTelemetry_FailingSink_ViaRun_AC004(t *testing.T) {
 	r.runID = runID
 	r.SetPreflighter(passingPreflighter{})
 	r.SetRunAgentFn(makeTelemetryFakeAgent(t))
+	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
 	r.SetSink(telemetryFailingSink{})
 	var stdout, stderr bytes.Buffer
 	r.SetStdout(&stdout)

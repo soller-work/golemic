@@ -33,6 +33,14 @@ type ProjectCheckConfig struct {
 	Env           map[string]string
 }
 
+// ReviewerConfig configures gm_pr_view and gm_repo_tree for a reviewer invocation.
+type ReviewerConfig struct {
+	WorktreePath  string
+	ReviewerToken string
+	RepoRoot      string
+	PRNumber      int
+}
+
 // ProjectCheckResult is the result of a gm_project_check call.
 // Exported so tests can inject a fake ProjectCheckFn.
 type ProjectCheckResult struct {
@@ -73,9 +81,12 @@ type Broker struct {
 	devDoneTerminalMessage string
 	devDoneTerminalPending bool
 
+	reviewer ReviewerConfig
+
 	// Injectable functions — set to non-nil in tests for deterministic behavior.
 	projectCheckFn       func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)
 	computeFingerprintFn func(worktreePath string) (string, error)
+	prViewFn             func(cfg ReviewerConfig) (json.RawMessage, error)
 }
 
 // gmRequest is the payload the pi extension sends for each tool call.
@@ -149,6 +160,14 @@ func (b *Broker) ConfigureProjectCheck(cfg ProjectCheckConfig) {
 	b.projectCheck = cfg
 }
 
+// SetReviewerConfig configures gm_pr_view and gm_repo_tree for the reviewer role.
+func (b *Broker) SetReviewerConfig(cfg ReviewerConfig) {
+	if b == nil {
+		return
+	}
+	b.reviewer = cfg
+}
+
 // SetAllowedTools replaces the tool allowlist for this broker instance.
 func (b *Broker) SetAllowedTools(tools []string) {
 	if b == nil {
@@ -173,6 +192,14 @@ func (b *Broker) SetComputeFingerprintFn(fn func(worktreePath string) (string, e
 		return
 	}
 	b.computeFingerprintFn = fn
+}
+
+// SetPRViewFn replaces the gm_pr_view fetch function. Used in tests.
+func (b *Broker) SetPRViewFn(fn func(cfg ReviewerConfig) (json.RawMessage, error)) {
+	if b == nil {
+		return
+	}
+	b.prViewFn = fn
 }
 
 // Shutdown stops the broker listener and removes the socket file.
@@ -223,6 +250,10 @@ func (b *Broker) dispatch(req gmRequest) json.RawMessage {
 		return handleReviewSubmit(req.Params)
 	case "gm_project_check":
 		return b.handleProjectCheck(req.Params)
+	case "gm_pr_view":
+		return b.handlePRView()
+	case "gm_repo_tree":
+		return b.handleRepoTree(req.Params)
 	default:
 		return errResult("UNKNOWN_TOOL", "unknown tool: "+req.Tool)
 	}
@@ -739,4 +770,155 @@ func toolSet(tools []string) map[string]struct{} {
 		set[tool] = struct{}{}
 	}
 	return set
+}
+
+// PRViewResult is the output of gm_pr_view.
+type PRViewResult struct {
+	OK           bool            `json:"ok"`
+	PR           json.RawMessage `json:"pr"`
+	Diff         string          `json:"diff"`
+	ChangedFiles json.RawMessage `json:"changedFiles"`
+}
+
+func (b *Broker) handlePRView() json.RawMessage {
+	if b.reviewer.ReviewerToken == "" || b.reviewer.PRNumber == 0 {
+		return errResult("NOT_CONFIGURED", "gm_pr_view is not configured for this broker")
+	}
+
+	fetchFn := b.prViewFn
+	if fetchFn == nil {
+		fetchFn = fetchPRView
+	}
+
+	result, err := fetchFn(b.reviewer)
+	if err != nil {
+		return errResult("FETCH_FAILED", err.Error())
+	}
+	return result
+}
+
+func fetchPRView(cfg ReviewerConfig) (json.RawMessage, error) {
+	prNumStr := fmt.Sprintf("%d", cfg.PRNumber)
+	env := append(os.Environ(), "GH_TOKEN="+cfg.ReviewerToken)
+
+	// Fetch PR metadata
+	prMeta, err := runGHWithEnv(env, cfg.RepoRoot, "pr", "view", prNumStr,
+		"--json", "number,title,state,body,author,createdAt,updatedAt,headRefName,baseRefName")
+	if err != nil {
+		return nil, fmt.Errorf("gh pr view: %w", err)
+	}
+
+	// Fetch unified diff
+	diff, err := runGHWithEnv(env, cfg.RepoRoot, "pr", "diff", prNumStr)
+	if err != nil {
+		return nil, fmt.Errorf("gh pr diff: %w", err)
+	}
+
+	// Fetch changed files
+	filesJSON, err := runGHWithEnv(env, cfg.RepoRoot, "pr", "view", prNumStr,
+		"--json", "files", "--jq", ".files")
+	if err != nil {
+		return nil, fmt.Errorf("gh pr view files: %w", err)
+	}
+
+	var changedFiles json.RawMessage
+	if err := json.Unmarshal([]byte(filesJSON), &changedFiles); err != nil {
+		changedFiles = json.RawMessage("[]")
+	}
+
+	out, _ := json.Marshal(PRViewResult{
+		OK:           true,
+		PR:           json.RawMessage(prMeta),
+		Diff:         diff,
+		ChangedFiles: changedFiles,
+	})
+	return json.RawMessage(out), nil
+}
+
+func runGHWithEnv(env []string, dir string, args ...string) (string, error) {
+	cmd := exec.Command("gh", args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gh %s: %w", strings.Join(args, " "), err)
+	}
+	return string(out), nil
+}
+
+// RepoTreeParams is the optional input for gm_repo_tree.
+type RepoTreeParams struct {
+	Path *string `json:"path"`
+}
+
+// RepoTreeEntry is one entry in a directory listing.
+type RepoTreeEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "file" or "dir"
+}
+
+func (b *Broker) handleRepoTree(raw json.RawMessage) json.RawMessage {
+	root := b.reviewer.WorktreePath
+	if root == "" {
+		return errResult("NOT_CONFIGURED", "gm_repo_tree is not configured for this broker")
+	}
+
+	var p RepoTreeParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return errResult("SCHEMA_INVALID", "gm_repo_tree: "+err.Error())
+	}
+
+	relPath := "."
+	if p.Path != nil && *p.Path != "" {
+		relPath = *p.Path
+	}
+
+	absClean, ok := resolveWorktreePath(root, relPath)
+	if !ok {
+		return errResult("PATH_OUTSIDE_WORKTREE", "path escapes the worktree root")
+	}
+
+	entries, err := os.ReadDir(absClean)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errResult("NOT_FOUND", "path not found: "+relPath)
+		}
+		return errResult("READ_FAILED", err.Error())
+	}
+
+	displayPath := relPath
+	if displayPath == "." {
+		displayPath = "/"
+	}
+
+	out, _ := json.Marshal(map[string]any{
+		"ok":      true,
+		"path":    displayPath,
+		"entries": buildTreeEntries(entries),
+	})
+	return json.RawMessage(out)
+}
+
+// resolveWorktreePath resolves relPath against root and checks it stays inside root.
+// Returns the cleaned absolute path and true on success, or "", false if it escapes.
+func resolveWorktreePath(root, relPath string) (string, bool) {
+	absClean := filepath.Clean(filepath.Join(root, relPath))
+	rootClean := filepath.Clean(root)
+	if absClean != rootClean && !strings.HasPrefix(absClean+string(filepath.Separator), rootClean+string(filepath.Separator)) {
+		return "", false
+	}
+	return absClean, true
+}
+
+// buildTreeEntries converts os.ReadDir entries into RepoTreeEntry slice.
+func buildTreeEntries(entries []os.DirEntry) []RepoTreeEntry {
+	result := make([]RepoTreeEntry, 0, len(entries))
+	for _, e := range entries {
+		t := "file"
+		if e.IsDir() {
+			t = "dir"
+		}
+		result = append(result, RepoTreeEntry{Name: e.Name(), Type: t})
+	}
+	return result
 }
