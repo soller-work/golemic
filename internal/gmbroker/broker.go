@@ -7,6 +7,7 @@
 package gmbroker
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"golemic/internal/worktreefingerprint"
@@ -25,6 +27,25 @@ import (
 // IssueFetcher fetches the Markdown body of a GitHub issue.
 // Called at most once per Broker instance (lazy cache via sync.Once).
 type IssueFetcher func(ctx context.Context) (string, error)
+
+// cbmToolNameMap is the BR-1 fixed 1:1 map from gm_code_* tool name to upstream cbm sub.
+// Two names do not match their trimmed form: gm_code_search→search_code, gm_code_get_snippet→get_code_snippet.
+var cbmToolNameMap = map[string]string{
+	"gm_code_search":           "search_code",
+	"gm_code_search_graph":     "search_graph",
+	"gm_code_query_graph":      "query_graph",
+	"gm_code_trace_call_path":  "trace_call_path",
+	"gm_code_get_architecture": "get_architecture",
+	"gm_code_get_graph_schema": "get_graph_schema",
+	"gm_code_get_snippet":      "get_code_snippet",
+	"gm_code_detect_changes":   "detect_changes",
+}
+
+// CBMConfig configures the CBM proxy for gm_code_* tools.
+type CBMConfig struct {
+	SockPath string
+	Project  string
+}
 
 // ProjectCheckConfig configures gm_project_check for a Dev invocation.
 type ProjectCheckConfig struct {
@@ -65,6 +86,15 @@ type Broker struct {
 	once       sync.Once
 	cachedBody string
 	fetchErr   error
+
+	cbmConfig CBMConfig
+
+	// cbmSchema is the tools/list schema fetched from the CBM broker (lazy, cached).
+	cbmSchemaOnce sync.Once
+	cbmSchemaData map[string]map[string]struct{} // cbm-tool-name → allowed property names
+	cbmSchemaErr  error
+	// cbmFetchSchemaFn is injectable for tests.
+	cbmFetchSchemaFn func(sockPath string) (map[string]map[string]struct{}, error)
 
 	// §10 gate state (per invocation)
 	lastCheckMu            sync.Mutex
@@ -150,6 +180,15 @@ func StartWithFetcherAndProjectCheck(sockPath string, fetcher IssueFetcher, proj
 	}
 	go b.acceptLoop()
 	return b, nil
+}
+
+// ConfigureCBM sets the CBM broker socket and project for gm_code_* tool proxying.
+// Must be called before the agent subprocess is spawned (no concurrent access).
+func (b *Broker) ConfigureCBM(cfg CBMConfig) {
+	if b == nil {
+		return
+	}
+	b.cbmConfig = cfg
 }
 
 // ConfigureProjectCheck updates the dev-only gm_project_check configuration.
@@ -255,6 +294,9 @@ func (b *Broker) dispatch(req gmRequest) json.RawMessage {
 	case "gm_repo_tree":
 		return b.handleRepoTree(req.Params)
 	default:
+		if cbmSub, ok := cbmToolNameMap[req.Tool]; ok {
+			return b.handleCodeTool(cbmSub, req.Params)
+		}
 		return errResult("UNKNOWN_TOOL", "unknown tool: "+req.Tool)
 	}
 }
@@ -561,6 +603,241 @@ func (b *Broker) getComputeFingerprintFn() func(string) (string, error) {
 		return b.computeFingerprintFn
 	}
 	return fingerprintAfterVerify
+}
+
+// SetCBMFetchSchemaFn replaces the schema-fetch function (injectable for tests).
+func (b *Broker) SetCBMFetchSchemaFn(fn func(sockPath string) (map[string]map[string]struct{}, error)) {
+	if b == nil {
+		return
+	}
+	b.cbmFetchSchemaFn = fn
+}
+
+// getCBMSchema returns the cached tools/list schema for the CBM broker.
+// Fetch failures degrade gracefully (BR-7): returns nil, err and callers skip validation.
+func (b *Broker) getCBMSchema(sockPath string) (map[string]map[string]struct{}, error) {
+	b.cbmSchemaOnce.Do(func() {
+		fn := b.cbmFetchSchemaFn
+		if fn == nil {
+			fn = fetchCBMSchemaFromSocket
+		}
+		b.cbmSchemaData, b.cbmSchemaErr = fn(sockPath)
+	})
+	return b.cbmSchemaData, b.cbmSchemaErr
+}
+
+// fetchCBMSchemaFromSocket sends a tools/list MCP request and returns a map of
+// tool-name → set of allowed property names.
+func fetchCBMSchemaFromSocket(sockPath string) (map[string]map[string]struct{}, error) {
+	reqData, err := json.Marshal(map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/list",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal tools/list: %w", err)
+	}
+	conn, err := net.DialTimeout("unix", sockPath, 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial CBM socket for schema: %w", err)
+	}
+	defer conn.Close() //nolint:errcheck
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return nil, fmt.Errorf("set deadline: %w", err)
+	}
+	if _, err := conn.Write(append(reqData, '\n')); err != nil {
+		return nil, fmt.Errorf("write tools/list: %w", err)
+	}
+	reader := bufio.NewReaderSize(conn, 4<<20)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("read tools/list response: %w", err)
+	}
+	var resp struct {
+		Result struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				InputSchema struct {
+					Properties map[string]json.RawMessage `json:"properties"`
+				} `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, fmt.Errorf("parse tools/list: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("tools/list error: %s", resp.Error.Message)
+	}
+	result := make(map[string]map[string]struct{}, len(resp.Result.Tools))
+	for _, t := range resp.Result.Tools {
+		props := make(map[string]struct{}, len(t.InputSchema.Properties))
+		for k := range t.InputSchema.Properties {
+			props[k] = struct{}{}
+		}
+		result[t.Name] = props
+	}
+	return result, nil
+}
+
+// handleCodeTool proxies a resolved cbm sub to the configured CBM broker socket.
+// cbmSub is already resolved from the BR-1 fixed map (never a raw trimmed name).
+func (b *Broker) handleCodeTool(cbmSub string, params json.RawMessage) json.RawMessage {
+	cfg := b.cbmConfig
+	if cfg.SockPath == "" {
+		return errResult("CBM_NOT_AVAILABLE", "gm_code: codebase memory not configured for this invocation")
+	}
+	rawArgs, errMsg := b.parseAndValidateCodeArgs(cbmSub, cfg.SockPath, params)
+	if errMsg != nil {
+		return errMsg
+	}
+	projectJSON, _ := json.Marshal(cfg.Project)
+	rawArgs["project"] = projectJSON
+	args := decodeRawArgs(rawArgs)
+	texts, isError, err := cbmProxyCall(cfg.SockPath, cbmSub, args)
+	if err != nil {
+		return errResult("CBM_CALL_FAILED", "gm_code: "+err.Error())
+	}
+	content := strings.Join(texts, "")
+	if isError {
+		return errResult("CBM_TOOL_ERROR", "gm_code: "+content)
+	}
+	out, _ := json.Marshal(map[string]any{"ok": true, "content": content})
+	return json.RawMessage(out)
+}
+
+// parseAndValidateCodeArgs parses params, enforces BR-3 (no caller project) and BR-2
+// (args against live schema). Returns parsed args or a non-nil error result.
+func (b *Broker) parseAndValidateCodeArgs(cbmSub, sockPath string, params json.RawMessage) (map[string]json.RawMessage, json.RawMessage) {
+	var rawArgs map[string]json.RawMessage
+	if len(params) > 0 && !bytes.Equal(params, json.RawMessage("null")) {
+		if err := json.Unmarshal(params, &rawArgs); err != nil {
+			return nil, errResult("SCHEMA_INVALID", "gm_code: invalid params: "+err.Error())
+		}
+	}
+	if rawArgs == nil {
+		rawArgs = make(map[string]json.RawMessage)
+	}
+	if _, hasProject := rawArgs["project"]; hasProject {
+		return nil, errResult("SCHEMA_INVALID", "gm_code: 'project' must not be supplied by caller (injected automatically)")
+	}
+	if errMsg := b.validateArgsAgainstSchema(cbmSub, sockPath, rawArgs); errMsg != nil {
+		return nil, errMsg
+	}
+	return rawArgs, nil
+}
+
+// validateArgsAgainstSchema checks caller args against the live CBM tools/list schema (BR-2).
+// Returns a non-nil error result on validation failure; nil on success or schema unavailability.
+func (b *Broker) validateArgsAgainstSchema(cbmSub, sockPath string, rawArgs map[string]json.RawMessage) json.RawMessage {
+	schema, err := b.getCBMSchema(sockPath)
+	if err != nil || schema == nil {
+		return nil // graceful degradation (BR-7)
+	}
+	allowed, ok := schema[cbmSub]
+	if !ok {
+		return nil // tool not in schema: skip validation
+	}
+	for k := range rawArgs {
+		if _, ok := allowed[k]; !ok {
+			return errResult("SCHEMA_INVALID", fmt.Sprintf("gm_code: unknown argument %q for %s", k, cbmSub))
+		}
+	}
+	return nil
+}
+
+// decodeRawArgs converts a JSON raw-message map to interface{} values for MCP forwarding.
+func decodeRawArgs(rawArgs map[string]json.RawMessage) map[string]interface{} {
+	arguments := make(map[string]interface{}, len(rawArgs))
+	for k, v := range rawArgs {
+		var val interface{}
+		if err := json.Unmarshal(v, &val); err != nil {
+			arguments[k] = string(v)
+		} else {
+			arguments[k] = val
+		}
+	}
+	return arguments
+}
+
+type cbmContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type cbmToolsCallResult struct {
+	Content []cbmContent `json:"content"`
+	IsError bool         `json:"isError"`
+}
+
+type cbmResponse struct {
+	Result *cbmToolsCallResult `json:"result"`
+	Error  *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// cbmProxyCall makes one MCP tools/call request to the CBM broker unix socket and
+// returns the text content items, the isError flag, and any transport error.
+func cbmProxyCall(sockPath, toolName string, arguments map[string]interface{}) ([]string, bool, error) {
+	data, err := cbmMarshalRequest(toolName, arguments)
+	if err != nil {
+		return nil, false, err
+	}
+	conn, err := net.DialTimeout("unix", sockPath, 5*time.Second)
+	if err != nil {
+		return nil, false, fmt.Errorf("dial CBM socket: %w", err)
+	}
+	defer conn.Close() //nolint:errcheck
+	if err := conn.SetDeadline(time.Now().Add(90 * time.Second)); err != nil {
+		return nil, false, fmt.Errorf("set deadline: %w", err)
+	}
+	if _, err := conn.Write(data); err != nil {
+		return nil, false, fmt.Errorf("write request: %w", err)
+	}
+	return cbmReadResponse(conn)
+}
+
+func cbmMarshalRequest(toolName string, arguments map[string]interface{}) ([]byte, error) {
+	req := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "tools/call",
+		"params":  map[string]interface{}{"name": toolName, "arguments": arguments},
+	}
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+func cbmReadResponse(conn net.Conn) ([]string, bool, error) {
+	reader := bufio.NewReaderSize(conn, 4<<20)
+	line, err := reader.ReadBytes('\n')
+	if err != nil {
+		return nil, false, fmt.Errorf("read response: %w", err)
+	}
+	var resp cbmResponse
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, false, fmt.Errorf("parse response: %w", err)
+	}
+	if resp.Error != nil {
+		return nil, false, fmt.Errorf("CBM broker error: %s", resp.Error.Message)
+	}
+	if resp.Result == nil {
+		return nil, false, fmt.Errorf("empty CBM response")
+	}
+	texts := make([]string, 0, len(resp.Result.Content))
+	for _, c := range resp.Result.Content {
+		if c.Text != "" {
+			texts = append(texts, c.Text)
+		}
+	}
+	return texts, resp.Result.IsError, nil
 }
 
 func runProjectCheck(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error) {

@@ -74,7 +74,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	}
 
 	if outcome == outcomeDevGateRejected {
-		fmt.Fprintf(r.stderr, "dev_failed: gm_dev_done gate rejected after 3 invocations: %s\n", gateReason)
+		fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", gateReason)
 		return outcomeDevFailed
 	}
 	return outcome
@@ -130,7 +130,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	}
 
 	if outcome == outcomeDevGateRejected {
-		fmt.Fprintf(r.stderr, "dev_failed: gm_dev_done gate rejected after 3 invocations: %s\n", gateReason)
+		fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", gateReason)
 		return outcomeDevFailed
 	}
 	return outcome
@@ -150,6 +150,7 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 
 	// CBM broker: only start for attempt 0 to avoid expensive re-indexing on gate retries.
 	var brokerEnv []string
+	var cbmCfg gmbroker.CBMConfig
 	if cbmEnabled && attempt == 0 {
 		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
 		projectName := fmt.Sprintf("golemic-issue-%d-dev", r.issueNum)
@@ -157,6 +158,7 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 		if b, env, ok := r.startCBMForRole(devWorktreePath, cbmCacheDir, cbmSockPath, projectName); ok {
 			defer b.Shutdown()
 			brokerEnv = env
+			cbmCfg = gmbroker.CBMConfig{SockPath: cbmSockPath, Project: projectName}
 		}
 	}
 
@@ -167,6 +169,10 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 		gmb = b
 		defer gmb.Shutdown()
 		brokerEnv = append(brokerEnv, gmEnv...)
+		if cbmCfg.SockPath != "" {
+			gmb.ConfigureCBM(cbmCfg)
+			gmb.SetAllowedTools(append(gmDevToolNames, gmCodeToolNames...))
+		}
 	} else {
 		fmt.Fprintf(r.stderr, "dev_failed: GM broker unavailable for dev invocation\n")
 		return outcomeDevFailed, ""
@@ -240,8 +246,7 @@ func (r *Runner) finishDevAgentWithBroker(gmb *gmbroker.Broker, eventLogPath, de
 		return outcome, reason
 	}
 	endSpan(telemetry.StatusError, nil)
-	fmt.Fprintf(r.stderr, "dev_failed: dev agent did not call gm_dev_done\n")
-	return outcomeDevFailed, ""
+	return outcomeDevGateRejected, "the invocation ended without a successful gm_dev_done call; run gm_project_check until green, then call gm_dev_done with summary, commitMsg, prTitle, and prBody"
 }
 
 func (r *Runner) finishDevAgentWithoutAcceptedDevDone(gmb *gmbroker.Broker, endSpan func(string, map[string]any)) (string, string, bool) {
@@ -252,8 +257,7 @@ func (r *Runner) finishDevAgentWithoutAcceptedDevDone(gmb *gmbroker.Broker, endS
 	if status, ok := gmb.DevDoneTerminalStatus(); ok && (status == "SCHEMA_INVALID" || status == "PROTOCOL_ERROR") {
 		if msg, msgOK := gmb.DevDoneTerminalMessage(); msgOK && msg != "" {
 			endSpan(telemetry.StatusError, nil)
-			fmt.Fprintf(r.stderr, "dev_failed: %s\n", msg)
-			return outcomeDevFailed, "", true
+			return outcomeDevGateRejected, msg, true
 		}
 	}
 	return "", "", false
@@ -373,10 +377,20 @@ func (r *Runner) startCBMForRole(wtPath, cbmCacheDir, sockPath, projectName stri
 
 func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, brokerEnv []string) agent.RoleConfig {
 	toolAllowlist := []string{"read", "bash", "write", "edit"}
+	hasGMSock := false
+	hasCBMSock := false
 	for _, e := range brokerEnv {
-		if len(e) > len("GOLEMIC_GM_SOCK=") && e[:len("GOLEMIC_GM_SOCK=")] == "GOLEMIC_GM_SOCK=" {
-			toolAllowlist = append(toolAllowlist, gmDevToolNames...)
-			break
+		if strings.HasPrefix(e, "GOLEMIC_GM_SOCK=") {
+			hasGMSock = true
+		}
+		if strings.HasPrefix(e, "CBM_SOCK=") {
+			hasCBMSock = true
+		}
+	}
+	if hasGMSock {
+		toolAllowlist = append(toolAllowlist, gmDevToolNames...)
+		if hasCBMSock {
+			toolAllowlist = append(toolAllowlist, gmCodeToolNames...)
 		}
 	}
 	return agent.RoleConfig{
@@ -408,6 +422,19 @@ var startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.
 // gmDevToolNames are added to the dev agent tool allowlist when the GM broker is running.
 // gm_dev_done is intentionally omitted while the broker handler is a no-op skeleton.
 var gmDevToolNames = []string{"gm_slice_get", "gm_project_check", "gm_dev_done"}
+
+// gmCodeToolNames are added to the dev and reviewer allowlists when CBM is also enabled.
+// They expose read-only code-intelligence operations over the gm_ transport (BR-5).
+var gmCodeToolNames = []string{
+	"gm_code_search",
+	"gm_code_search_graph",
+	"gm_code_query_graph",
+	"gm_code_trace_call_path",
+	"gm_code_get_architecture",
+	"gm_code_get_graph_schema",
+	"gm_code_get_snippet",
+	"gm_code_detect_changes",
+}
 
 // gmReviewerToolNames are added to the reviewer agent tool allowlist when the GM broker is running.
 // gm_review_submit is intentionally omitted: it only echoes and never writes the review_submitted event,

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"golemic/internal/agent"
+	"golemic/internal/cbmbroker"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/gmbroker"
@@ -355,4 +356,138 @@ func sendGMDevDone(env []string) bool {
 	}
 	ok, _ := result["ok"].(bool)
 	return ok
+}
+
+// TestGMCodeTools_PresentWhenCBMEnabled verifies that gm_code_* tools appear in the
+// agent ToolAllowlist when the CBM broker is also running.
+func TestGMCodeTools_PresentWhenCBMEnabled(t *testing.T) {
+	injectFakeGMBroker(t)
+
+	r, golemicDir := setupGMRunner(t)
+	r.executor = makePassthroughGitExec() // handle npx/git calls in indexWorktree
+	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+	if err := os.MkdirAll(filepath.Join(runsDir, r.runID), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origCBM := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = origCBM })
+	startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.Broker, error) {
+		return startFakeBroker(t, sockPath), nil
+	}
+
+	r.cfg.CodebaseMemory.Enabled = true
+
+	setupDevWTWithGit(t, golemicDir)
+
+	var captured []agent.RoleConfig
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		captured = append(captured, cfg)
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	r.runDevAgent(golemicDir, filepath.Join(runsDir, r.runID, "events.jsonl"), 30*time.Second, "", 1)
+
+	if len(captured) == 0 {
+		t.Fatal("agent was not called")
+	}
+	tools := strings.Join(captured[0].ToolAllowlist, ",")
+	for _, want := range gmCodeToolNames {
+		if !strings.Contains(tools, want) {
+			t.Errorf("ToolAllowlist missing %q when CBM enabled; got: %s", want, tools)
+		}
+	}
+}
+
+// TestGMCodeTools_AbsentWhenCBMDisabled verifies that gm_code_* tools are NOT in the
+// agent ToolAllowlist when CBM is disabled.
+func TestGMCodeTools_AbsentWhenCBMDisabled(t *testing.T) {
+	injectFakeGMBroker(t)
+	injectNoopBroker(t)
+
+	r, golemicDir := setupGMRunner(t)
+	r.executor = makePassthroughGitExec()
+	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+	if err := os.MkdirAll(filepath.Join(runsDir, r.runID), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	r.cfg.CodebaseMemory.Enabled = false
+
+	setupDevWTWithGit(t, golemicDir)
+
+	var captured []agent.RoleConfig
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		captured = append(captured, cfg)
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	r.runDevAgent(golemicDir, filepath.Join(runsDir, r.runID, "events.jsonl"), 30*time.Second, "", 1)
+
+	if len(captured) == 0 {
+		t.Fatal("agent was not called")
+	}
+	tools := strings.Join(captured[0].ToolAllowlist, ",")
+	for _, absent := range gmCodeToolNames {
+		if strings.Contains(tools, absent) {
+			t.Errorf("ToolAllowlist must NOT contain %q when CBM disabled; got: %s", absent, tools)
+		}
+	}
+}
+
+// TestGMCodeTools_PresentInReviewerAllowlist verifies that all eight gm_code_* tools appear
+// in the reviewer agent ToolAllowlist when CBM is enabled. AC: allowlist (reviewer side, BR-5).
+func TestGMCodeTools_PresentInReviewerAllowlist(t *testing.T) {
+	injectFakeGMBroker(t)
+
+	r, golemicDir := setupGMRunner(t)
+	r.executor = makePassthroughGitExec()
+	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
+	if err := os.MkdirAll(filepath.Join(runsDir, r.runID), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origCBM := startCBMBrokerFn
+	t.Cleanup(func() { startCBMBrokerFn = origCBM })
+	startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.Broker, error) {
+		return startFakeBroker(t, sockPath), nil
+	}
+
+	r.cfg.CodebaseMemory.Enabled = true
+
+	// Write a pr_opened event so runReviewerAgent can find the PR number.
+	eventLogPath := filepath.Join(runsDir, r.runID, "events.jsonl")
+	payload, _ := json.Marshal(map[string]string{"prNumber": "99"})
+	line, _ := json.Marshal(map[string]interface{}{
+		"type":    "pr_opened",
+		"ts":      "2026-01-01T00:00:00Z",
+		"runId":   r.runID,
+		"turnId":  1,
+		"payload": json.RawMessage(payload),
+	})
+	if err := os.WriteFile(eventLogPath, append(line, '\n'), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set up reviewer worktree dir.
+	reviewerWT := filepath.Join(golemicDir, "worktrees", "issue-42-review")
+	if err := os.MkdirAll(reviewerWT, 0755); err != nil {
+		t.Fatal(err)
+	}
+	setupDevWTWithGit(t, golemicDir)
+
+	var captured []agent.RoleConfig
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		captured = append(captured, cfg)
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, "")
+
+	if len(captured) == 0 {
+		t.Fatal("reviewer agent was not called")
+	}
+	tools := strings.Join(captured[0].ToolAllowlist, ",")
+	for _, want := range gmCodeToolNames {
+		if !strings.Contains(tools, want) {
+			t.Errorf("reviewer ToolAllowlist missing %q when CBM enabled; got: %s", want, tools)
+		}
+	}
 }

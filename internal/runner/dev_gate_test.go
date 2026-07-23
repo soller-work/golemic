@@ -207,28 +207,40 @@ func TestRunDevAgent_GateRejected_LastCheckRed_RestartsAndNoSideEffects_AC004(t 
 	r.executor = exec
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	logPath := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID, "events.jsonl")
-	var checkCount int
-	injectFakeGMBrokerWithConfig(t,
-		func(_ gmbroker.ProjectCheckConfig, _ string) (*gmbroker.ProjectCheckResult, error) {
-			checkCount++
-			if checkCount == 1 {
+	// Each broker instance (one per attempt) gets its own check counter so the first
+	// call in each invocation succeeds and the second returns red — ensuring every
+	// gm_dev_done call is rejected by the gate (last check not green).
+	orig := startGMBrokerFn
+	t.Cleanup(func() { startGMBrokerFn = orig })
+	startGMBrokerFn = func(sockPath string, _ int, _ string) (*gmbroker.Broker, error) {
+		var perBrokerCount int
+		b, err := gmbroker.StartWithFetcherAndProjectCheck(
+			sockPath,
+			func(_ context.Context) (string, error) { return "fake spec", nil },
+			gmbroker.ProjectCheckConfig{},
+			[]string{"gm_slice_get", "gm_project_check", "gm_dev_done"},
+		)
+		if err != nil {
+			return nil, err
+		}
+		b.SetProjectCheckFn(func(_ gmbroker.ProjectCheckConfig, _ string) (*gmbroker.ProjectCheckResult, error) {
+			perBrokerCount++
+			if perBrokerCount == 1 {
 				return &gmbroker.ProjectCheckResult{OK: true, WorkingTreeFingerprint: "fp-ok"}, nil
 			}
 			return &gmbroker.ProjectCheckResult{OK: false, WorkingTreeFingerprint: "fp-red"}, nil
-		},
-		func(string) (string, error) { return "fp-ok", nil },
-	)
+		})
+		b.SetComputeFingerprintFn(func(_ string) (string, error) { return "fp-ok", nil })
+		return b, nil
+	}
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		if cfg.Role != "dev" {
 			t.Fatalf("unexpected role %q", cfg.Role)
 		}
-		if !sendGMProjectCheck(cfg.Env) {
-			t.Fatalf("first gm_project_check was rejected")
-		}
+		// First check green, second check red, then gm_dev_done — gate rejects (last check red).
 		sendGMProjectCheck(cfg.Env)
-		if !sendGMDevDone(cfg.Env) {
-			return 0, agent.TranscriptPaths{}, nil
-		}
+		sendGMProjectCheck(cfg.Env)
+		sendGMDevDone(cfg.Env)
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
@@ -382,10 +394,12 @@ func TestRunDevAgent_TerminalSchemaFailureReportsSchemaError_AC009(t *testing.T)
 		},
 		func(string) (string, error) { return "fp-ok", nil },
 	)
+	var callCount int
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		if cfg.Role != "dev" {
 			t.Fatalf("unexpected role %q", cfg.Role)
 		}
+		callCount++
 		result := gateTestCallGMTool(cfg.Env, "gm_dev_done", "test-done", map[string]any{
 			"summary":   "Implement the feature",
 			"commitMsg": "feat(test): implement feature (42)",
@@ -401,6 +415,9 @@ func TestRunDevAgent_TerminalSchemaFailureReportsSchemaError_AC009(t *testing.T)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
+	if callCount != 3 {
+		t.Fatalf("expected 3 invocations (SCHEMA_INVALID is retryable), got %d", callCount)
+	}
 	stderr := r.stderr.(*bytes.Buffer).String()
 	if !strings.Contains(stderr, "gm_dev_done: prBody is required") {
 		t.Fatalf("expected schema error in stderr, got %q", stderr)
@@ -410,6 +427,53 @@ func TestRunDevAgent_TerminalSchemaFailureReportsSchemaError_AC009(t *testing.T)
 	}
 	if got := gateTestCountCall(exec, "git"); got != 0 {
 		t.Fatalf("expected no git side effects, got %d git calls", got)
+	}
+}
+
+func TestRunDevAgent_MissingDevDone_RetryableAndExhausted_AC010(t *testing.T) {
+	exec := pingPongExecutor(false, nil)
+	r, _ := setupGMRunner(t)
+	r.executor = exec
+	var stderrBuf bytes.Buffer
+	r.stderr = &stderrBuf
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	logPath := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID, "events.jsonl")
+	injectFakeGMBrokerWithConfig(t,
+		func(_ gmbroker.ProjectCheckConfig, _ string) (*gmbroker.ProjectCheckResult, error) {
+			return &gmbroker.ProjectCheckResult{OK: true, WorkingTreeFingerprint: "fp-ok"}, nil
+		},
+		func(string) (string, error) { return "fp-ok", nil },
+	)
+	var callCount int
+	var prompts []string
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		if cfg.Role != "dev" {
+			t.Fatalf("unexpected role %q", cfg.Role)
+		}
+		callCount++
+		prompts = append(prompts, cfg.UserPrompt)
+		// Never call gm_dev_done — simulates an agent that finishes without signalling completion.
+		return 0, agent.TranscriptPaths{}, nil
+	})
+
+	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	if outcome != outcomeDevFailed {
+		t.Fatalf("expected dev_failed after 3 retries, got %q", outcome)
+	}
+	if callCount != 3 {
+		t.Fatalf("expected 3 invocations (missing gm_dev_done is retryable), got %d", callCount)
+	}
+	// Attempts 2 and 3 must use the gate-retry prompt.
+	for i := 1; i < len(prompts); i++ {
+		if !strings.Contains(prompts[i], "Previous gm_dev_done rejection:") {
+			t.Errorf("invocation %d: expected gate-retry prompt, got: %.120s", i+1, prompts[i])
+		}
+	}
+	if got := gateTestCountCall(exec, "git"); got != 0 {
+		t.Fatalf("expected no git side effects, got %d git calls", got)
+	}
+	if got := gateTestCountCall(exec, "gh"); got != 0 {
+		t.Fatalf("expected no gh side effects, got %d gh calls", got)
 	}
 }
 
