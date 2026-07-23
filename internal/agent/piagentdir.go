@@ -60,7 +60,9 @@ func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error
 
 	for _, entry := range entries {
 		name := entry.Name()
-		if name == "settings.json" {
+		// settings.json is derived, not symlinked; extensions is owned by seedExtensions
+		// so the gm_ extension can be added without clobbering the seeded real directory.
+		if name == "settings.json" || name == "extensions" {
 			continue
 		}
 		target := filepath.Join(localPiAgentDir, name)
@@ -70,7 +72,7 @@ func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error
 		}
 	}
 
-	if err := seedGMExtension(golemicPiDir, gmExtensionSrcDir); err != nil {
+	if err := seedExtensions(golemicPiDir, filepath.Join(localPiAgentDir, "extensions"), gmExtensionSrcDir); err != nil {
 		return "", err
 	}
 
@@ -81,28 +83,49 @@ func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error
 	return golemicPiDir, nil
 }
 
-// seedGMExtension provisions the golemic gm_ pi extension into golemicPiDir/extensions/golemic.
-// If gmExtensionSrcDir is empty or does not exist on disk, the call is a no-op.
-// When golemicPiDir/extensions is currently a symlink, it is replaced with a real directory
-// so the golemic extension can be added without modifying the user's pi agent dir.
-func seedGMExtension(golemicPiDir, gmExtensionSrcDir string) error {
-	if gmExtensionSrcDir == "" {
-		return nil
-	}
-	if _, err := os.Stat(gmExtensionSrcDir); err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+// seedExtensions provisions golemicPiDir/extensions. Without a usable gm extension source
+// the local extensions dir is mirrored as a single symlink (or nothing when absent). With a
+// usable source, extensions becomes a real directory holding individual sibling symlinks plus
+// extensions/golemic → gmExtensionSrcDir. Idempotent: safe to call on an already-seeded dir.
+func seedExtensions(golemicPiDir, localExtDir, gmExtensionSrcDir string) error {
+	extDir := filepath.Join(golemicPiDir, "extensions")
+
+	hasGM, err := statExists(gmExtensionSrcDir)
+	if err != nil {
 		return fmt.Errorf("agent: stat gm extension source %q: %w", gmExtensionSrcDir, err)
 	}
-	extDir := filepath.Join(golemicPiDir, "extensions")
+	if !hasGM {
+		if ok, _ := statExists(localExtDir); ok {
+			return ensureSymlink(extDir, localExtDir)
+		}
+		return nil
+	}
+
 	if err := expandExtSymlink(extDir); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(extDir, 0755); err != nil {
 		return fmt.Errorf("agent: create extensions dir %q: %w", extDir, err)
 	}
+	if err := relinkExtensions(extDir, localExtDir); err != nil {
+		return err
+	}
 	return ensureSymlink(filepath.Join(extDir, "golemic"), gmExtensionSrcDir)
+}
+
+// statExists reports whether path exists. An empty path reports false. A stat error
+// other than not-exist is returned so callers can surface it.
+func statExists(path string) (bool, error) {
+	if path == "" {
+		return false, nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 // expandExtSymlink converts extDir from a symlink to a real directory,
