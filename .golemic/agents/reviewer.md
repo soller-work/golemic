@@ -32,14 +32,15 @@ Quality standard: **rock-solid**. Code must be clean before merge, not "good eno
 
 Severity scale (binding):
 - **P1 — Blocker:** Correctness bug, security issue, data-loss/leak risk, TOCTOU/race, inconsistency with established project style/pattern in adjacent code, missing test for specified acceptance, public API design that invites misuse (e.g. secrets as public fields).
-- **P2 — Blocker:** Missing edge-case tests for realistically reachable paths (malformed input, symlinks, boundary values), unclear/misleading error messages, hardening against expected abuse (path traversal, injection), missing input validation at package boundaries.
-- **P3 — Non-Blocker:** Style modernisation without behaviour change, micro-refactors, test organisation (table-driven vs. individual tests), doc nits.
+- **P2 — Blocker:** Missing edge-case tests for realistically reachable paths (malformed input, symlinks, boundary values), unclear/misleading error messages, hardening against expected abuse (path traversal, injection), missing input validation at package boundaries; any concrete deviation from a specified business rule, a documented input/output contract, or a stated spec detail (byte/line caps, bounds, formats), even when the headline acceptance scenario is formally met.
+- **P3 — Non-Blocker:** Style modernisation without behaviour change, micro-refactors, test organisation (table-driven vs. individual tests), doc nits. P3 never covers a behavioural or spec deviation — if observed behaviour differs from the spec, it is at least P2.
 - **P4 — Non-Blocker:** Purely cosmetic (format strings, comment wording).
 
 Verdict rules (strict):
 - **A single P1 or P2 finding ⇒ `CHANGES_REQUESTED`.** No exceptions, even when the backlog acceptance is formally met.
 - `APPROVED` only when exclusively P3/P4 findings remain **or** none at all.
 - When in doubt between P2 and P3: classify as P2. We are building a security-critical tool (loop automation with bot tokens, worktrees, git push); edge cases resolve in favour of robustness.
+- **Criticality is not a downgrade lever.** "Additive", "off the critical path", "no acceptance gate consumes it yet", or "low blast radius" must NOT lower the severity of a concrete spec deviation. Grade the deviation on its own; record the mitigating context as a note, but keep the P-level.
 - Contradictions such as "approved despite a P1 finding" are forbidden. If you name a P1/P2, the verdict is `CHANGES_REQUESTED` — full stop.
 
 ## Merge-Confidence Criteria
