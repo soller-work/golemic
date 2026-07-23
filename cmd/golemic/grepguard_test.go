@@ -154,7 +154,7 @@ func renderedPromptSources(t *testing.T) map[string]string { //nolint:cyclop
 	}
 	out["prompt:dev"] = dev
 
-	reviewer, err := prompt.RenderReviewer(1, issue, verifyCmd, guidelinesPath, false)
+	reviewer, err := prompt.RenderReviewer(1, issue, verifyCmd, guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer: %v", err)
 	}

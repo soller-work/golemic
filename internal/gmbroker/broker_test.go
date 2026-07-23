@@ -656,3 +656,177 @@ func TestBroker_ShutdownRemovesSocket(t *testing.T) {
 		t.Errorf("socket file still exists after Shutdown")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// gm_pr_view
+// ---------------------------------------------------------------------------
+
+func TestBroker_PRView_NotConfigured_ReturnsError(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_pr_view"})
+
+	result := call(t, sockPath, "gm_pr_view", "c1", map[string]any{})
+	if result["ok"] == true {
+		t.Error("expected ok: false when reviewer config is absent")
+	}
+	if result["code"] != "NOT_CONFIGURED" {
+		t.Errorf("code: got %q, want NOT_CONFIGURED", result["code"])
+	}
+}
+
+func TestBroker_PRView_WithFakeData_ReturnsResult(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_pr_view"})
+	b.SetReviewerConfig(ReviewerConfig{
+		ReviewerToken: "tok",
+		PRNumber:      42,
+		RepoRoot:      t.TempDir(),
+	})
+	// Inject fake fetch function.
+	b.SetPRViewFn(func(cfg ReviewerConfig) (json.RawMessage, error) {
+		out, _ := json.Marshal(PRViewResult{
+			OK:           true,
+			PR:           json.RawMessage(`{"number":42,"title":"Test PR"}`),
+			Diff:         "--- a/foo.go\n+++ b/foo.go\n@@ -1 +1 @@\n-old\n+new\n",
+			ChangedFiles: json.RawMessage(`[{"path":"foo.go","additions":1,"deletions":1}]`),
+		})
+		return json.RawMessage(out), nil
+	})
+
+	result := call(t, sockPath, "gm_pr_view", "c2", map[string]any{})
+	if result["ok"] != true {
+		t.Errorf("expected ok: true; got: %v", result)
+	}
+	if result["diff"] == "" || result["diff"] == nil {
+		t.Error("diff must be non-empty")
+	}
+	if result["pr"] == nil {
+		t.Error("pr field must be present")
+	}
+	if result["changedFiles"] == nil {
+		t.Error("changedFiles must be present")
+	}
+}
+
+func TestBroker_PRView_FetchError_ReturnsError(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_pr_view"})
+	b.SetReviewerConfig(ReviewerConfig{
+		ReviewerToken: "tok",
+		PRNumber:      42,
+		RepoRoot:      t.TempDir(),
+	})
+	b.SetPRViewFn(func(_ ReviewerConfig) (json.RawMessage, error) {
+		return nil, fmt.Errorf("network error")
+	})
+
+	result := call(t, sockPath, "gm_pr_view", "c3", map[string]any{})
+	if result["ok"] == true {
+		t.Error("expected ok: false on fetch error")
+	}
+	if result["code"] != "FETCH_FAILED" {
+		t.Errorf("code: got %q, want FETCH_FAILED", result["code"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// gm_repo_tree
+// ---------------------------------------------------------------------------
+
+func TestBroker_RepoTree_NotConfigured_ReturnsError(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_repo_tree"})
+
+	result := call(t, sockPath, "gm_repo_tree", "r1", map[string]any{})
+	if result["ok"] == true {
+		t.Error("expected ok: false when worktree not configured")
+	}
+	if result["code"] != "NOT_CONFIGURED" {
+		t.Errorf("code: got %q, want NOT_CONFIGURED", result["code"])
+	}
+}
+
+func TestBroker_RepoTree_ListsRootCorrectly(t *testing.T) {
+	wtDir := t.TempDir()
+	os.WriteFile(filepath.Join(wtDir, "main.go"), []byte("package main"), 0644) //nolint:errcheck
+	os.MkdirAll(filepath.Join(wtDir, "internal"), 0755)                         //nolint:errcheck
+
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_repo_tree"})
+	b.SetReviewerConfig(ReviewerConfig{WorktreePath: wtDir})
+
+	result := call(t, sockPath, "gm_repo_tree", "r3", map[string]any{})
+	if result["ok"] != true {
+		t.Errorf("expected ok: true; got: %v", result)
+	}
+	entries, _ := result["entries"].([]interface{})
+	names := make(map[string]string)
+	for _, e := range entries {
+		entry := e.(map[string]interface{})
+		names[entry["name"].(string)] = entry["type"].(string)
+	}
+	if names["main.go"] != "file" {
+		t.Errorf("main.go should be type 'file'; got: %q", names["main.go"])
+	}
+	if names["internal"] != "dir" {
+		t.Errorf("internal should be type 'dir'; got: %q", names["internal"])
+	}
+}
+
+func TestBroker_RepoTree_ListsSubdir(t *testing.T) {
+	wtDir := t.TempDir()
+	os.MkdirAll(filepath.Join(wtDir, "internal", "runner"), 0755)              //nolint:errcheck
+	os.WriteFile(filepath.Join(wtDir, "internal", "foo.go"), []byte(""), 0644) //nolint:errcheck
+
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_repo_tree"})
+	b.SetReviewerConfig(ReviewerConfig{WorktreePath: wtDir})
+
+	path := "internal"
+	result := call(t, sockPath, "gm_repo_tree", "r4", map[string]any{"path": path})
+	if result["ok"] != true {
+		t.Errorf("expected ok: true; got: %v", result)
+	}
+	entries, _ := result["entries"].([]interface{})
+	names := make(map[string]string)
+	for _, e := range entries {
+		entry := e.(map[string]interface{})
+		names[entry["name"].(string)] = entry["type"].(string)
+	}
+	if names["foo.go"] != "file" {
+		t.Errorf("foo.go should be type 'file'; got: %q", names["foo.go"])
+	}
+	if names["runner"] != "dir" {
+		t.Errorf("runner should be type 'dir'; got: %q", names["runner"])
+	}
+}
+
+func TestBroker_RepoTree_PathEscapeReturnsError(t *testing.T) {
+	wtDir := t.TempDir()
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_repo_tree"})
+	b.SetReviewerConfig(ReviewerConfig{WorktreePath: wtDir})
+
+	result := call(t, sockPath, "gm_repo_tree", "r5", map[string]any{"path": "../../../etc"})
+	if result["ok"] == true {
+		t.Error("expected ok: false for path escaping the worktree")
+	}
+	if result["code"] != "PATH_OUTSIDE_WORKTREE" {
+		t.Errorf("code: got %q, want PATH_OUTSIDE_WORKTREE", result["code"])
+	}
+}
+
+func TestBroker_RepoTree_NotFound(t *testing.T) {
+	wtDir := t.TempDir()
+	b, sockPath := startTestBroker(t, nil)
+	b.SetAllowedTools([]string{"gm_repo_tree"})
+	b.SetReviewerConfig(ReviewerConfig{WorktreePath: wtDir})
+
+	result := call(t, sockPath, "gm_repo_tree", "r6", map[string]any{"path": "nonexistent-subdir"})
+	if result["ok"] == true {
+		t.Error("expected ok: false for nonexistent path")
+	}
+	if result["code"] != "NOT_FOUND" {
+		t.Errorf("code: got %q, want NOT_FOUND", result["code"])
+	}
+}

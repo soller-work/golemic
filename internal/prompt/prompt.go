@@ -43,6 +43,7 @@ type reviewerTemplateData struct {
 	Guidelines     string
 	CodebaseMemory bool
 	Directives     string
+	PrecheckBlock  string
 }
 
 // workingDirDirective is injected into every runner prompt before ## Instructions.
@@ -107,14 +108,14 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 
 **Issue Title:** {{.Issue.Title}}
 
-**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
-
 ` + scaffoldFrame + `
 
-1. **First, fetch the authoritative task specification:** run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The output is the source of truth for what the PR is supposed to do — do not rely on any summary rendered in the issue's web UI.
-2. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `golemic pr-view --pr {{.PRNumber}}` + "`" + `
-3. Run the verification command: ` + "`" + `{{.VerifyCommand}}` + "`" + `
-4. Review the changes against the spec and the guidelines above.
+{{.PrecheckBlock}}
+
+1. **First, fetch the authoritative task specification:** call ` + "`" + `gm_slice_get` + "`" + ` — its output is the source of truth for what the PR is supposed to do; do not rely on any summary in the web UI.
+2. **Fetch the PR:** call ` + "`" + `gm_pr_view` + "`" + ` — it returns PR metadata, the unified diff, and the changed-files list.
+3. **Navigate the repo:** use ` + "`" + `gm_repo_tree` + "`" + ` (directory listing) and ` + "`" + `read` + "`" + ` (file contents) to explore context around changed files. Do not shell out for the diff or repo discovery.
+4. Review the changes against the spec and the guidelines above. Do **not** run the verify command — the runner has already run it; see the Precheck Result above.
 5. For each finding that can be anchored to a specific file and line, call:
    ` + "`" + `golemic review-comment --pr {{.PRNumber}} --path <file> --line <line> --body "<finding>"` + "`" + `
    - If the command exits 2 (ANCHOR_FAILED), retry **once** with corrected coordinates.
@@ -123,6 +124,7 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 6. After posting all inline comments, call **exactly one**:
    ` + "`" + `golemic submit-review --verdict approved|changes_requested --body "..." --pr {{.PRNumber}} --merge-confidence high|medium|low` + "`" + `
    The ` + "`" + `--body` + "`" + ` must summarise all findings, including any that could not be anchored as inline comments.
+   **If the Precheck Result above was not ok, you MUST submit ` + "`" + `changes_requested` + "`" + ` and explain why.**
 `
 
 // RenderDev renders a dev user prompt with all run-specific facts injected.
@@ -171,7 +173,7 @@ func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath 
 //
 // Returns an error if the guidelines file does not exist or cannot be read,
 // or if template execution fails.
-func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string, cbmEnabled bool) (userPrompt string, err error) {
+func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesPath string, cbmEnabled bool, precheckBlock string) (userPrompt string, err error) {
 	guidelines, err := readGuidelines(guidelinesPath)
 	if err != nil {
 		return "", err
@@ -184,6 +186,7 @@ func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesP
 		Guidelines:     guidelines,
 		CodebaseMemory: cbmEnabled,
 		Directives:     workingDirDirective,
+		PrecheckBlock:  precheckBlock,
 	}
 
 	tmpl, err := template.New("reviewer").Parse(reviewerUserTemplate)

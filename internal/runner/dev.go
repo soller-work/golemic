@@ -410,9 +410,9 @@ var startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.
 var gmDevToolNames = []string{"gm_slice_get", "gm_project_check", "gm_dev_done"}
 
 // gmReviewerToolNames are added to the reviewer agent tool allowlist when the GM broker is running.
-// gm_review_submit is intentionally omitted while the broker handler is a no-op skeleton: it only
-// echoes and never writes the review_submitted event, so the reviewer must use golemic submit-review.
-var gmReviewerToolNames = []string{"gm_slice_get"}
+// gm_review_submit is intentionally omitted: it only echoes and never writes the review_submitted event,
+// so the reviewer must use golemic submit-review until Slice 5 replaces that CLI path.
+var gmReviewerToolNames = []string{"gm_slice_get", "gm_pr_view", "gm_repo_tree"}
 
 // startGMBrokerFn is a variable so tests can replace it without a real gh call.
 var startGMBrokerFn = func(sockPath string, issueNum int, devToken string) (*gmbroker.Broker, error) {

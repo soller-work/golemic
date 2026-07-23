@@ -88,6 +88,8 @@ func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 
 	var stderr bytes.Buffer
 	r.SetStderr(&stderr)
+	// Inject no-op precheck so tests don't need a real git repo in the reviewer worktree.
+	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
 
 	injectFakeGMBrokerPP(t)
 
