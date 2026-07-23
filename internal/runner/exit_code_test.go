@@ -245,9 +245,15 @@ func TestRunDevAgent_ExitCodeRecordedInEventLog_AC003(t *testing.T) {
 			golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 			r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
 
+			// Zero-exit agents that skip gm_dev_done are retried up to 3 times;
+			// non-zero exits abort immediately and write exactly 1 event.
+			wantEvents := 1
+			if tc.exitCode == 0 {
+				wantEvents = 3
+			}
 			completedEvents := readAgentCompletedEvents(t, logPath)
-			if len(completedEvents) != 1 {
-				t.Fatalf("expected 1 agent_completed event, got %d", len(completedEvents))
+			if len(completedEvents) != wantEvents {
+				t.Fatalf("expected %d agent_completed event(s), got %d", wantEvents, len(completedEvents))
 			}
 			var payload struct {
 				Role     string `json:"role"`

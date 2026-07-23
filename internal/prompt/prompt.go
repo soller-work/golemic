@@ -259,12 +259,13 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 
 // devGateRetryTemplateData holds the template variables for a gate-retry dev prompt.
 type devGateRetryTemplateData struct {
-	Issue         Issue
-	Branch        string
-	VerifyCommand string
-	GateReason    string
-	Guidelines    string
-	Directives    string
+	Issue          Issue
+	Branch         string
+	VerifyCommand  string
+	GateReason     string
+	Guidelines     string
+	Directives     string
+	CodebaseMemory bool
 }
 
 const devGateRetryUserTemplate = `# Gate Retry: Fix Verification Before Completing Issue #{{.Issue.Number}}

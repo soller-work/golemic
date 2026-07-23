@@ -479,7 +479,7 @@ func TestGMCodeTools_PresentInReviewerAllowlist(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1)
+	r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, "")
 
 	if len(captured) == 0 {
 		t.Fatal("reviewer agent was not called")

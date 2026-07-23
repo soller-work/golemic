@@ -74,7 +74,7 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 	}
 
 	if outcome == outcomeDevGateRejected {
-		fmt.Fprintf(r.stderr, "dev_failed: gm_dev_done gate rejected after 3 invocations: %s\n", gateReason)
+		fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", gateReason)
 		return outcomeDevFailed
 	}
 	return outcome
@@ -130,7 +130,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	}
 
 	if outcome == outcomeDevGateRejected {
-		fmt.Fprintf(r.stderr, "dev_failed: gm_dev_done gate rejected after 3 invocations: %s\n", gateReason)
+		fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", gateReason)
 		return outcomeDevFailed
 	}
 	return outcome
@@ -246,8 +246,7 @@ func (r *Runner) finishDevAgentWithBroker(gmb *gmbroker.Broker, eventLogPath, de
 		return outcome, reason
 	}
 	endSpan(telemetry.StatusError, nil)
-	fmt.Fprintf(r.stderr, "dev_failed: dev agent did not call gm_dev_done\n")
-	return outcomeDevFailed, ""
+	return outcomeDevGateRejected, "the invocation ended without a successful gm_dev_done call; run gm_project_check until green, then call gm_dev_done with summary, commitMsg, prTitle, and prBody"
 }
 
 func (r *Runner) finishDevAgentWithoutAcceptedDevDone(gmb *gmbroker.Broker, endSpan func(string, map[string]any)) (string, string, bool) {
@@ -258,8 +257,7 @@ func (r *Runner) finishDevAgentWithoutAcceptedDevDone(gmb *gmbroker.Broker, endS
 	if status, ok := gmb.DevDoneTerminalStatus(); ok && (status == "SCHEMA_INVALID" || status == "PROTOCOL_ERROR") {
 		if msg, msgOK := gmb.DevDoneTerminalMessage(); msgOK && msg != "" {
 			endSpan(telemetry.StatusError, nil)
-			fmt.Fprintf(r.stderr, "dev_failed: %s\n", msg)
-			return outcomeDevFailed, "", true
+			return outcomeDevGateRejected, msg, true
 		}
 	}
 	return "", "", false
