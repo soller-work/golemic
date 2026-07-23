@@ -287,8 +287,8 @@ func TestMaskURL(t *testing.T) {
 
 // dirCapturingExecutor records dirs used by RunInDir.
 type dirCapturingExecutor struct {
-	dirs     []string
-	runFunc  func(name string, args ...string) (string, error)
+	dirs    []string
+	runFunc func(name string, args ...string) (string, error)
 }
 
 func (d *dirCapturingExecutor) Run(name string, args ...string) (string, error) {

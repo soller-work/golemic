@@ -144,12 +144,12 @@ func expectedBranch() string {
 // Order: fetch, rev-parse, worktree add, config credential.helper, config user.name, config user.email.
 func defaultSuccessResponses() []execResponse {
 	return []execResponse{
-		{Stdout: "", Err: nil},                               // git -C <repoRoot> fetch origin
-		{Stdout: testBaseSha + "\n", Err: nil},               // git -C <repoRoot> rev-parse origin/main
-		{Stdout: "Created worktree\n", Err: nil},             // git -C <repoRoot> worktree add
-		{Stdout: "", Err: nil},                               // git -C <wtPath> config credential.helper
-		{Stdout: "", Err: nil},                               // git -C <wtPath> config user.name
-		{Stdout: "", Err: nil},                               // git -C <wtPath> config user.email
+		{Stdout: "", Err: nil},                   // git -C <repoRoot> fetch origin
+		{Stdout: testBaseSha + "\n", Err: nil},   // git -C <repoRoot> rev-parse origin/main
+		{Stdout: "Created worktree\n", Err: nil}, // git -C <repoRoot> worktree add
+		{Stdout: "", Err: nil},                   // git -C <wtPath> config credential.helper
+		{Stdout: "", Err: nil},                   // git -C <wtPath> config user.name
+		{Stdout: "", Err: nil},                   // git -C <wtPath> config user.email
 	}
 }
 
@@ -322,9 +322,9 @@ func TestCreate_NoCleanupOnError(t *testing.T) {
 	// Mock executor that succeeds for fetch + rev-parse, then fails on worktree add.
 	failResp := execResponse{Stdout: "", Err: errors.New("git worktree add failed: exit code 128")}
 	mockExec := newMockExecutor(
-		execResponse{Stdout: "", Err: nil},                  // git -C <repoRoot> fetch origin
-		execResponse{Stdout: testBaseSha + "\n", Err: nil},  // git -C <repoRoot> rev-parse
-		failResp,                                             // git -C <repoRoot> worktree add → FAILS
+		execResponse{Stdout: "", Err: nil},                 // git -C <repoRoot> fetch origin
+		execResponse{Stdout: testBaseSha + "\n", Err: nil}, // git -C <repoRoot> rev-parse
+		failResp, // git -C <repoRoot> worktree add → FAILS
 	)
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, botLogin := testCreateArgs()
@@ -361,9 +361,9 @@ func TestCreate_NoCleanupOnError(t *testing.T) {
 // config fails, the partial worktree is NOT cleaned up (BR-005).
 func TestCreate_NoCleanupOn_ConfigCredHelperFails(t *testing.T) {
 	mockExec := newMockExecutor(
-		execResponse{Stdout: "", Err: nil},                  // git -C <repoRoot> fetch origin
-		execResponse{Stdout: testBaseSha + "\n", Err: nil},  // git -C <repoRoot> rev-parse
-		execResponse{Stdout: "OK\n", Err: nil},              // git -C <repoRoot> worktree add
+		execResponse{Stdout: "", Err: nil},                       // git -C <repoRoot> fetch origin
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},       // git -C <repoRoot> rev-parse
+		execResponse{Stdout: "OK\n", Err: nil},                   // git -C <repoRoot> worktree add
 		execResponse{Stdout: "", Err: errors.New("invalid key")}, // git config credential.helper → FAILS
 	)
 	eventWriter := newMockEventWriter()
@@ -397,10 +397,10 @@ func TestCreate_NoCleanupOn_ConfigCredHelperFails(t *testing.T) {
 // fails, the partial worktree is NOT cleaned up (BR-005).
 func TestCreate_NoCleanupOn_ConfigUserNameFails(t *testing.T) {
 	mockExec := newMockExecutor(
-		execResponse{Stdout: "", Err: nil},                  // git -C <repoRoot> fetch origin
-		execResponse{Stdout: testBaseSha + "\n", Err: nil},  // git -C <repoRoot> rev-parse
-		execResponse{Stdout: "OK\n", Err: nil},              // git -C <repoRoot> worktree add
-		execResponse{Stdout: "", Err: nil},                  // git config credential.helper → OK
+		execResponse{Stdout: "", Err: nil},                             // git -C <repoRoot> fetch origin
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},             // git -C <repoRoot> rev-parse
+		execResponse{Stdout: "OK\n", Err: nil},                         // git -C <repoRoot> worktree add
+		execResponse{Stdout: "", Err: nil},                             // git config credential.helper → OK
 		execResponse{Stdout: "", Err: errors.New("invalid user.name")}, // git config user.name → FAILS
 	)
 	eventWriter := newMockEventWriter()
@@ -432,11 +432,11 @@ func TestCreate_NoCleanupOn_ConfigUserNameFails(t *testing.T) {
 // fails, the partial worktree is NOT cleaned up (BR-005).
 func TestCreate_NoCleanupOn_ConfigUserEmailFails(t *testing.T) {
 	mockExec := newMockExecutor(
-		execResponse{Stdout: "", Err: nil},                  // git -C <repoRoot> fetch origin
-		execResponse{Stdout: testBaseSha + "\n", Err: nil},  // git -C <repoRoot> rev-parse
-		execResponse{Stdout: "OK\n", Err: nil},              // git -C <repoRoot> worktree add
-		execResponse{Stdout: "", Err: nil},                  // git config credential.helper → OK
-		execResponse{Stdout: "", Err: nil},                  // git config user.name → OK
+		execResponse{Stdout: "", Err: nil},                              // git -C <repoRoot> fetch origin
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},              // git -C <repoRoot> rev-parse
+		execResponse{Stdout: "OK\n", Err: nil},                          // git -C <repoRoot> worktree add
+		execResponse{Stdout: "", Err: nil},                              // git config credential.helper → OK
+		execResponse{Stdout: "", Err: nil},                              // git config user.name → OK
 		execResponse{Stdout: "", Err: errors.New("invalid user.email")}, // git config user.email → FAILS
 	)
 	eventWriter := newMockEventWriter()
@@ -540,8 +540,8 @@ func TestCleanup_RemoveFails(t *testing.T) {
 
 func TestCleanup_BranchDeleteFails(t *testing.T) {
 	mockExec := newMockExecutor(
-		execResponse{Stdout: "", Err: nil},                                   // worktree remove succeeds
-		execResponse{Stdout: "", Err: errors.New("branch does not exist")},   // branch -D fails
+		execResponse{Stdout: "", Err: nil},                                 // worktree remove succeeds
+		execResponse{Stdout: "", Err: errors.New("branch does not exist")}, // branch -D fails
 	)
 	_, golemicDir, _, issueNum, _ := testCreateArgs()
 
@@ -632,19 +632,20 @@ func TestCleanup_NonExistentWorktree(t *testing.T) {
 		t.Fatal("expected error for non-existent worktree, got nil")
 	}
 }
+
 // ---------------------------------------------------------------------------
 // AC-001: Reviewer worktree created from remote branch
 // ---------------------------------------------------------------------------
 
 func TestCreateForReviewer_GitCommandSequence(t *testing.T) {
 	mockExec := newMockExecutor(
-		execResponse{Stdout: "", Err: nil},                           // git -C <repoRoot> fetch origin
-		execResponse{Stdout: "", Err: nil},                           // git -C <repoRoot> rev-parse --verify origin/golemic/issue-42
-		execResponse{Stdout: testBaseSha + "\n", Err: nil},           // git -C <repoRoot> rev-parse origin/golemic/issue-42
-		execResponse{Stdout: "Created worktree\n", Err: nil},         // git -C <repoRoot> worktree add (detached)
-		execResponse{Stdout: "", Err: nil},                           // git -C <wtPath> config credential.helper
-		execResponse{Stdout: "", Err: nil},                           // git -C <wtPath> config user.name
-		execResponse{Stdout: "", Err: nil},                           // git -C <wtPath> config user.email
+		execResponse{Stdout: "", Err: nil},                   // git -C <repoRoot> fetch origin
+		execResponse{Stdout: "", Err: nil},                   // git -C <repoRoot> rev-parse --verify origin/golemic/issue-42
+		execResponse{Stdout: testBaseSha + "\n", Err: nil},   // git -C <repoRoot> rev-parse origin/golemic/issue-42
+		execResponse{Stdout: "Created worktree\n", Err: nil}, // git -C <repoRoot> worktree add (detached)
+		execResponse{Stdout: "", Err: nil},                   // git -C <wtPath> config credential.helper
+		execResponse{Stdout: "", Err: nil},                   // git -C <wtPath> config user.name
+		execResponse{Stdout: "", Err: nil},                   // git -C <wtPath> config user.email
 	)
 	eventWriter := newMockEventWriter()
 	_, golemicDir, runID, issueNum, _ := testCreateArgs()
@@ -1089,4 +1090,3 @@ func TestCreateForReviewer_EventWriteFails(t *testing.T) {
 		t.Errorf("expected EVENT_WRITE_FAILED in error, got: %v", err)
 	}
 }
-

@@ -40,10 +40,10 @@ func TestMergePhase(t *testing.T) {
 		name      string
 		mergeMode string // MERGE_MODE env var controlling shim behaviour
 		// expected assertions
-		wantExitCode      int
-		wantEvent         string // event type that must appear in the log
-		wantNoEvent       string // event type that must NOT appear
-		wantDevWTRemoved  bool   // assert dev worktree cleaned up after success
+		wantExitCode     int
+		wantEvent        string // event type that must appear in the log
+		wantNoEvent      string // event type that must NOT appear
+		wantDevWTRemoved bool   // assert dev worktree cleaned up after success
 	}{
 		{
 			// AC-001: gate proceeds (risk:low + confidence high), branch stale,

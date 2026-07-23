@@ -77,9 +77,9 @@ func TestHarnessInitialization(t *testing.T) {
 // TestHarnessPreflightValidation verifies BR-004: fail fast if config invalid.
 func TestHarnessPreflightValidation(t *testing.T) {
 	tests := []struct {
-		name        string
-		configJSON  string
-		wantErrSub  string
+		name       string
+		configJSON string
+		wantErrSub string
 	}{
 		{
 			name:       "missing config file",

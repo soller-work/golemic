@@ -405,4 +405,3 @@ func TestRunOpenPR_AC005_MissingEnvVar(t *testing.T) {
 		t.Errorf("stderr missing env var name; got %q", stderr.String())
 	}
 }
-

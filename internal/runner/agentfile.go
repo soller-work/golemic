@@ -26,12 +26,12 @@ func (r *Runner) resolveAgentFile(role string) (systemPromptFile, model string, 
 		return "", "", func() {}, fmt.Errorf("resolveAgentFile: create temp for %s: %w", role, err)
 	}
 	if _, err := tmp.WriteString(body); err != nil {
-		tmp.Close()                 //nolint:errcheck
-		os.Remove(tmp.Name())       //nolint:errcheck
+		tmp.Close()           //nolint:errcheck
+		os.Remove(tmp.Name()) //nolint:errcheck
 		return "", "", func() {}, fmt.Errorf("resolveAgentFile: write temp for %s: %w", role, err)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())       //nolint:errcheck
+		os.Remove(tmp.Name()) //nolint:errcheck
 		return "", "", func() {}, fmt.Errorf("resolveAgentFile: close temp for %s: %w", role, err)
 	}
 

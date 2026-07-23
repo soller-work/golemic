@@ -26,12 +26,12 @@ func ValidConfigJSON() string {
 // Used to verify BR-004: preflight validation catches bad configs.
 func BrokenConfigs() map[string]string {
 	return map[string]string{
-		"not-json":         `this is not valid json`,
-		"missing_project":  `{"verify_command":"echo ok","label":"test"}`,
-		"missing_verify":   `{"project":"test","label":"test"}`,
-		"empty_object":     `{}`,
+		"not-json":                `this is not valid json`,
+		"missing_project":         `{"verify_command":"echo ok","label":"test"}`,
+		"missing_verify":          `{"project":"test","label":"test"}`,
+		"empty_object":            `{}`,
 		"array_instead_of_object": `["project","value"]`,
-		"null_project":     `{"project": null, "verify_command":"echo ok"}`,
-		"invalid_project_number": `{"project": 123, "verify_command":"echo ok"}`,
+		"null_project":            `{"project": null, "verify_command":"echo ok"}`,
+		"invalid_project_number":  `{"project": 123, "verify_command":"echo ok"}`,
 	}
 }

@@ -20,7 +20,7 @@ func followActivity(renderer *progress.Renderer, role, path string) func() {
 // emitAgentWrittenEvents filters to only these when scanning events.jsonl.
 var agentWrittenTypes = map[string]bool{
 	eventlog.EventPROpened:        true,
-	eventlog.EventReviewSubmitted:  true,
+	eventlog.EventReviewSubmitted: true,
 	eventlog.EventIssueClaimed:    true,
 	eventlog.EventIssueReleased:   true,
 }

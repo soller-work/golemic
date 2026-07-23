@@ -14,12 +14,12 @@ import (
 
 func TestRunPreflight(t *testing.T) { //nolint:cyclop,funlen,gocognit // moved verbatim; cyclomatic 35 and cognitive 75 exceed thresholds on the pre-existing table body
 	tests := []struct {
-		name          string
-		exec          preflight.Executor
-		homeDir       string // empty = create temp
-		repoRoot      string // empty = create temp
-		wantExit      int
-		wantStdout    string // exact expected stdout
+		name       string
+		exec       preflight.Executor
+		homeDir    string // empty = create temp
+		repoRoot   string // empty = create temp
+		wantExit   int
+		wantStdout string // exact expected stdout
 	}{
 		{
 			name: "all checks pass",
