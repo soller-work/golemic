@@ -10,6 +10,7 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/cbmbroker"
+	"golemic/internal/gmbroker"
 	"golemic/internal/prompt"
 	"golemic/internal/telemetry"
 )
@@ -39,6 +40,11 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 			brokerEnv = env
 			cbmEnabled = true
 		}
+	}
+	gmSockPath := filepath.Join(runsDir, r.runID, "gm-dev-retry.sock")
+	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath); ok {
+		defer gmb.Shutdown()
+		brokerEnv = append(brokerEnv, gmEnv...)
 	}
 
 	userPrompt, err := prompt.RenderDevRetry(
@@ -116,6 +122,11 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 			cbmEnabled = true
 		}
 	}
+	gmSockPath := filepath.Join(runsDir, r.runID, "gm-dev.sock")
+	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath); ok {
+		defer gmb.Shutdown()
+		brokerEnv = append(brokerEnv, gmEnv...)
+	}
 
 	// Render dev prompt
 	userPrompt, err := prompt.RenderDev(
@@ -145,25 +156,9 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
-	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
-		Role:              "dev",
-		SystemPromptFile:  systemPromptFile,
-		UserPrompt:        userPrompt,
-		WorktreeDir:       devWorktreePath,
-		RunID:             r.runID,
-		EventLogPath:      eventLogPath,
-		TurnID:            r.turnCounter,
-		GHToken:           r.creds.DevToken(),
-		DevToken:          r.creds.DevToken(),
-		ReviewerToken:     r.creds.ReviewerToken(),
-		GolemicBinaryPath: golemicBinaryPath,
-		Model:             model,
-		Timeout:           timeout,
-		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
-		RunsDir:           runsDir,
-		Env:               brokerEnv,
-	})
+	exitCode, paths, err := runFn(context.Background(), r.buildDevAgentConfig(
+		systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, brokerEnv,
+	))
 	stopFollow()
 
 	if err != nil {
@@ -229,6 +224,13 @@ func (r *Runner) startCBMForRole(wtPath, cbmCacheDir, sockPath, projectName stri
 }
 
 func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, brokerEnv []string) agent.RoleConfig {
+	toolAllowlist := []string{"read", "bash", "write", "edit"}
+	for _, e := range brokerEnv {
+		if len(e) > len("GOLEMIC_GM_SOCK=") && e[:len("GOLEMIC_GM_SOCK=")] == "GOLEMIC_GM_SOCK=" {
+			toolAllowlist = append(toolAllowlist, gmToolNames...)
+			break
+		}
+	}
 	return agent.RoleConfig{
 		Role:              "dev",
 		SystemPromptFile:  systemPromptFile,
@@ -244,7 +246,7 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 		Model:             model,
 		Timeout:           timeout,
 		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		ToolAllowlist:     toolAllowlist,
 		RunsDir:           runsDir,
 		Env:               brokerEnv,
 	}
@@ -253,6 +255,29 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 // startCBMBroker is a variable so tests can replace it without spawning a real npx process.
 var startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.Broker, error) {
 	return cbmbroker.Start(sockPath, env)
+}
+
+// gmToolNames are added to the agent tool allowlist when the GM broker is running.
+var gmToolNames = []string{"gm_slice_get", "gm_dev_done", "gm_review_submit"}
+
+// startGMBrokerFn is a variable so tests can replace it without a real gh call.
+var startGMBrokerFn = func(sockPath string, issueNum int, devToken string) (*gmbroker.Broker, error) {
+	return gmbroker.Start(sockPath, issueNum, devToken)
+}
+
+// startGMForRole starts the gm_ broker on sockPath. Returns the broker, the
+// GOLEMIC_GM_SOCK env entry, and true on success; logs a warning and returns
+// false on failure (non-fatal: runner proceeds without the gm_ tools).
+func (r *Runner) startGMForRole(sockPath string) (*gmbroker.Broker, []string, bool) {
+	if r.creds == nil {
+		return nil, nil, false
+	}
+	b, err := startGMBrokerFn(sockPath, r.issueNum, r.creds.DevToken())
+	if err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to start GM broker: %v\n", err)
+		return nil, nil, false
+	}
+	return b, []string{"GOLEMIC_GM_SOCK=" + sockPath}, true
 }
 
 // startCBMBroker starts a CBM broker and returns it.

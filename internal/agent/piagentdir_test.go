@@ -39,7 +39,7 @@ func TestPreparePiAgentDir_ForcesCompactionEnabled(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	got, err := preparePiAgentDir(localDir)
+	got, err := preparePiAgentDir(localDir, "")
 	if err != nil {
 		t.Fatalf("preparePiAgentDir: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestPreparePiAgentDir_CreatesSymlinks(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	got, err := preparePiAgentDir(localDir)
+	got, err := preparePiAgentDir(localDir, "")
 	if err != nil {
 		t.Fatalf("preparePiAgentDir: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestPreparePiAgentDir_PreservesOtherSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	got, err := preparePiAgentDir(localDir)
+	got, err := preparePiAgentDir(localDir, "")
 	if err != nil {
 		t.Fatalf("preparePiAgentDir: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestPreparePiAgentDir_SettingsRederiveOnEachRun(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	if _, err := preparePiAgentDir(localDir); err != nil {
+	if _, err := preparePiAgentDir(localDir, ""); err != nil {
 		t.Fatalf("first run: %v", err)
 	}
 
@@ -116,7 +116,7 @@ func TestPreparePiAgentDir_SettingsRederiveOnEachRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := preparePiAgentDir(localDir)
+	got, err := preparePiAgentDir(localDir, "")
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -135,11 +135,11 @@ func TestPreparePiAgentDir_Idempotent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	dir1, err := preparePiAgentDir(localDir)
+	dir1, err := preparePiAgentDir(localDir, "")
 	if err != nil {
 		t.Fatalf("first run: %v", err)
 	}
-	dir2, err := preparePiAgentDir(localDir)
+	dir2, err := preparePiAgentDir(localDir, "")
 	if err != nil {
 		t.Fatalf("second run: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestPreparePiAgentDir_ConcurrentSafe(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			_, errs[idx] = preparePiAgentDir(localDir)
+			_, errs[idx] = preparePiAgentDir(localDir, "")
 		}(i)
 	}
 	wg.Wait()
@@ -191,7 +191,7 @@ func TestPreparePiAgentDir_NoWritesToLocalDir(t *testing.T) {
 	// Snapshot before: record all entries and their mtimes.
 	before := snapshotDir(t, localDir)
 
-	if _, err := preparePiAgentDir(localDir); err != nil {
+	if _, err := preparePiAgentDir(localDir, ""); err != nil {
 		t.Fatalf("preparePiAgentDir: %v", err)
 	}
 
@@ -219,7 +219,7 @@ func TestPreparePiAgentDir_MissingLocalDir(t *testing.T) {
 
 	missing := filepath.Join(home, "does-not-exist", "pi", "agent")
 
-	_, err := preparePiAgentDir(missing)
+	_, err := preparePiAgentDir(missing, "")
 	if err == nil {
 		t.Fatal("expected error for missing local pi agent dir, got nil")
 	}
@@ -240,12 +240,54 @@ func TestPreparePiAgentDir_InvalidLocalSettingsJSON(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	_, err := preparePiAgentDir(localDir)
+	_, err := preparePiAgentDir(localDir, "")
 	if err == nil {
 		t.Fatal("expected error for invalid local settings.json, got nil")
 	}
 	if !contains(err.Error(), "settings.json") {
 		t.Errorf("error should mention settings.json, got: %v", err)
+	}
+}
+
+// TestPreparePiAgentDir_GMExtensionAndSiblingsSurvive verifies the full seedGMExtension
+// path: when the local extensions dir is a symlink and a non-empty gmExtensionSrcDir is
+// provided, preparePiAgentDir must (a) provision golemicPiDir/extensions/golemic pointing
+// to gmExtensionSrcDir, and (b) preserve sibling extensions (e.g. "subagent") that were
+// already in the local pi agent extensions dir.
+func TestPreparePiAgentDir_GMExtensionAndSiblingsSurvive(t *testing.T) {
+	// Build a local pi agent dir with extensions/subagent/ as a sibling extension.
+	localDir := t.TempDir()
+	subagentDir := filepath.Join(localDir, "extensions", "subagent")
+	if err := os.MkdirAll(subagentDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Non-empty gm-extension source dir with a sentinel file.
+	gmSrcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(gmSrcDir, "index.ts"), []byte("export {}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := preparePiAgentDir(localDir, gmSrcDir)
+	if err != nil {
+		t.Fatalf("preparePiAgentDir: %v", err)
+	}
+
+	// (a) golemicPiDir/extensions/golemic must be a symlink to gmSrcDir.
+	golemicLink, err := os.Readlink(filepath.Join(got, "extensions", "golemic"))
+	if err != nil {
+		t.Fatalf("extensions/golemic: readlink: %v", err)
+	}
+	if golemicLink != gmSrcDir {
+		t.Errorf("extensions/golemic → got %q, want %q", golemicLink, gmSrcDir)
+	}
+
+	// (b) The sibling "subagent" extension must survive in golemicPiDir/extensions/.
+	if _, err := os.Stat(filepath.Join(got, "extensions", "subagent")); err != nil {
+		t.Errorf("extensions/subagent: sibling must survive after symlink expansion: %v", err)
 	}
 }
 
@@ -256,7 +298,7 @@ func TestPreparePiAgentDir_AbsentLocalSettingsJSON(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	got, err := preparePiAgentDir(localDir)
+	got, err := preparePiAgentDir(localDir, "")
 	if err != nil {
 		t.Fatalf("preparePiAgentDir: %v", err)
 	}

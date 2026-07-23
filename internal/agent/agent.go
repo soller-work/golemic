@@ -349,7 +349,8 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 	if err != nil {
 		return 0, TranscriptPaths{}, err
 	}
-	golemicPiDir, err := preparePiAgentDir(localPiDir)
+	gmExtDir := filepath.Join(cfg.WorktreeDir, ".pi", "extensions", "golemic")
+	golemicPiDir, err := preparePiAgentDir(localPiDir, gmExtDir)
 	if err != nil {
 		return 0, TranscriptPaths{}, err
 	}
