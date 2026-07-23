@@ -440,6 +440,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
+		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
 	})
@@ -452,6 +453,10 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		if errors.Is(err, agent.ErrStalled) {
 			fmt.Fprintf(r.stderr, "dev_failed: CI retry dev agent stalled\n") //nolint:errcheck
 			return outcomeStalled
+		}
+		if errors.Is(err, agent.ErrThinkingLoop) {
+			fmt.Fprintf(r.stderr, "dev_failed: CI retry dev agent thinking loop\n") //nolint:errcheck
+			return outcomeAborted
 		}
 		fmt.Fprintf(r.stderr, "dev_failed: CI retry agent failed: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed

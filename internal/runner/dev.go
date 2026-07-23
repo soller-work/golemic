@@ -159,6 +159,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
+		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
 		Env:               brokerEnv,
@@ -175,6 +176,11 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 			endSpan(telemetry.StatusKilled, nil)
 			fmt.Fprintf(r.stderr, "dev_failed: dev agent stalled\n")
 			return outcomeStalled
+		}
+		if errors.Is(err, agent.ErrThinkingLoop) {
+			endSpan(telemetry.StatusKilled, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: dev agent thinking loop\n")
+			return outcomeAborted
 		}
 		var chainErr *agent.ModelChainExhaustedError
 		if errors.As(err, &chainErr) {
@@ -237,6 +243,7 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
+		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
 		Env:               brokerEnv,
@@ -289,6 +296,11 @@ func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endS
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent stalled\n")
 		return outcomeStalled
+	}
+	if errors.Is(err, agent.ErrThinkingLoop) {
+		endSpan(telemetry.StatusKilled, nil)
+		fmt.Fprintf(r.stderr, "dev_failed: dev agent thinking loop\n")
+		return outcomeAborted
 	}
 	var chainErr *agent.ModelChainExhaustedError
 	if errors.As(err, &chainErr) {

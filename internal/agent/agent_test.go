@@ -1558,8 +1558,9 @@ echo "GOLEMIC_TURN_ID: ${GOLEMIC_TURN_ID}"
 // ---------------------------------------------------------------------------
 
 // TestToolProgress_ThinkingLoopStalls verifies that an agent producing only
-// thinking/text events (no tool_execution_end) is detected as stalled even
-// though the activity.jsonl keeps growing.
+// thinking/text events (no tool_execution_end) is detected as a thinking loop
+// (stream growing, no tool progress) and returns ErrThinkingLoop immediately
+// without retry.
 func TestToolProgress_ThinkingLoopStalls(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
@@ -1577,22 +1578,143 @@ done`
 	t.Cleanup(func() { pollInterval = origPoll })
 
 	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1") // would retry if hang; must NOT retry for thinking_loop
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
 
 	if err == nil {
-		t.Fatal("expected ErrStalled for thinking-only loop, got nil")
+		t.Fatal("expected ErrThinkingLoop for thinking-only loop, got nil")
 	}
-	if !errors.Is(err, ErrStalled) {
-		t.Errorf("thinking loop: expected ErrStalled, got: %v", err)
+	if !errors.Is(err, ErrThinkingLoop) {
+		t.Errorf("thinking loop: expected ErrThinkingLoop, got: %v", err)
+	}
+	if errors.Is(err, ErrStalled) {
+		t.Errorf("thinking loop: must not be ErrStalled: %v", err)
 	}
 	if errors.Is(err, ErrTimeout) {
 		t.Errorf("thinking loop: must not be ErrTimeout: %v", err)
 	}
+	// maxStallRetries=1 but thinking_loop must not retry
 	if *invocations != 1 {
-		t.Errorf("invocation count: got %d, want 1", *invocations)
+		t.Errorf("invocation count: got %d, want 1 (no retry for thinking_loop)", *invocations)
+	}
+}
+
+// TestStallDetection_HangRetriesThenStalled verifies that a frozen stream
+// (hang) follows the existing retry path: stalled=true, retried up to
+// maxStallRetries, then returns ErrStalled.
+func TestStallDetection_HangRetriesThenStalled(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	sleepForeverScript := `while true; do sleep 3600; done`
+	scriptPath := writeScript(t, sleepForeverScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath})
+
+	var stallLog bytes.Buffer
+	origWriter := stallLogWriter
+	stallLogWriter = &stallLog
+	t.Cleanup(func() { stallLogWriter = origWriter })
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if err == nil {
+		t.Fatal("expected ErrStalled for hang, got nil")
+	}
+	if !errors.Is(err, ErrStalled) {
+		t.Errorf("hang: expected ErrStalled, got: %v", err)
+	}
+	if errors.Is(err, ErrThinkingLoop) {
+		t.Errorf("hang: must not be ErrThinkingLoop: %v", err)
+	}
+	// hang retries: 1 initial + 1 retry = 2 invocations
+	if *invocations != 2 {
+		t.Errorf("invocation count: got %d, want 2 (1 initial + 1 retry)", *invocations)
+	}
+	if !strings.Contains(stallLog.String(), "reason: hang") {
+		t.Errorf("stall log should contain 'reason: hang', got: %s", stallLog.String())
+	}
+}
+
+// TestStallDetection_ThinkingLoopLogReason verifies that the stall log entry
+// includes 'reason: thinking_loop' when the stream was growing.
+func TestStallDetection_ThinkingLoopLogReason(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+
+	thinkingScript := `while true; do
+  printf '{"type":"thinking_delta","delta":"x"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, thinkingScript)
+	attemptAwareFactory(t, []string{scriptPath})
+
+	var stallLog bytes.Buffer
+	origWriter := stallLogWriter
+	stallLogWriter = &stallLog
+	t.Cleanup(func() { stallLogWriter = origWriter })
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+
+	if !errors.Is(err, ErrThinkingLoop) {
+		t.Fatalf("expected ErrThinkingLoop, got: %v", err)
+	}
+	if !strings.Contains(stallLog.String(), "reason: thinking_loop") {
+		t.Errorf("stall log should contain 'reason: thinking_loop', got: %s", stallLog.String())
+	}
+}
+
+// TestRoleConfig_IdleTimeoutOverridesEnv verifies that RoleConfig.IdleTimeout
+// takes precedence over the GOLEMIC_AGENT_IDLE_TIMEOUT_SEC env variable.
+func TestRoleConfig_IdleTimeoutOverridesEnv(t *testing.T) {
+	cfg := defaultRoleConfig(t, "dev")
+	cfg.Timeout = 5 * time.Second
+	cfg.IdleTimeout = 1 * time.Second // explicit; env sets a longer value
+
+	// Stream grows → thinking_loop; with explicit 1s IdleTimeout it fires quickly.
+	thinkingScript := `while true; do
+  printf '{"type":"thinking","content":"looping"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, thinkingScript)
+	attemptAwareFactory(t, []string{scriptPath})
+
+	origPoll := pollInterval
+	pollInterval = 20 * time.Millisecond
+	t.Cleanup(func() { pollInterval = origPoll })
+
+	// env says 300s; RoleConfig.IdleTimeout=1s must win
+	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "300")
+	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+
+	start := time.Now()
+	ctx := context.Background()
+	_, _, err := RunRole(ctx, cfg)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, ErrThinkingLoop) {
+		t.Fatalf("expected ErrThinkingLoop (IdleTimeout=1s), got: %v", err)
+	}
+	// Must complete well under the 300s env value.
+	if elapsed > 10*time.Second {
+		t.Errorf("elapsed %v: RoleConfig.IdleTimeout was not honoured (env 300s would take much longer)", elapsed)
 	}
 }
 
@@ -1675,7 +1797,9 @@ exit 0`
 
 // TestToolProgress_ToolcallCompositionStalls verifies that an agent generating
 // large tool-call arguments (toolcall_delta events) without actually executing
-// a tool is detected as stalled. Composition does not count as in-flight.
+// a tool is detected as a thinking loop (stream grows, no tool progress).
+// Composition events (toolcall_delta) grow the stream without completing a
+// tool execution; the stream-offset check classifies this as thinking_loop.
 func TestToolProgress_ToolcallCompositionStalls(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
@@ -1699,10 +1823,14 @@ done`
 	_, _, err := RunRole(ctx, cfg)
 
 	if err == nil {
-		t.Fatal("expected ErrStalled for toolcall composition loop, got nil")
+		t.Fatal("expected ErrThinkingLoop for toolcall composition loop, got nil")
 	}
-	if !errors.Is(err, ErrStalled) {
-		t.Errorf("toolcall composition: expected ErrStalled, got: %v", err)
+	// Stream grows (toolcall_delta) but no tool completes → thinking_loop, not retry.
+	if !errors.Is(err, ErrThinkingLoop) {
+		t.Errorf("toolcall composition: expected ErrThinkingLoop, got: %v", err)
+	}
+	if errors.Is(err, ErrStalled) {
+		t.Errorf("toolcall composition: must not be ErrStalled: %v", err)
 	}
 	if errors.Is(err, ErrTimeout) {
 		t.Errorf("toolcall composition: must not be ErrTimeout: %v", err)

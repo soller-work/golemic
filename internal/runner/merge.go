@@ -522,6 +522,7 @@ func (r *Runner) buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, 
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           r.agentTimeout(),
+		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
 	}
