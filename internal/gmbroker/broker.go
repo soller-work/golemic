@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"golemic/internal/worktreefingerprint"
 )
@@ -349,13 +350,14 @@ func (gitExecutor) RunInDir(dir string, name string, args ...string) (string, er
 
 func capStream(out string) string {
 	const maxLines = 200
+	const maxBytes = 32 * 1024
 	if out == "" {
 		return out
 	}
 	trimmed := strings.TrimSuffix(out, "\n")
 	lines := strings.Split(trimmed, "\n")
 	if len(lines) <= maxLines {
-		return out
+		return capStreamBytes(out, maxBytes)
 	}
 
 	head := maxLines / 2
@@ -372,7 +374,24 @@ func capStream(out string) string {
 		b.WriteByte('\n')
 		b.WriteString(strings.Join(lines[len(lines)-tail:], "\n"))
 	}
-	return b.String()
+	return capStreamBytes(b.String(), maxBytes)
+}
+
+func capStreamBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	half := maxBytes / 2
+	headEnd := half
+	for headEnd > 0 && !utf8.RuneStart(s[headEnd]) {
+		headEnd--
+	}
+	tailStart := len(s) - half
+	for tailStart < len(s) && !utf8.RuneStart(s[tailStart]) {
+		tailStart++
+	}
+	omitted := tailStart - headEnd
+	return s[:headEnd] + fmt.Sprintf("\n... <%d bytes truncated> ...\n", omitted) + s[tailStart:]
 }
 
 func summaryForExit(exitCode int) string {

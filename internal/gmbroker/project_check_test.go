@@ -163,6 +163,39 @@ func TestProjectCheck_OutputModes(t *testing.T) {
 	}
 }
 
+func TestProjectCheck_OutputModes_ByteCap(t *testing.T) {
+	dir := initProjectCheckRepo(t)
+	// Single line of ~64KB to exceed the 32KB byte cap without hitting the line cap.
+	verify := `python3 -c "import sys; sys.stdout.write('X' * 65536 + '\n')"` + ` || ` +
+		`node -e "process.stdout.write('X'.repeat(65536) + '\n')"` + ` || ` +
+		`perl -e "print 'X' x 65536; print \"\\n\""`
+	_, sockPath := startProjectCheckBroker(t, dir, verify, []string{"gm_slice_get", "gm_project_check", "gm_dev_done", "gm_review_submit"})
+
+	cappedResult := call(t, sockPath, "gm_project_check", "c1", map[string]any{})
+	fullResult := call(t, sockPath, "gm_project_check", "c2", map[string]any{"output": "full"})
+
+	if cappedResult["ok"] != fullResult["ok"] || cappedResult["exitCode"] != fullResult["exitCode"] {
+		t.Fatalf("verdict changed across output modes: capped=%v full=%v", cappedResult, fullResult)
+	}
+	if cappedResult["workingTreeFingerprint"] != fullResult["workingTreeFingerprint"] {
+		t.Fatalf("fingerprint changed: capped=%v full=%v", cappedResult["workingTreeFingerprint"], fullResult["workingTreeFingerprint"])
+	}
+
+	cappedStdout := cappedResult["stdout"].(string)
+	const maxBytes = 32 * 1024
+	if len(cappedStdout) > maxBytes+200 {
+		t.Fatalf("capped stdout too long: %d bytes", len(cappedStdout))
+	}
+	if !strings.Contains(cappedStdout, "bytes truncated") {
+		t.Fatalf("byte-truncation marker missing in capped stdout: %q", cappedStdout[:min(200, len(cappedStdout))])
+	}
+
+	fullStdout := fullResult["stdout"].(string)
+	if len(fullStdout) < 65536 {
+		t.Fatalf("full stdout was truncated: %d bytes", len(fullStdout))
+	}
+}
+
 func TestProjectCheck_ReviewerAllowlistExcludesTool(t *testing.T) {
 	dir := initProjectCheckRepo(t)
 	_, sockPath := startProjectCheckBroker(t, dir, "echo pass", []string{"gm_slice_get", "gm_review_submit"})
