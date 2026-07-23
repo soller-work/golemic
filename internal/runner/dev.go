@@ -407,7 +407,7 @@ var startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.
 
 // gmDevToolNames are added to the dev agent tool allowlist when the GM broker is running.
 // gm_dev_done is intentionally omitted while the broker handler is a no-op skeleton.
-var gmDevToolNames = []string{"gm_slice_get", "gm_project_check"}
+var gmDevToolNames = []string{"gm_slice_get", "gm_project_check", "gm_dev_done"}
 
 // gmReviewerToolNames are added to the reviewer agent tool allowlist when the GM broker is running.
 // gm_review_submit is intentionally omitted while the broker handler is a no-op skeleton: it only

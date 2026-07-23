@@ -212,11 +212,11 @@ func TestGMReviewerToolsExcludesReviewSubmit(t *testing.T) {
 	}
 }
 
-// TestGMDevToolsExcludesDevDone verifies the dev is not handed the skeleton
-// gm_dev_done tool, which only echoes its params.
-func TestGMDevToolsExcludesDevDone(t *testing.T) {
-	if containsTool(gmDevToolNames, "gm_dev_done") {
-		t.Fatalf("gmDevToolNames unexpectedly includes gm_dev_done: %v", gmDevToolNames)
+// TestGMDevToolsIncludesDevDone verifies the dev is handed gm_dev_done now that
+// it is the terminal §10-gated completion tool.
+func TestGMDevToolsIncludesDevDone(t *testing.T) {
+	if !containsTool(gmDevToolNames, "gm_dev_done") {
+		t.Fatalf("gmDevToolNames missing gm_dev_done: %v", gmDevToolNames)
 	}
 }
 
