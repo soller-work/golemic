@@ -201,6 +201,23 @@ func TestGMReviewerToolsExcludesProjectCheck(t *testing.T) {
 	}
 }
 
+// TestGMReviewerToolsExcludesReviewSubmit verifies the reviewer is not handed the
+// skeleton gm_review_submit tool: it only echoes and never writes the
+// review_submitted event, so the agent must use the golemic submit-review CLI.
+func TestGMReviewerToolsExcludesReviewSubmit(t *testing.T) {
+	if containsTool(gmReviewerToolNames, "gm_review_submit") {
+		t.Fatalf("gmReviewerToolNames unexpectedly includes gm_review_submit: %v", gmReviewerToolNames)
+	}
+}
+
+// TestGMDevToolsExcludesDevDone verifies the dev is not handed the skeleton
+// gm_dev_done tool, which only echoes its params.
+func TestGMDevToolsExcludesDevDone(t *testing.T) {
+	if containsTool(gmDevToolNames, "gm_dev_done") {
+		t.Fatalf("gmDevToolNames unexpectedly includes gm_dev_done: %v", gmDevToolNames)
+	}
+}
+
 func containsTool(tools []string, want string) bool {
 	for _, tool := range tools {
 		if tool == want {
