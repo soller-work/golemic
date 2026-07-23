@@ -7,6 +7,29 @@ import (
 	"testing"
 )
 
+// TestScaffoldFrame_CodeIntelligenceLiteralOnce asserts that the string literal
+// "## Code Intelligence" appears exactly once across all .go sources in this package.
+func TestScaffoldFrame_CodeIntelligenceLiteralOnce(t *testing.T) {
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("failed to read package dir: %v", err)
+	}
+	total := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		content, err := os.ReadFile(e.Name())
+		if err != nil {
+			t.Fatalf("failed to read %s: %v", e.Name(), err)
+		}
+		total += strings.Count(string(content), "## Code Intelligence")
+	}
+	if total != 1 {
+		t.Errorf("expected exactly 1 occurrence of \"## Code Intelligence\" in package sources, got %d", total)
+	}
+}
+
 // testIssue is a reusable test issue used across multiple tests.
 var testIssue = Issue{
 	Number: 42,
