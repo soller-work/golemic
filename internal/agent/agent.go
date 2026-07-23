@@ -66,6 +66,19 @@ func (e *ModelChainExhaustedError) Is(target error) bool {
 // inject a fake binary without a real pi installation.
 var CommandFactory = exec.Command
 
+// loginShellPATHResolver returns the PATH from the developer's login shell so
+// the agent subprocess can resolve toolchain binaries (e.g. golangci-lint)
+// without sourcing rc files. Override in tests.
+var loginShellPATHResolver = defaultLoginShellPATH
+
+func defaultLoginShellPATH() string {
+	out, err := exec.Command("sh", "-l", "-c", "echo $PATH").Output()
+	if err != nil {
+		return os.Getenv("PATH")
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // ---------------------------------------------------------------------------
 // Stall detection configuration
 // ---------------------------------------------------------------------------
@@ -414,7 +427,7 @@ func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File
 func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir string, stdoutFile, stderrFile *os.File) *exec.Cmd {
 	cmd := CommandFactory("pi", args...)
 	cmd.Dir = cfg.WorktreeDir
-	agentPath := golemicDir + string(filepath.ListSeparator) + os.Getenv("PATH")
+	agentPath := golemicDir + string(filepath.ListSeparator) + loginShellPATHResolver()
 	if shimDir != "" {
 		agentPath = shimDir + string(filepath.ListSeparator) + agentPath
 	}

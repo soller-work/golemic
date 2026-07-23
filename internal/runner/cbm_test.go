@@ -21,6 +21,16 @@ import (
 	"golemic/internal/eventlog"
 )
 
+// hasCBMEnv reports whether any entry in env is a CBM_* variable.
+func hasCBMEnv(env []string) bool {
+	for _, e := range env {
+		if strings.HasPrefix(e, "CBM_") {
+			return true
+		}
+	}
+	return false
+}
+
 // setupCBMRunner creates a runner with the given CodebaseMemory.Enabled value for CBM tests.
 func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner, string) {
 	t.Helper()
@@ -627,7 +637,7 @@ func TestCBMBrokerSkippedWhenIndexingFailsDev(t *testing.T) {
 		t.Fatal("agent was not called")
 	}
 	cfg := captured[0]
-	if len(cfg.Env) != 0 {
+	if hasCBMEnv(cfg.Env) {
 		t.Fatalf("expected no CBM env on indexing failure, got %v", cfg.Env)
 	}
 	if strings.Contains(cfg.UserPrompt, "golemic cbm help") {
@@ -661,7 +671,7 @@ func TestCBMBrokerSkippedWhenIndexingFailsRetry(t *testing.T) {
 		t.Fatal("agent was not called")
 	}
 	cfg := captured[0]
-	if len(cfg.Env) != 0 {
+	if hasCBMEnv(cfg.Env) {
 		t.Fatalf("expected no CBM env on indexing failure, got %v", cfg.Env)
 	}
 	if strings.Contains(cfg.UserPrompt, "golemic cbm help") {
@@ -703,7 +713,7 @@ func TestCBMBrokerSkippedWhenIndexingFailsReviewer(t *testing.T) {
 		t.Fatal("agent was not called")
 	}
 	cfg := captured[0]
-	if len(cfg.Env) != 0 {
+	if hasCBMEnv(cfg.Env) {
 		t.Fatalf("expected no CBM env on indexing failure, got %v", cfg.Env)
 	}
 	if strings.Contains(cfg.UserPrompt, "golemic cbm help") {

@@ -141,6 +141,17 @@ func (r *Runner) SetSink(s telemetry.Sink) {
 	r.sinkOverride = true
 }
 
+// credEnv prepends the resolved GOLEMIC_DEV_TOKEN and GOLEMIC_REVIEWER_TOKEN to
+// extra so agent subprocesses can invoke nested golemic subcommands without
+// sourcing rc files.
+func (r *Runner) credEnv(extra []string) []string {
+	env := []string{
+		"GOLEMIC_DEV_TOKEN=" + r.creds.DevToken(),
+		"GOLEMIC_REVIEWER_TOKEN=" + r.creds.ReviewerToken(),
+	}
+	return append(env, extra...)
+}
+
 // ---------------------------------------------------------------------------
 // Run
 // ---------------------------------------------------------------------------

@@ -159,7 +159,7 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		Timeout:           timeout,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
-		Env:               brokerEnv,
+		Env:               r.credEnv(brokerEnv),
 	})
 	stopFollow()
 
@@ -235,7 +235,7 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 		Timeout:           timeout,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
-		Env:               brokerEnv,
+		Env:               r.credEnv(brokerEnv),
 	}
 }
 

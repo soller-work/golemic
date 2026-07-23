@@ -43,6 +43,7 @@ func (r Results) AllOK() bool {
 // ErrExit is returned by the Executor when a command exits with a non-zero code.
 type ErrExit struct {
 	ExitCode int
+	Stdout   string
 	Stderr   string
 }
 

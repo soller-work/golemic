@@ -1711,3 +1711,72 @@ done`
 		t.Errorf("invocation count: got %d, want 1", *invocations)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Issue-167: Login-shell PATH injection and gh-shim precedence
+// ---------------------------------------------------------------------------
+
+// TestNewPiCmd_PathContainsLoginShellToolchain_AndShimFirst verifies that:
+//  1. The subprocess PATH includes a toolchain directory from the login-shell PATH.
+//  2. The gh shim directory appears before the toolchain directory on the PATH.
+func TestNewPiCmd_PathContainsLoginShellToolchain_AndShimFirst(t *testing.T) {
+	fakeToolchain := "/fake/toolchain/bin"
+
+	old := loginShellPATHResolver
+	loginShellPATHResolver = func() string { return fakeToolchain }
+	t.Cleanup(func() { loginShellPATHResolver = old })
+
+	shimDir := t.TempDir()
+	golemicDir := "/usr/local/bin"
+	golemicPiDir := t.TempDir()
+
+	tmpDir := t.TempDir()
+	stdoutFile, err := os.Create(filepath.Join(tmpDir, "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrFile, err := os.Create(filepath.Join(tmpDir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { stdoutFile.Close(); stderrFile.Close() })
+
+	oldCF := CommandFactory
+	CommandFactory = exec.Command
+	t.Cleanup(func() { CommandFactory = oldCF })
+
+	cfg := RoleConfig{WorktreeDir: t.TempDir()}
+	cmd := newPiCmd(cfg, nil, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile)
+
+	var agentPath string
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "PATH=") {
+			agentPath = strings.TrimPrefix(e, "PATH=")
+		}
+	}
+
+	if !strings.Contains(agentPath, fakeToolchain) {
+		t.Errorf("PATH missing toolchain dir %q; got %q", fakeToolchain, agentPath)
+	}
+
+	shimIdx := strings.Index(agentPath, shimDir)
+	toolchainIdx := strings.Index(agentPath, fakeToolchain)
+	golemicIdx := strings.Index(agentPath, golemicDir)
+
+	if shimIdx < 0 {
+		t.Errorf("shim dir %q not found in PATH %q", shimDir, agentPath)
+	}
+	if toolchainIdx < 0 {
+		t.Errorf("toolchain dir %q not found in PATH %q", fakeToolchain, agentPath)
+	}
+	// Shim must precede toolchain (gh-shim keeps precedence over any toolchain gh).
+	if shimIdx > toolchainIdx {
+		t.Errorf("shim dir must precede toolchain dir in PATH; shim=%d toolchain=%d path=%q",
+			shimIdx, toolchainIdx, agentPath)
+	}
+	// Shim must precede golemicDir.
+	if shimIdx > golemicIdx {
+		t.Errorf("shim dir must precede golemic dir in PATH; shim=%d golemic=%d path=%q",
+			shimIdx, golemicIdx, agentPath)
+	}
+}
