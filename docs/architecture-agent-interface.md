@@ -769,3 +769,31 @@ Bewusst nicht als Agent-Tool:
 - Ob ein späteres Dev-only `gm_code_reindex` nötig ist.
 - Ob Reviewer-Precheck-Output vollständig oder zusammengefasst in den Prompt kommt
   und wie große stdout/stderr-Ausgaben begrenzt werden.
+
+## 21. Umsetzung — Issue-Checklist
+
+Abgeleitet aus dem Migrationspfad (§19). #167 (Schritt 1, Übergangs-Stabilisierung)
+existiert bereits separat.
+
+- [ ] **1. Transport-Skeleton** ([#173](https://github.com/soller-work/golemic/issues/173)) — Golemic-Broker (Unix-Socket, JSON-RPC) + pi-Extension,
+  die `gm_`-Tools registriert; erstes echtes Read-Tool `gm_slice_get`; Schema-Validierung;
+  Security (Socket `0700`, runId/invocationId-Gating). Terminale Tools zunächst als
+  Schema-Stub. (§17, §19.2)
+- [ ] **2. Working-Tree-Fingerprint + `gm_project_check`** ([#175](https://github.com/soller-work/golemic/issues/175), blocked-by #173) — Fingerprint-Berechnung (§8)
+  und Dev-Check-Tool (§9). Additiv wie #173: Tool registriert + schema-validiert +
+  test-bewiesen, Fingerprint nach dem Verify-Lauf berechnet. Der Live-Dev-Loop führt
+  Verify weiterhin über `bash` aus; Dev-Konsum + `gm_dev_done`-Gate kommen in Slice 3.
+- [ ] **3. Dev-Slice** ([#177](https://github.com/soller-work/golemic/issues/177), blocked-by #173, #175) — `gm_dev_done` terminal + Dev-Akzeptanzregel/Gate (§10) + Runner
+  macht commit/push/open-PR. Voller Dev-Cutover (initial + retry): Prompt ohne bash-Verify /
+  commit / push / `golemic open-pr`; `gm_dev_done` trägt `{ summary, commitMsg, prTitle, prBody }`;
+  ungültige Fertigmeldung → Neustart, gebounded auf 2 Retries; Runner schreibt `pr_opened` +
+  bestehende Dev-Lifecycle-Events (breite Eventlog-Migration bleibt Issue 7). (§14, §15.1)
+- [ ] **4. Reviewer read-only + Precheck** — Runner-Precheck (§11) + Reviewer read-only
+  starten + `gm_pr_view` + `gm_repo_tree`.
+- [ ] **5. Reviewer-Submit** — `gm_review_submit_comment` (non-terminal, Pending Review) +
+  `gm_review_submit` terminal + Reviewer-Gate. (§12, §13)
+- [ ] **6. Code Intelligence `gm_code_*`** — read-only cbmbroker-backed Tools. (§7)
+- [ ] **7. Eventlog-Umstellung** — Runner schreibt Events nach validierten Tool-Ergebnissen. (§16)
+- [ ] **8. Legacy-Cleanup** — Agent-Shelling-Pfad, CLI-Event-Schreibpfade und die
+  #167-Übergangs-Injektion entfernen; entscheiden, welche Subcommands als Operator-CLI
+  überleben. (§19.6)
