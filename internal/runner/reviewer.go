@@ -172,8 +172,19 @@ func (r *Runner) loadInlineComments(prNumber int, reviewID string) ([]findingEnt
 	return entries, nil
 }
 
-// runReviewerAgent runs the reviewer agent and returns the outcome.
-func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int, precheckBlock string) string {
+// reviewerInvocationState captures the GM broker output after a reviewer agent invocation.
+type reviewerInvocationState struct {
+	reviewSubmitParams       *gmbroker.ReviewSubmitParams
+	reviewSubmitGateRejected bool
+	reviewSubmitGateMsg      string
+	pendingReviewID          string
+}
+
+// runReviewerAgent runs the reviewer agent and returns the outcome and broker state.
+// precheckBlock is the pre-rendered precheck section for the prompt.
+// gateRetryReason is non-empty when this is a retry after a rejected approved verdict;
+// in that case a gate-retry prompt is rendered instead of the normal reviewer prompt.
+func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int, precheckBlock string, precheck *reviewerPrecheckResult, gateRetryReason string) (string, *reviewerInvocationState) {
 	golemicBinaryPath, _ := os.Executable()
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
@@ -181,53 +192,62 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("reviewer")
 	if err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
-		return outcomeReviewFailed
+		return outcomeReviewFailed, nil
 	}
 	defer cleanupPrompt()
 
-	// Get PR number from pr_opened event (needed to configure GM broker reviewer tools).
 	prNumber, err := r.getPRNumber(eventLogPath)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to get PR number: %v\n", err) //nolint:errcheck
-		return outcomeReviewFailed
+		return outcomeReviewFailed, nil
 	}
 
-	cbmEnabled, brokerEnv, cleanupBrokers := r.startReviewerBrokers(golemicDir, runsDir, reviewerWorktreePath, prNumber)
+	cbmEnabled, brokerEnv, gmBroker, cleanupBrokers := r.startReviewerBrokers(golemicDir, runsDir, reviewerWorktreePath, prNumber, precheck)
 	defer cleanupBrokers()
 
-	// Render reviewer prompt
-	userPrompt, err := prompt.RenderReviewer(
-		prNumber,
-		prompt.Issue{
-			Number: r.issue.Number,
-			Title:  r.issue.Title,
-		},
-		r.cfg.VerifyCommand,
-		filepath.Join(r.repoRoot, ".golemic", "guidelines", "reviewer.md"),
-		cbmEnabled,
-		precheckBlock,
-	)
+	userPrompt, err := r.renderReviewerPrompt(prNumber, precheckBlock, gateRetryReason, cbmEnabled)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to render reviewer prompt: %v\n", err) //nolint:errcheck
-		return outcomeReviewFailed
+		return outcomeReviewFailed, nil
 	}
 
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": model})
-
 	stopFollow := followActivity(r.progressRenderer, "reviewer", filepath.Join(runsDir, r.runID, "reviewer.activity.jsonl"))
 
-	// Run reviewer agent; edit and write are excluded — the reviewer must not mutate files.
-	// bash is retained only for the existing CLI submit path (golemic review-comment / submit-review).
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
 	cfg := r.buildReviewerRoleConfig(systemPromptFile, userPrompt, reviewerWorktreePath, golemicBinaryPath, model, eventLogPath, runsDir, timeout, brokerEnv)
-	exitCode, paths, err := runFn(context.Background(), cfg)
+	exitCode, paths, runErr := runFn(context.Background(), cfg)
 	stopFollow()
 
-	return r.handleReviewerAgentResult(err, exitCode, paths, eventLogPath, endSpan)
+	return r.handleReviewerAgentResult(runErr, exitCode, paths, eventLogPath, endSpan), captureReviewerBrokerState(gmBroker)
+}
+
+// renderReviewerPrompt renders either the normal reviewer prompt or a gate-retry prompt.
+func (r *Runner) renderReviewerPrompt(prNumber int, precheckBlock, gateRetryReason string, cbmEnabled bool) (string, error) {
+	guidelinesPath := filepath.Join(r.repoRoot, ".golemic", "guidelines", "reviewer.md")
+	issue := prompt.Issue{Number: r.issue.Number, Title: r.issue.Title}
+	if gateRetryReason != "" {
+		return prompt.RenderReviewerGateRetry(gateRetryReason, prNumber, issue, r.cfg.VerifyCommand, guidelinesPath, precheckBlock, cbmEnabled)
+	}
+	return prompt.RenderReviewer(prNumber, issue, r.cfg.VerifyCommand, guidelinesPath, cbmEnabled, precheckBlock)
+}
+
+// captureReviewerBrokerState extracts relevant state from the GM broker after the agent exits.
+func captureReviewerBrokerState(gmBroker *gmbroker.Broker) *reviewerInvocationState {
+	if gmBroker == nil {
+		return nil
+	}
+	p, _ := gmBroker.ReviewSubmitResult()
+	return &reviewerInvocationState{
+		reviewSubmitParams:       p,
+		reviewSubmitGateRejected: gmBroker.ReviewSubmitGateRejected(),
+		reviewSubmitGateMsg:      gmBroker.ReviewSubmitGateReason(),
+		pendingReviewID:          gmBroker.PendingReviewID(),
+	}
 }
 
 // handleReviewerAgentResult translates the agent run result into an outcome string.
@@ -352,32 +372,66 @@ type reviewerPrecheckResult struct {
 // runReviewerPrecheck runs the reviewer precheck before each reviewer attempt.
 // It computes before/after working-tree fingerprints, runs config.VerifyCommand
 // in the reviewer worktree, writes a reviewer_precheck event, and returns the
-// precheck block string to inject into the reviewer prompt.
+// precheck block string and the structured result.
 //
-// Returns ("", error) when fingerprint computation fails; the caller should
+// Returns ("", nil, error) when fingerprint computation fails; the caller should
 // surface review_failed in this case. A non-zero verify exit code is not an
 // error; it produces an ok:false precheck and the run continues.
-func (r *Runner) runReviewerPrecheck(reviewerWorktreePath, eventLogPath string) (string, error) {
+func (r *Runner) runReviewerPrecheck(reviewerWorktreePath, eventLogPath string) (string, *reviewerPrecheckResult, error) {
 	// Allow injection for tests.
 	if r.reviewerPrecheckFn != nil {
-		return r.reviewerPrecheckFn(reviewerWorktreePath, eventLogPath)
+		block, err := r.reviewerPrecheckFn(reviewerWorktreePath, eventLogPath)
+		if err != nil {
+			return "", nil, err
+		}
+		// Read the precheck result from the event log so callers can use it.
+		result := r.readLastPrecheckResult(eventLogPath)
+		return block, result, nil
 	}
 	return runReviewerPrecheckImpl(r, reviewerWorktreePath, eventLogPath)
 }
 
-func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath string) (string, error) {
+// readLastPrecheckResult reads the last reviewer_precheck event from the log.
+// Returns nil when no event is found (safe for callers to handle as missing precheck).
+func (r *Runner) readLastPrecheckResult(eventLogPath string) *reviewerPrecheckResult {
+	reader := eventlog.Reader{}
+	events, err := reader.Read(eventLogPath)
+	if err != nil {
+		return nil
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == eventlog.EventReviewerPrecheck {
+			var d struct {
+				OK                bool   `json:"ok"`
+				BeforeFingerprint string `json:"beforeFingerprint"`
+				AfterFingerprint  string `json:"afterFingerprint"`
+			}
+			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
+				return nil
+			}
+			return &reviewerPrecheckResult{
+				OK:                d.OK,
+				BeforeFingerprint: d.BeforeFingerprint,
+				AfterFingerprint:  d.AfterFingerprint,
+			}
+		}
+	}
+	return nil
+}
+
+func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath string) (string, *reviewerPrecheckResult, error) {
 	cmd := r.cfg.VerifyCommand
 
 	before, err := worktreefingerprint.Compute(worktreePath, r.executor)
 	if err != nil {
-		return "", fmt.Errorf("reviewer_precheck: compute beforeFingerprint: %w", err)
+		return "", nil, fmt.Errorf("reviewer_precheck: compute beforeFingerprint: %w", err)
 	}
 
 	stdout, stderr, exitCode := runPrecheckVerify(worktreePath, cmd)
 
 	after, err := worktreefingerprint.Compute(worktreePath, r.executor)
 	if err != nil {
-		return "", fmt.Errorf("reviewer_precheck: compute afterFingerprint: %w", err)
+		return "", nil, fmt.Errorf("reviewer_precheck: compute afterFingerprint: %w", err)
 	}
 
 	ok := exitCode == 0 && before == after
@@ -396,7 +450,7 @@ func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath string) (stri
 	fmt.Fprintf(r.stderr, "reviewer_precheck: ok=%v exitCode=%d before=%s after=%s\n",
 		ok, exitCode, before, after)
 
-	return buildReviewerPrecheckBlock(result), nil
+	return buildReviewerPrecheckBlock(result), result, nil
 }
 
 // runPrecheckVerify runs cmd via sh -c in worktreePath and returns stdout, stderr,
@@ -518,11 +572,11 @@ func tailBytes(s string, n int) (string, bool) {
 	return s[start:], true
 }
 
-// buildReviewerToolList builds the reviewer tool allowlist. edit and write are
-// excluded (reviewer must not mutate files); bash is retained for the CLI submit path.
-// gm_ reviewer tools are added if the GM broker socket is present in the environment.
+// buildReviewerToolList builds the reviewer tool allowlist (BR-9: read-only).
+// bash/edit/write are excluded; gm_ reviewer tools are added when the GM broker
+// socket is present in the environment.
 func buildReviewerToolList(brokerEnv []string) []string {
-	tools := []string{"read", "bash"}
+	tools := []string{"read"}
 	hasGMSock := false
 	hasCBMSock := false
 	for _, e := range brokerEnv {
@@ -566,8 +620,9 @@ func (r *Runner) buildReviewerRoleConfig(systemPromptFile, userPrompt, worktreeP
 }
 
 // startReviewerBrokers starts CBM and GM brokers for a reviewer invocation.
-// Returns cbmEnabled, the combined broker environment, and a cleanup function.
-func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, prNumber int) (cbmEnabled bool, brokerEnv []string, cleanup func()) {
+// Returns cbmEnabled, the combined broker environment, the GM broker (may be nil),
+// and a cleanup function.
+func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, prNumber int, precheck *reviewerPrecheckResult) (cbmEnabled bool, brokerEnv []string, gmBroker *gmbroker.Broker, cleanup func()) {
 	var cleanups []func()
 	var cbmCfg gmbroker.CBMConfig
 	if r.cfg.CodebaseMemory.Enabled {
@@ -583,11 +638,20 @@ func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, 
 	}
 	gmSockPath := filepath.Join(runsDir, r.runID, "gm-reviewer.sock")
 	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath, "reviewer", worktreePath); ok {
+		var precheckState *gmbroker.PrecheckState
+		if precheck != nil {
+			precheckState = &gmbroker.PrecheckState{
+				OK:                precheck.OK,
+				BeforeFingerprint: precheck.BeforeFingerprint,
+				AfterFingerprint:  precheck.AfterFingerprint,
+			}
+		}
 		gmb.SetReviewerConfig(gmbroker.ReviewerConfig{
 			WorktreePath:  worktreePath,
 			ReviewerToken: r.creds.ReviewerToken(),
 			RepoRoot:      r.repoRoot,
 			PRNumber:      prNumber,
+			Precheck:      precheckState,
 		})
 		if cbmCfg.SockPath != "" {
 			gmb.ConfigureCBM(cbmCfg)
@@ -595,11 +659,246 @@ func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, 
 		}
 		cleanups = append(cleanups, gmb.Shutdown)
 		brokerEnv = append(brokerEnv, gmEnv...)
+		gmBroker = gmb
 	}
 	cleanup = func() {
 		for _, fn := range cleanups {
 			fn()
 		}
 	}
-	return cbmEnabled, brokerEnv, cleanup
+	return cbmEnabled, brokerEnv, gmBroker, cleanup
+}
+
+// ---------------------------------------------------------------------------
+// Review submission and event writing (runner-side, \u00a712/\u00a714)
+// ---------------------------------------------------------------------------
+
+// graphqlSubmitPendingReview submits an existing pending review with verdict + body.
+const graphqlSubmitPendingReview = `mutation($reviewId:ID!,$event:PullRequestReviewEvent!,$body:String!){submitPullRequestReview(input:{pullRequestReviewId:$reviewId,event:$event,body:$body}){pullRequestReview{fullDatabaseId comments{totalCount}}}}` //nolint:lll
+
+// graphqlDiscoverPendingForSubmit queries viewer login + PR pending reviews, for discover-or-create.
+const graphqlDiscoverPendingForSubmit = `query($owner:String!,$name:String!,$prNumber:Int!){viewer{login}repository(owner:$owner,name:$name){pullRequest(number:$prNumber){id reviews(first:10,states:[PENDING]){nodes{id author{login}}}}}}` //nolint:lll
+
+// graphqlCreatePendingReviewForSubmit creates an empty pending review for submit.
+const graphqlCreatePendingReviewForSubmit = `mutation($prId:ID!){addPullRequestReview(input:{pullRequestId:$prId}){pullRequestReview{id}}}` //nolint:lll
+
+// submitReviewAndWriteEvent submits the pending review via GitHub and writes the
+// review_submitted event. It is called after a valid gm_review_submit by the broker.
+func (r *Runner) submitReviewAndWriteEvent(state *reviewerInvocationState, eventLogPath string) error {
+	if state == nil || state.reviewSubmitParams == nil {
+		return nil
+	}
+	params := state.reviewSubmitParams
+	prNumber, err := r.getPRNumber(eventLogPath)
+	if err != nil {
+		return fmt.Errorf("submitReviewAndWriteEvent: %w", err)
+	}
+
+	pendingID := state.pendingReviewID
+	if pendingID == "" {
+		// No inline comments were posted; discover-or-create a pending review.
+		pendingID, err = r.discoverOrCreateReviewerPendingReview(prNumber)
+		if err != nil {
+			return fmt.Errorf("submitReviewAndWriteEvent: %w", err)
+		}
+	}
+
+	submittedID, inlineCount, err := r.submitPendingReview(pendingID, params.Verdict, params.Body)
+	if err != nil {
+		return fmt.Errorf("submitReviewAndWriteEvent: %w", err)
+	}
+
+	if err := r.writeReviewSubmittedEventFromRunner(eventLogPath, submittedID, params.Verdict, params.Body, params.MergeConfidence, inlineCount); err != nil {
+		return fmt.Errorf("submitReviewAndWriteEvent: write event: %w", err)
+	}
+
+	// set merge-confidence label
+	if err := r.setMergeConfidenceLabel(params.MergeConfidence, prNumber); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to set merge confidence label: %v\n", err) //nolint:errcheck
+	}
+
+	return nil
+}
+
+// discoverOrCreateReviewerPendingReview finds or creates a pending review for the reviewer token.
+func (r *Runner) discoverOrCreateReviewerPendingReview(prNumber int) (string, error) {
+	nwo, err := r.repoNWO()
+	if err != nil {
+		return "", err
+	}
+	parts := strings.SplitN(nwo, "/", 2)
+	owner, repoName := parts[0], parts[1]
+
+	viewerLogin, prID, existingID, err := r.discoverReviewerPendingReview(owner, repoName, prNumber)
+	if err != nil {
+		return "", err
+	}
+	_ = viewerLogin
+	if existingID != "" {
+		return existingID, nil
+	}
+	return r.createReviewerPendingReview(prID)
+}
+
+func (r *Runner) discoverReviewerPendingReview(owner, repoName string, prNumber int) (viewerLogin, prID, existingID string, err error) {
+	out, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
+		r.repoRoot,
+		"gh", "api", "graphql",
+		"-f", "query="+graphqlDiscoverPendingForSubmit,
+		"-f", "owner="+owner,
+		"-f", "name="+repoName,
+		"-F", fmt.Sprintf("prNumber=%d", prNumber),
+	)
+	if err != nil {
+		return "", "", "", fmt.Errorf("discover pending review: %w", err)
+	}
+	var resp struct {
+		Data struct {
+			Viewer struct {
+				Login string `json:"login"`
+			} `json:"viewer"`
+			Repository struct {
+				PullRequest struct {
+					ID      string `json:"id"`
+					Reviews struct {
+						Nodes []struct {
+							ID     string `json:"id"`
+							Author struct {
+								Login string `json:"login"`
+							} `json:"author"`
+						} `json:"nodes"`
+					} `json:"reviews"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return "", "", "", fmt.Errorf("parse discover response: %w", err)
+	}
+	vl := resp.Data.Viewer.Login
+	pid := resp.Data.Repository.PullRequest.ID
+	if pid == "" {
+		return "", "", "", fmt.Errorf("PR #%d not found", prNumber)
+	}
+	for _, node := range resp.Data.Repository.PullRequest.Reviews.Nodes {
+		if node.Author.Login == vl {
+			return vl, pid, node.ID, nil
+		}
+	}
+	return vl, pid, "", nil
+}
+
+func (r *Runner) createReviewerPendingReview(prID string) (string, error) {
+	out, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
+		r.repoRoot,
+		"gh", "api", "graphql",
+		"-f", "query="+graphqlCreatePendingReviewForSubmit,
+		"-f", "prId="+prID,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create pending review: %w", err)
+	}
+	var resp struct {
+		Data struct {
+			AddPullRequestReview struct {
+				PullRequestReview struct {
+					ID string `json:"id"`
+				} `json:"pullRequestReview"`
+			} `json:"addPullRequestReview"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return "", fmt.Errorf("parse create review response: %w", err)
+	}
+	newID := resp.Data.AddPullRequestReview.PullRequestReview.ID
+	if newID == "" {
+		return "", fmt.Errorf("create pending review returned empty id")
+	}
+	return newID, nil
+}
+
+// submitPendingReview submits the pending review and returns the submitted review ID
+// and inline comment count.
+func (r *Runner) submitPendingReview(reviewID, verdict, body string) (submittedReviewID string, inlineCount int, err error) {
+	ghEvent := "APPROVE"
+	if verdict == "changes_requested" {
+		ghEvent = "REQUEST_CHANGES"
+	}
+
+	out, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
+		r.repoRoot,
+		"gh", "api", "graphql",
+		"-f", "query="+graphqlSubmitPendingReview,
+		"-f", "reviewId="+reviewID,
+		"-f", "event="+ghEvent,
+		"-f", "body="+body,
+	)
+	if err != nil {
+		return "", 0, fmt.Errorf("submit review: %w", err)
+	}
+
+	var resp struct {
+		Data struct {
+			SubmitPullRequestReview struct {
+				PullRequestReview struct {
+					FullDatabaseID int64 `json:"fullDatabaseId"`
+					Comments       struct {
+						TotalCount int `json:"totalCount"`
+					} `json:"comments"`
+				} `json:"pullRequestReview"`
+			} `json:"submitPullRequestReview"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return "", 0, fmt.Errorf("parse submit review response: %w", err)
+	}
+	dbID := resp.Data.SubmitPullRequestReview.PullRequestReview.FullDatabaseID
+	count := resp.Data.SubmitPullRequestReview.PullRequestReview.Comments.TotalCount
+	if dbID == 0 {
+		return "", 0, fmt.Errorf("submit review returned empty id")
+	}
+	return fmt.Sprintf("%d", dbID), count, nil
+}
+
+// writeReviewSubmittedEventFromRunner writes a review_submitted event (BR-10).
+func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, mergeConfidence string, inlineCommentCount int) error {
+	w, err := eventlog.NewWriter(eventLogPath)
+	if err != nil {
+		return err
+	}
+	defer w.Close() //nolint:errcheck
+
+	payload, err := json.Marshal(map[string]any{
+		"reviewId":           reviewID,
+		"verdict":            verdict,
+		"body":               body,
+		"mergeConfidence":    mergeConfidence,
+		"inlineCommentCount": inlineCommentCount,
+	})
+	if err != nil {
+		return err
+	}
+	return w.Write(eventlog.Event{
+		Type:    eventlog.EventReviewSubmitted,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   r.runID,
+		TurnID:  r.turnCounter,
+		Payload: payload,
+	})
+}
+
+// setMergeConfidenceLabel sets the merge-confidence label on the PR.
+// Non-fatal: caller logs a warning on failure.
+func (r *Runner) setMergeConfidenceLabel(mergeConfidence string, prNumber int) error {
+	labelName := "merge-confidence:" + mergeConfidence
+	_, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
+		r.repoRoot,
+		"gh", "pr", "edit", fmt.Sprintf("%d", prNumber),
+		"--add-label", labelName,
+	)
+	return err
 }

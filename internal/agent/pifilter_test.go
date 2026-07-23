@@ -180,7 +180,9 @@ func TestTerminalDoneFromLine(t *testing.T) {
 		line string
 		want bool
 	}{
-		{name: "accepted", line: `{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}` + "\n", want: true},
+		{name: "accepted dev done", line: `{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}` + "\n", want: true},
+		{name: "accepted review submit", line: `{"type":"tool_execution_end","toolName":"gm_review_submit","result":{"ok":true,"accepted":true}}` + "\n", want: true},
+		{name: "review submit rejected", line: `{"type":"tool_execution_end","toolName":"gm_review_submit","result":{"ok":false,"code":"REVIEWER_GATE"}}` + "\n", want: false},
 		{name: "gate rejected", line: `{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"DEV_GATE"}}` + "\n", want: true},
 		{name: "schema invalid", line: `{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"SCHEMA_INVALID"}}` + "\n", want: true},
 		{name: "other tool", line: `{"type":"tool_execution_end","toolName":"bash","result":"ok"}` + "\n", want: false},

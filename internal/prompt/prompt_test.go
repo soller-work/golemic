@@ -196,8 +196,8 @@ func TestRenderReviewer_ContainsAllFacts(t *testing.T) {
 	if !strings.Contains(userPrompt, "Go 1.21, standard library") {
 		t.Error("userPrompt missing guidelines body content")
 	}
-	if !strings.Contains(userPrompt, "golemic submit-review") {
-		t.Error("userPrompt missing 'golemic submit-review'")
+	if !strings.Contains(userPrompt, "gm_review_submit") {
+		t.Error("userPrompt missing 'gm_review_submit'")
 	}
 }
 
@@ -226,14 +226,17 @@ func TestRenderReviewer_StepList(t *testing.T) {
 	if strings.Contains(userPrompt, "my-unique-verify-cmd-12345") {
 		t.Error("reviewer prompt must not instruct agent to run verify command")
 	}
-	if !strings.Contains(userPrompt, "golemic submit-review --verdict") {
-		t.Error("reviewer prompt missing 'golemic submit-review --verdict'")
+	if !strings.Contains(userPrompt, "gm_review_submit") {
+		t.Error("reviewer prompt missing 'gm_review_submit'")
 	}
-	if !strings.Contains(userPrompt, "--body") {
-		t.Error("reviewer prompt missing '--body' for submit-review")
+	if !strings.Contains(userPrompt, "gm_review_submit_comment") {
+		t.Error("reviewer prompt missing 'gm_review_submit_comment'")
 	}
-	if !strings.Contains(userPrompt, "--pr 123") {
-		t.Error("reviewer prompt missing '--pr 123'")
+	if !strings.Contains(userPrompt, "verdict") {
+		t.Error("reviewer prompt missing 'verdict' field description")
+	}
+	if !strings.Contains(userPrompt, "body") {
+		t.Error("reviewer prompt missing 'body' field description")
 	}
 }
 
@@ -553,12 +556,12 @@ func TestRenderReviewer_StepListEndsWithSubmitReview(t *testing.T) {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
 
-	if !strings.Contains(userPrompt, "golemic submit-review") {
-		t.Error("step list must contain 'golemic submit-review'")
+	if !strings.Contains(userPrompt, "gm_review_submit") {
+		t.Error("step list must contain 'gm_review_submit'")
 	}
 
-	if strings.LastIndex(userPrompt, "golemic submit-review") < strings.LastIndex(userPrompt, "Instructions") {
-		t.Error("'golemic submit-review' should appear near the end of the user prompt")
+	if strings.LastIndex(userPrompt, "gm_review_submit") < strings.LastIndex(userPrompt, "Instructions") {
+		t.Error("'gm_review_submit' should appear near the end of the user prompt")
 	}
 }
 
@@ -570,11 +573,11 @@ func TestRenderReviewer_MergeConfidenceAllTiers(t *testing.T) {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
 
-	if !strings.Contains(userPrompt, "--merge-confidence high|medium|low") {
-		t.Error("reviewer prompt must offer --merge-confidence high|medium|low (all three tiers)")
+	if !strings.Contains(userPrompt, "mergeConfidence") {
+		t.Error("reviewer prompt must contain 'mergeConfidence' field")
 	}
-	if strings.Contains(userPrompt, "--merge-confidence high|low") {
-		t.Error("reviewer prompt must not offer only two tiers (high|low); medium must be present")
+	if !strings.Contains(userPrompt, "\"high\"") || !strings.Contains(userPrompt, "\"medium\"") || !strings.Contains(userPrompt, "\"low\"") {
+		t.Error("reviewer prompt must offer high, medium, and low merge confidence options")
 	}
 }
 

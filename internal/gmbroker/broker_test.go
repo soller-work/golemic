@@ -549,28 +549,181 @@ func TestDevDone_Gate_GateRejectedAccessors(t *testing.T) {
 // gm_review_submit
 // ---------------------------------------------------------------------------
 
-// TestReviewSubmit_ValidPayload verifies that a well-formed gm_review_submit
-// returns a structured echo with no side effects.
-func TestReviewSubmit_ValidPayload(t *testing.T) {
-	_, sockPath := startTestBroker(t, nil)
+// TestReviewSubmit_ApprovedNoPrecheck verifies that approved without a valid precheck
+// is rejected with REVIEWER_GATE (BR-4).
+func TestReviewSubmit_ApprovedNoPrecheck(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
 
-	params := map[string]any{
+	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":         "approved",
+		"mergeConfidence": "high",
+		"body":            "LGTM",
+	})
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false (no precheck = gate rejected)", result["ok"])
+	}
+	if result["code"] != "REVIEWER_GATE" {
+		t.Errorf("code: got %v, want REVIEWER_GATE", result["code"])
+	}
+	if !b.ReviewSubmitGateRejected() {
+		t.Error("ReviewSubmitGateRejected() should be true after gate rejection")
+	}
+}
+
+// TestReviewSubmit_ApprovedWithValidPrecheck verifies that approved with a green precheck
+// and matching fingerprint is accepted (BR-4).
+func TestReviewSubmit_ApprovedWithValidPrecheck(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+
+	const fp = "sha256:aaaa"
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return fp, nil })
+	b.SetReviewerConfig(ReviewerConfig{
+		WorktreePath: "/fake",
+		Precheck: &PrecheckState{
+			OK:                true,
+			BeforeFingerprint: fp,
+			AfterFingerprint:  fp,
+		},
+	})
+
+	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
 		"verdict":         "approved",
 		"mergeConfidence": "high",
 		"body":            "LGTM — all checks pass.",
-	}
-	result := call(t, sockPath, "gm_review_submit", "c1", params)
+	})
 
 	if result["ok"] != true {
-		t.Errorf("ok: got %v, want true", result["ok"])
+		t.Errorf("ok: got %v, want true; message: %v", result["ok"], result["message"])
 	}
-	echo, _ := result["echo"].(map[string]any)
-	if echo == nil {
-		t.Fatalf("echo: expected object, got %v", result["echo"])
+	if result["accepted"] != true {
+		t.Errorf("accepted: got %v, want true", result["accepted"])
 	}
-	if echo["verdict"] != "approved" {
-		t.Errorf("echo.verdict: got %v, want approved", echo["verdict"])
+	p, ok := b.ReviewSubmitResult()
+	if !ok || p == nil {
+		t.Fatal("ReviewSubmitResult() should be set after successful submit")
 	}
+	if p.Verdict != "approved" {
+		t.Errorf("ReviewSubmitResult().Verdict: got %q, want approved", p.Verdict)
+	}
+}
+
+// TestReviewSubmit_ApprovedRedPrecheck verifies that approved with a red precheck is rejected.
+func TestReviewSubmit_ApprovedRedPrecheck(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+
+	const fp = "sha256:bbbb"
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return fp, nil })
+	b.SetReviewerConfig(ReviewerConfig{
+		WorktreePath: "/fake",
+		Precheck: &PrecheckState{
+			OK:                false, // red precheck
+			BeforeFingerprint: fp,
+			AfterFingerprint:  fp,
+		},
+	})
+
+	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":         "approved",
+		"mergeConfidence": "high",
+		"body":            "looks good",
+	})
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "REVIEWER_GATE" {
+		t.Errorf("code: got %v, want REVIEWER_GATE", result["code"])
+	}
+	_ = b
+}
+
+// TestReviewSubmit_ApprovedMutatedTree verifies that approved with a mutating precheck is rejected.
+func TestReviewSubmit_ApprovedMutatedTree(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return "sha256:after", nil })
+	b.SetReviewerConfig(ReviewerConfig{
+		WorktreePath: "/fake",
+		Precheck: &PrecheckState{
+			OK:                false, // mutating (before != after)
+			BeforeFingerprint: "sha256:before",
+			AfterFingerprint:  "sha256:after",
+		},
+	})
+
+	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":         "approved",
+		"mergeConfidence": "high",
+		"body":            "looks good",
+	})
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "REVIEWER_GATE" {
+		t.Errorf("code: got %v, want REVIEWER_GATE", result["code"])
+	}
+	_ = b
+}
+
+// TestReviewSubmit_CurrentFingerprintMismatch verifies that approved is rejected when
+// the current fingerprint differs from precheck.afterFingerprint.
+func TestReviewSubmit_CurrentFingerprintMismatch(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+
+	const afterFP = "sha256:after"
+	// current fingerprint differs
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return "sha256:changed", nil })
+	b.SetReviewerConfig(ReviewerConfig{
+		WorktreePath: "/fake",
+		Precheck: &PrecheckState{
+			OK:                true,
+			BeforeFingerprint: afterFP,
+			AfterFingerprint:  afterFP,
+		},
+	})
+
+	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":         "approved",
+		"mergeConfidence": "high",
+		"body":            "looks ok",
+	})
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false (changed tree since precheck)", result["ok"])
+	}
+	if result["code"] != "REVIEWER_GATE" {
+		t.Errorf("code: got %v, want REVIEWER_GATE", result["code"])
+	}
+	_ = b
+}
+
+// TestReviewSubmit_TerminalProtocol verifies a second differing call returns PROTOCOL_ERROR.
+func TestReviewSubmit_TerminalProtocol(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+
+	// First call (changes_requested — always accepted).
+	call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":         "changes_requested",
+		"mergeConfidence": "low",
+		"body":            "needs work",
+	})
+
+	// Second call with different params — protocol error.
+	result := call(t, sockPath, "gm_review_submit", "c2", map[string]any{
+		"verdict":         "approved",
+		"mergeConfidence": "high",
+		"body":            "LGTM",
+	})
+
+	if result["ok"] != false {
+		t.Errorf("second terminal call: ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "PROTOCOL_ERROR" {
+		t.Errorf("second terminal call: code: got %v, want PROTOCOL_ERROR", result["code"])
+	}
+	_ = b
 }
 
 // TestReviewSubmit_InvalidVerdict rejects an unrecognised verdict value.
@@ -588,6 +741,40 @@ func TestReviewSubmit_InvalidVerdict(t *testing.T) {
 	}
 	if result["code"] != "SCHEMA_INVALID" {
 		t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
+	}
+}
+
+// TestReviewSubmit_InvalidMergeConfidence rejects invalid mergeConfidence values.
+func TestReviewSubmit_InvalidMergeConfidence(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	called := false
+	b.SetReviewerConfig(ReviewerConfig{WorktreePath: "/fake"})
+	b.SetComputeFingerprintFn(func(_ string) (string, error) {
+		called = true
+		return "sha256:fp", nil
+	})
+	b.SetReviewerConfig(ReviewerConfig{
+		WorktreePath: "/fake",
+		Precheck:     &PrecheckState{OK: true, BeforeFingerprint: "sha256:fp", AfterFingerprint: "sha256:fp"},
+	})
+
+	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":         "approved",
+		"mergeConfidence": "urgent",
+		"body":            "looks good",
+	})
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "SCHEMA_INVALID" {
+		t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
+	}
+	if called {
+		t.Error("mergeConfidence validation should fail before gate fingerprint lookup")
+	}
+	if _, ok := b.ReviewSubmitResult(); ok {
+		t.Fatal("ReviewSubmitResult() must remain unset after schema rejection")
 	}
 }
 
@@ -621,6 +808,170 @@ func TestReviewSubmit_NoSideEffect(t *testing.T) {
 	after, _ := os.ReadDir(dir)
 	if len(before) != len(after) {
 		t.Errorf("unexpected file system change: %d entries before, %d after", len(before), len(after))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// gm_review_submit_comment
+// ---------------------------------------------------------------------------
+
+// TestReviewSubmitComment_Success verifies a commentable line returns ok=true with commentId/threadId.
+func TestReviewSubmitComment_Success(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetReviewerConfig(ReviewerConfig{PRNumber: 42})
+
+	var capturedReviewID string
+	b.SetGetOrCreatePendingReviewFn(func(_ ReviewerConfig) (string, error) {
+		return "PRR_test123", nil
+	})
+	b.SetAddReviewCommentFn(func(_ ReviewerConfig, reviewID, path, body string, line int) (commentID, threadID string, anchorInvalid bool, err error) {
+		capturedReviewID = reviewID
+		return "comment-1", "thread-1", false, nil
+	})
+
+	result := call(t, sockPath, "gm_review_submit_comment", "c1", map[string]any{
+		"path": "internal/foo/bar.go",
+		"line": 42,
+		"body": "This looks wrong",
+	})
+
+	if result["ok"] != true {
+		t.Errorf("ok: got %v, want true; message: %v", result["ok"], result["message"])
+	}
+	if result["commentId"] != "comment-1" {
+		t.Errorf("commentId: got %v, want comment-1", result["commentId"])
+	}
+	if result["threadId"] != "thread-1" {
+		t.Errorf("threadId: got %v, want thread-1", result["threadId"])
+	}
+	if capturedReviewID != "PRR_test123" {
+		t.Errorf("capturedReviewID: got %q, want PRR_test123", capturedReviewID)
+	}
+	if b.PendingReviewID() != "PRR_test123" {
+		t.Errorf("PendingReviewID(): got %q, want PRR_test123", b.PendingReviewID())
+	}
+}
+
+// TestReviewSubmitComment_ReusesExistingPendingReview verifies a second call reuses
+// the same Pending Review (BR-1).
+func TestReviewSubmitComment_ReusesExistingPendingReview(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetReviewerConfig(ReviewerConfig{PRNumber: 42})
+
+	getCalls := 0
+	b.SetGetOrCreatePendingReviewFn(func(_ ReviewerConfig) (string, error) {
+		getCalls++
+		return "PRR_existing", nil
+	})
+	b.SetAddReviewCommentFn(func(_ ReviewerConfig, reviewID, path, body string, line int) (string, string, bool, error) {
+		return "cid-" + reviewID, "tid-" + reviewID, false, nil
+	})
+
+	call(t, sockPath, "gm_review_submit_comment", "c1", map[string]any{
+		"path": "a.go", "line": 1, "body": "first",
+	})
+	call(t, sockPath, "gm_review_submit_comment", "c2", map[string]any{
+		"path": "b.go", "line": 2, "body": "second",
+	})
+
+	if getCalls != 1 {
+		t.Errorf("getOrCreate should be called exactly once; got %d", getCalls)
+	}
+}
+
+// TestReviewSubmitComment_AnchorInvalid verifies an uncommentable line returns ANCHOR_INVALID (BR-2).
+func TestReviewSubmitComment_AnchorInvalid(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetReviewerConfig(ReviewerConfig{PRNumber: 42})
+	b.SetGetOrCreatePendingReviewFn(func(_ ReviewerConfig) (string, error) { return "PRR_x", nil })
+	b.SetAddReviewCommentFn(func(_ ReviewerConfig, reviewID, path, body string, line int) (string, string, bool, error) {
+		return "", "", true, nil // anchor invalid
+	})
+
+	result := call(t, sockPath, "gm_review_submit_comment", "c1", map[string]any{
+		"path": "internal/foo.go",
+		"line": 999,
+		"body": "comment on non-diff line",
+	})
+
+	if result["ok"] != false {
+		t.Errorf("ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "ANCHOR_INVALID" {
+		t.Errorf("code: got %v, want ANCHOR_INVALID", result["code"])
+	}
+	if result["path"] != "internal/foo.go" {
+		t.Errorf("path: got %v, want internal/foo.go", result["path"])
+	}
+	if result["line"] != float64(999) {
+		t.Errorf("line: got %v, want 999", result["line"])
+	}
+	_ = b
+}
+
+// TestReviewSubmitComment_SchemaValidation verifies missing required fields are rejected.
+func TestReviewSubmitComment_SchemaValidation(t *testing.T) {
+	_, sockPath := startTestBroker(t, nil)
+
+	for _, tc := range []struct {
+		name   string
+		params map[string]any
+	}{
+		{"missing path", map[string]any{"line": 1, "body": "b"}},
+		{"missing line", map[string]any{"path": "f.go", "body": "b"}},
+		{"missing body", map[string]any{"path": "f.go", "line": 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := call(t, sockPath, "gm_review_submit_comment", "c1", tc.params)
+			if result["ok"] != false {
+				t.Errorf("ok: got %v, want false", result["ok"])
+			}
+			if result["code"] != "SCHEMA_INVALID" {
+				t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
+			}
+		})
+	}
+}
+
+// TestReviewSubmitComment_AfterAcceptedSubmitRejects verifies comments are blocked once gm_review_submit succeeds.
+func TestReviewSubmitComment_AfterAcceptedSubmitRejects(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+	b.SetComputeFingerprintFn(func(_ string) (string, error) { return "sha256:fp", nil })
+	b.SetReviewerConfig(ReviewerConfig{
+		WorktreePath: "/fake",
+		Precheck:     &PrecheckState{OK: true, BeforeFingerprint: "sha256:fp", AfterFingerprint: "sha256:fp"},
+	})
+
+	result := call(t, sockPath, "gm_review_submit", "submit-1", map[string]any{
+		"verdict":         "approved",
+		"mergeConfidence": "high",
+		"body":            "LGTM",
+	})
+	if result["ok"] != true {
+		t.Fatalf("submit ok: got %v, want true", result["ok"])
+	}
+
+	commentCalls := 0
+	b.SetGetOrCreatePendingReviewFn(func(_ ReviewerConfig) (string, error) {
+		commentCalls++
+		return "PRR_after_submit", nil
+	})
+	b.SetAddReviewCommentFn(func(_ ReviewerConfig, _ string, _ string, _ string, _ int) (string, string, bool, error) {
+		commentCalls++
+		return "comment-1", "thread-1", false, nil
+	})
+
+	result = call(t, sockPath, "gm_review_submit_comment", "comment-1", map[string]any{
+		"path": "f.go", "line": 1, "body": "late comment",
+	})
+	if result["ok"] != false {
+		t.Errorf("comment ok: got %v, want false", result["ok"])
+	}
+	if result["code"] != "PROTOCOL_ERROR" {
+		t.Errorf("comment code: got %v, want PROTOCOL_ERROR", result["code"])
+	}
+	if commentCalls != 0 {
+		t.Errorf("comment path must not be called after accepted submit; calls=%d", commentCalls)
 	}
 }
 

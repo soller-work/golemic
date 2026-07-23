@@ -204,12 +204,13 @@ func TestGMReviewerToolsExcludesProjectCheck(t *testing.T) {
 	}
 }
 
-// TestGMReviewerToolsExcludesReviewSubmit verifies the reviewer is not handed the
-// skeleton gm_review_submit tool: it only echoes and never writes the
-// review_submitted event, so the agent must use the golemic submit-review CLI.
-func TestGMReviewerToolsExcludesReviewSubmit(t *testing.T) {
-	if containsTool(gmReviewerToolNames, "gm_review_submit") {
-		t.Fatalf("gmReviewerToolNames unexpectedly includes gm_review_submit: %v", gmReviewerToolNames)
+// TestGMReviewerToolsIncludesReviewSubmit verifies the reviewer tool list includes
+// gm_review_submit (terminal verdict tool) and gm_review_submit_comment (inline comments).
+func TestGMReviewerToolsIncludesReviewSubmit(t *testing.T) {
+	for _, want := range []string{"gm_review_submit", "gm_review_submit_comment"} {
+		if !containsTool(gmReviewerToolNames, want) {
+			t.Errorf("gmReviewerToolNames must include %q; got: %v", want, gmReviewerToolNames)
+		}
 	}
 }
 
@@ -479,7 +480,7 @@ func TestGMCodeTools_PresentInReviewerAllowlist(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, "")
+	r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, "", nil, "")
 
 	if len(captured) == 0 {
 		t.Fatal("reviewer agent was not called")

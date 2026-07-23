@@ -581,22 +581,61 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 		}
 		endCreateRevWT(telemetry.StatusOK, nil)
 
-		// BR-001: sweep any orphaned pending review before invoking reviewer agent
-		if err := r.sweepPendingReviews(prNumber); err != nil {
-			fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
-			return outcomeReviewFailed
-		}
-
-		// §11: run reviewer precheck before spawning the reviewer agent.
 		reviewerWT := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
-		precheckBlock, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath)
-		if precheckErr != nil {
-			fmt.Fprintf(r.stderr, "review_failed: %v\n", precheckErr) //nolint:errcheck
-			return outcomeReviewFailed
+
+		// Inner reviewer-attempt loop: bounded to maxReviewerAttempts per round (BR-6).
+		// On an invalid approved verdict, the runner preserves the Pending Review and
+		// restarts the reviewer without sweeping (BR-8).
+		const maxReviewerAttempts = 3 // 1 initial + 2 retries
+		prevGateRejected := false
+		var prevGateMsg string
+		var finalState *reviewerInvocationState
+
+		for attempt := 0; attempt < maxReviewerAttempts; attempt++ {
+			if !prevGateRejected {
+				// BR-001: sweep orphaned pending reviews — not for gate-rejection retries (BR-8).
+				if err := r.sweepPendingReviews(prNumber); err != nil {
+					fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
+					return outcomeReviewFailed
+				}
+			}
+
+			// §11: run reviewer precheck before each attempt.
+			precheckBlock, precheckResult, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath)
+			if precheckErr != nil {
+				fmt.Fprintf(r.stderr, "review_failed: %v\n", precheckErr) //nolint:errcheck
+				return outcomeReviewFailed
+			}
+
+			// Pass gate-retry reason if this is a retry after a rejected approval.
+			var gateRetryReason string
+			if prevGateRejected {
+				gateRetryReason = prevGateMsg
+			}
+
+			outcome, state := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, precheckBlock, precheckResult, gateRetryReason)
+			finalState = state
+
+			if state != nil && state.reviewSubmitGateRejected {
+				prevGateRejected = true
+				prevGateMsg = state.reviewSubmitGateMsg
+				if attempt == maxReviewerAttempts-1 {
+					fmt.Fprintf(r.stderr, "review_failed: reviewer gate rejected all %d attempts for this round\n", maxReviewerAttempts) //nolint:errcheck
+					return outcomeReviewFailed
+				}
+				continue // retry without sweeping the Pending Review (BR-8)
+			}
+
+			if outcome != outcomeSuccess {
+				return outcome
+			}
+			break
 		}
 
-		if outcome := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, precheckBlock); outcome != outcomeSuccess {
-			return outcome
+		// Submit the review and write review_submitted event (BR-7, BR-10).
+		if err := r.submitReviewAndWriteEvent(finalState, eventLogPath); err != nil {
+			fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
+			return outcomeReviewFailed
 		}
 
 		reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))

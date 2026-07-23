@@ -168,7 +168,7 @@ type RoleConfig struct {
 	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
 	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
 	Env               []string      // additional "KEY=VALUE" pairs merged into the subprocess environment
-	TerminalDone      chan struct{} // closed when gm_dev_done reaches a terminal result
+	TerminalDone      chan struct{} // closed when gm_dev_done or accepted gm_review_submit reaches a terminal result
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.

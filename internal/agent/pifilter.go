@@ -92,10 +92,24 @@ type muOutput struct {
 // verbatim).
 func terminalDoneFromLine(line []byte) bool {
 	var ev struct {
-		Type     string `json:"type"`
-		ToolName string `json:"toolName"`
+		Type     string          `json:"type"`
+		ToolName string          `json:"toolName"`
+		Result   json.RawMessage `json:"result"`
 	}
-	return json.Unmarshal(bytes.TrimSpace(line), &ev) == nil && ev.Type == "tool_execution_end" && ev.ToolName == "gm_dev_done"
+	if json.Unmarshal(bytes.TrimSpace(line), &ev) != nil || ev.Type != "tool_execution_end" {
+		return false
+	}
+	if ev.ToolName == "gm_dev_done" {
+		return true
+	}
+	if ev.ToolName != "gm_review_submit" {
+		return false
+	}
+	var result struct {
+		OK       bool `json:"ok"`
+		Accepted bool `json:"accepted"`
+	}
+	return json.Unmarshal(ev.Result, &result) == nil && result.OK && result.Accepted
 }
 
 func projectMessageUpdate(data []byte) []byte {

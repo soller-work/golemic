@@ -793,6 +793,34 @@ echo mutated > "$MUTATION_MARKER"
 	}
 }
 
+func TestRunRole_ReviewSubmitAcceptedStopsInvocationBeforePostGateMutation_AC006(t *testing.T) {
+	cfg := defaultRoleConfig(t, "reviewer")
+	cfg.Timeout = 5 * time.Second
+	markerFile := filepath.Join(t.TempDir(), "mutated.txt")
+	cfg.Env = append(cfg.Env, "MUTATION_MARKER="+markerFile)
+
+	scriptContent := `printf '%s\n' '{"type":"tool_execution_start","toolName":"gm_review_submit","args":{}}'
+printf '%s\n' '{"type":"tool_execution_end","toolName":"gm_review_submit","result":{"ok":true,"accepted":true}}'
+sleep 1
+echo mutated > "$MUTATION_MARKER"
+`
+	scriptPath := writeScript(t, scriptContent)
+	var capturedArgs []string
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
+
+	ctx := context.Background()
+	exitCode, _, err := RunRole(ctx, cfg)
+	if err != nil {
+		t.Fatalf("RunRole failed: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code: got %d, want 0", exitCode)
+	}
+	if _, err := os.Stat(markerFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected post-terminal mutation to be prevented, stat err=%v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Exit code is returned without semantic interpretation (BR-006)
 // ---------------------------------------------------------------------------
