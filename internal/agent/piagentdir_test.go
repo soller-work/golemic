@@ -291,6 +291,40 @@ func TestPreparePiAgentDir_GMExtensionAndSiblingsSurvive(t *testing.T) {
 	}
 }
 
+// TestPreparePiAgentDir_IdempotentWithGMExtension verifies that a second preparePiAgentDir
+// call succeeds after the first one expanded golemicPiDir/extensions into a real directory.
+// Regression: the outer symlink loop used to try to re-symlink the now-real extensions dir,
+// failing with "directory not empty" and aborting the reviewer run.
+func TestPreparePiAgentDir_IdempotentWithGMExtension(t *testing.T) {
+	localDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(localDir, "extensions"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(localDir, "extensions", "context-footer.ts"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	gmSrcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(gmSrcDir, "index.ts"), []byte("export {}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if _, err := preparePiAgentDir(localDir, gmSrcDir); err != nil {
+		t.Fatalf("first preparePiAgentDir: %v", err)
+	}
+	got, err := preparePiAgentDir(localDir, gmSrcDir)
+	if err != nil {
+		t.Fatalf("second preparePiAgentDir (idempotency): %v", err)
+	}
+	if _, err := os.Readlink(filepath.Join(got, "extensions", "golemic")); err != nil {
+		t.Errorf("extensions/golemic must remain a symlink after re-seed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(got, "extensions", "context-footer.ts")); err != nil {
+		t.Errorf("sibling extension must survive re-seed: %v", err)
+	}
+}
+
 // TestPreparePiAgentDir_AbsentLocalSettingsJSON verifies that when local settings.json
 // is absent, the golemic-owned settings.json is still written with compaction.enabled=true.
 func TestPreparePiAgentDir_AbsentLocalSettingsJSON(t *testing.T) {

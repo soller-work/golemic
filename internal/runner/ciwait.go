@@ -425,13 +425,13 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 
 	var ciGMEnv []string
 	gmSockPath := filepath.Join(runsDir, r.runID, "gm-ci-retry.sock")
-	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath); ok {
+	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath, "dev", devWorktreePath); ok {
 		defer gmb.Shutdown()
 		ciGMEnv = gmEnv
 	}
 	ciToolAllowlist := []string{"read", "bash", "write", "edit"}
 	if len(ciGMEnv) > 0 {
-		ciToolAllowlist = append(ciToolAllowlist, gmToolNames...)
+		ciToolAllowlist = append(ciToolAllowlist, gmDevToolNames...)
 	}
 
 	runFn := r.runAgentFn

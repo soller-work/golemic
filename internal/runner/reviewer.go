@@ -195,7 +195,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		}
 	}
 	gmSockPath := filepath.Join(runsDir, r.runID, "gm-reviewer.sock")
-	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath); ok {
+	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath, "reviewer", reviewerWorktreePath); ok {
 		defer gmb.Shutdown()
 		brokerEnv = append(brokerEnv, gmEnv...)
 	}
@@ -237,7 +237,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	reviewerTools := []string{"read", "bash", "write", "edit"}
 	for _, e := range brokerEnv {
 		if len(e) > len("GOLEMIC_GM_SOCK=") && e[:len("GOLEMIC_GM_SOCK=")] == "GOLEMIC_GM_SOCK=" {
-			reviewerTools = append(reviewerTools, gmToolNames...)
+			reviewerTools = append(reviewerTools, gmReviewerToolNames...)
 			break
 		}
 	}

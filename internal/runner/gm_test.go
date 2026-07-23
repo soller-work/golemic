@@ -114,7 +114,7 @@ func TestGMToolsInAllowlist(t *testing.T) {
 	cfg := captured[0]
 
 	tools := strings.Join(cfg.ToolAllowlist, ",")
-	for _, want := range gmToolNames {
+	for _, want := range gmDevToolNames {
 		if !strings.Contains(tools, want) {
 			t.Errorf("ToolAllowlist missing %q; got: %s", want, tools)
 		}
@@ -191,4 +191,21 @@ func TestGMBrokerSocketCleanup(t *testing.T) {
 	if _, err := os.Stat(capturedSock); !os.IsNotExist(err) {
 		t.Errorf("GM socket still exists after runDevAgent returned; path: %s", capturedSock)
 	}
+}
+
+// TestGMReviewerToolsExcludesProjectCheck verifies the reviewer allowlist never
+// includes the dev-only gm_project_check tool.
+func TestGMReviewerToolsExcludesProjectCheck(t *testing.T) {
+	if containsTool(gmReviewerToolNames, "gm_project_check") {
+		t.Fatalf("gmReviewerToolNames unexpectedly includes gm_project_check: %v", gmReviewerToolNames)
+	}
+}
+
+func containsTool(tools []string, want string) bool {
+	for _, tool := range tools {
+		if tool == want {
+			return true
+		}
+	}
+	return false
 }

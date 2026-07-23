@@ -64,6 +64,31 @@ export default function (pi: { registerTool: (def: object) => void }) {
     },
   });
 
+  // gm_project_check — runs the canonical verify command in the dev worktree.
+  // Dev-only: the broker allowlist exposes this tool only to the Dev role.
+  pi.registerTool({
+    name: "gm_project_check",
+    label: "Run project verify check",
+    description:
+      "Run the project's configured verify command in the dev worktree and return " +
+      "{ ok, command, exitCode, stdout, stderr, summary, workingTreeFingerprint }. " +
+      "Optional parameter: output ('capped' | 'full'), default capped. Dev-only.",
+    parameters: {
+      type: "object",
+      properties: {
+        output: {
+          type: "string",
+          enum: ["capped", "full"],
+          description: "Returned stdout/stderr volume: capped head+tail or full.",
+        },
+      },
+      additionalProperties: false,
+    },
+    async execute(callId: string, params: unknown): Promise<unknown> {
+      return callBroker("gm_project_check", callId, params);
+    },
+  });
+
   // gm_dev_done — signals that the dev agent has finished its work.
   // Stub in this slice: validates schema and echoes the payload.
   // No git/GitHub/event-log side effects until Slice 3.
