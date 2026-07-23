@@ -190,13 +190,15 @@ func TestSliceGet_FetchError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestDevDone_ValidPayload verifies that a well-formed gm_dev_done call returns
-// a structured echo and triggers no side effects.
+// a structured echo and stores params in the broker.
 func TestDevDone_ValidPayload(t *testing.T) {
-	_, sockPath := startTestBroker(t, nil)
+	broker, sockPath := startTestBroker(t, nil)
 
 	params := map[string]any{
 		"summary":   "Implement the feature",
 		"commitMsg": "feat(runner): implement gm_ transport (173)",
+		"prTitle":   "feat: implement gm_ transport",
+		"prBody":    "Closes #173",
 	}
 	result := call(t, sockPath, "gm_dev_done", "c1", params)
 
@@ -213,25 +215,54 @@ func TestDevDone_ValidPayload(t *testing.T) {
 	if echo["commitMsg"] != params["commitMsg"] {
 		t.Errorf("echo.commitMsg: got %v, want %v", echo["commitMsg"], params["commitMsg"])
 	}
+	if echo["prTitle"] != params["prTitle"] {
+		t.Errorf("echo.prTitle: got %v, want %v", echo["prTitle"], params["prTitle"])
+	}
+	if echo["prBody"] != params["prBody"] {
+		t.Errorf("echo.prBody: got %v, want %v", echo["prBody"], params["prBody"])
+	}
+
+	// Verify params are stored in the broker.
+	stored, ok := broker.DevDoneResult()
+	if !ok {
+		t.Fatal("DevDoneResult: expected stored params, got false")
+	}
+	if stored.Summary != "Implement the feature" {
+		t.Errorf("stored.Summary: got %q, want %q", stored.Summary, "Implement the feature")
+	}
+	if stored.PrTitle != "feat: implement gm_ transport" {
+		t.Errorf("stored.PrTitle: got %q", stored.PrTitle)
+	}
 }
 
 // TestDevDone_MissingField rejects a payload that omits required fields.
 func TestDevDone_MissingField(t *testing.T) {
-	_, sockPath := startTestBroker(t, nil)
-
-	result := call(t, sockPath, "gm_dev_done", "c1", map[string]any{"summary": "ok"})
-
-	if result["ok"] != false {
-		t.Errorf("ok: got %v, want false", result["ok"])
+	cases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{"missing commitMsg", map[string]any{"summary": "ok", "prTitle": "T", "prBody": "B"}},
+		{"missing summary", map[string]any{"commitMsg": "fix: (1)", "prTitle": "T", "prBody": "B"}},
+		{"missing prTitle", map[string]any{"summary": "ok", "commitMsg": "fix: (1)", "prBody": "B"}},
+		{"missing prBody", map[string]any{"summary": "ok", "commitMsg": "fix: (1)", "prTitle": "T"}},
 	}
-	if result["code"] != "SCHEMA_INVALID" {
-		t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, sockPath := startTestBroker(t, nil)
+			result := call(t, sockPath, "gm_dev_done", "c1", tc.params)
+			if result["ok"] != false {
+				t.Errorf("ok: got %v, want false", result["ok"])
+			}
+			if result["code"] != "SCHEMA_INVALID" {
+				t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
+			}
+		})
 	}
 }
 
-// TestDevDone_NoSideEffect verifies that a stub call does not create files, git
-// commits, or any other observable mutation.
-func TestDevDone_NoSideEffect(t *testing.T) {
+// TestDevDone_NoFileSystemSideEffect verifies that a gm_dev_done call does not
+// create files or any file-system mutations (params are stored in memory only).
+func TestDevDone_NoFileSystemSideEffect(t *testing.T) {
 	dir := t.TempDir()
 	before, _ := os.ReadDir(dir)
 
@@ -239,11 +270,22 @@ func TestDevDone_NoSideEffect(t *testing.T) {
 	call(t, sockPath, "gm_dev_done", "c1", map[string]any{
 		"summary":   "done",
 		"commitMsg": "feat: done (001)",
+		"prTitle":   "feat: done",
+		"prBody":    "Closes #1",
 	})
 
 	after, _ := os.ReadDir(dir)
 	if len(before) != len(after) {
 		t.Errorf("unexpected file system change: %d entries before, %d after", len(before), len(after))
+	}
+}
+
+// TestDevDone_ResultAbsentBeforeCall verifies that DevDoneResult returns false
+// before gm_dev_done has been called.
+func TestDevDone_ResultAbsentBeforeCall(t *testing.T) {
+	broker, _ := startTestBroker(t, nil)
+	if _, ok := broker.DevDoneResult(); ok {
+		t.Error("DevDoneResult: expected false before any gm_dev_done call")
 	}
 }
 

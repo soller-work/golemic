@@ -2,16 +2,19 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"golemic/internal/agent"
 	"golemic/internal/cbmbroker"
+	"golemic/internal/eventlog"
 	"golemic/internal/gmbroker"
 	"golemic/internal/prompt"
 	"golemic/internal/telemetry"
@@ -43,9 +46,11 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 			cbmEnabled = true
 		}
 	}
+	var retryGMB *gmbroker.Broker
 	gmSockPath := filepath.Join(runsDir, r.runID, "gm-dev-retry.sock")
-	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath, "dev", devWorktreePath); ok {
-		defer gmb.Shutdown()
+	if b, gmEnv, ok := r.startGMForRole(gmSockPath, "dev", devWorktreePath); ok {
+		retryGMB = b
+		defer retryGMB.Shutdown()
 		brokerEnv = append(brokerEnv, gmEnv...)
 	}
 
@@ -96,6 +101,21 @@ func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.
 		return outcomeDevFailed
 	}
 
+	// Dev acceptance gate: when broker is running, agent must call gm_dev_done.
+	if retryGMB != nil {
+		devDone, ok := retryGMB.DevDoneResult()
+		if !ok {
+			endSpan(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: dev agent did not call gm_dev_done\n")
+			return outcomeDevFailed
+		}
+		if err := r.commitAndForcePush(devWorktreePath, *devDone); err != nil {
+			endSpan(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
+			return outcomeDevFailed
+		}
+	}
+
 	endSpan(telemetry.StatusOK, nil)
 	return outcomeSuccess
 }
@@ -124,8 +144,10 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 			cbmEnabled = true
 		}
 	}
+	var gmb *gmbroker.Broker
 	gmSockPath := filepath.Join(runsDir, r.runID, "gm-dev.sock")
-	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath, "dev", devWorktreePath); ok {
+	if b, gmEnv, ok := r.startGMForRole(gmSockPath, "dev", devWorktreePath); ok {
+		gmb = b
 		defer gmb.Shutdown()
 		brokerEnv = append(brokerEnv, gmEnv...)
 	}
@@ -206,8 +228,102 @@ func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Durat
 		return outcomeDevFailed
 	}
 
+	// Dev acceptance gate: when broker is running, agent must call gm_dev_done.
+	// The runner then performs git commit + push + PR creation using the supplied params.
+	if gmb != nil {
+		devDone, ok := gmb.DevDoneResult()
+		if !ok {
+			endSpan(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: dev agent did not call gm_dev_done\n")
+			return outcomeDevFailed
+		}
+		if err := r.commitPushAndOpenPR(devWorktreePath, eventLogPath, *devDone); err != nil {
+			endSpan(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
+			return outcomeDevFailed
+		}
+	}
+
 	endSpan(telemetry.StatusOK, nil)
 	return outcomeSuccess
+}
+
+// commitPushAndOpenPR stages all changes, commits, pushes the branch, and opens
+// a GitHub PR. It then writes a pr_opened event to the event log.
+func (r *Runner) commitPushAndOpenPR(devWT, eventLogPath string, devDone gmbroker.DevDoneParams) error {
+	if _, err := r.executor.RunInDir(devWT, "git", "add", "-A"); err != nil {
+		return fmt.Errorf("git add -A: %w", err)
+	}
+	if _, err := r.executor.RunInDir(devWT, "git", "commit", "-m", devDone.CommitMsg); err != nil {
+		return fmt.Errorf("git commit: %w", err)
+	}
+	if _, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		devWT,
+		"git", "push", "--set-upstream", "origin", r.branchName,
+	); err != nil {
+		return fmt.Errorf("git push: %w", err)
+	}
+	out, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		devWT,
+		"gh", "pr", "create", "--title", devDone.PrTitle, "--body", devDone.PrBody,
+	)
+	if err != nil {
+		return fmt.Errorf("gh pr create: %w", err)
+	}
+	prURL := strings.TrimSpace(out)
+	prNumber := parsePRNumber(prURL)
+	if prNumber == "" {
+		return fmt.Errorf("failed to parse PR number from: %s", prURL)
+	}
+	w, err := eventlog.NewWriter(eventLogPath)
+	if err != nil {
+		return fmt.Errorf("open event log: %w", err)
+	}
+	defer w.Close() //nolint:errcheck
+	payload, _ := json.Marshal(map[string]string{
+		"prNumber": prNumber,
+		"url":      prURL,
+		"branch":   r.branchName,
+	})
+	return w.Write(eventlog.Event{
+		Type:    eventlog.EventPROpened,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   r.runID,
+		TurnID:  r.turnCounter,
+		Payload: payload,
+	})
+}
+
+// commitAndForcePush stages all changes, commits, and force-pushes the branch.
+// Used for dev-retry turns where the PR is already open.
+func (r *Runner) commitAndForcePush(devWT string, devDone gmbroker.DevDoneParams) error {
+	if _, err := r.executor.RunInDir(devWT, "git", "add", "-A"); err != nil {
+		return fmt.Errorf("git add -A: %w", err)
+	}
+	if _, err := r.executor.RunInDir(devWT, "git", "commit", "-m", devDone.CommitMsg); err != nil {
+		return fmt.Errorf("git commit: %w", err)
+	}
+	if _, err := r.executor.RunWithEnvInDir(
+		map[string]string{"GH_TOKEN": r.creds.DevToken()},
+		devWT,
+		"git", "push", "--force-with-lease",
+	); err != nil {
+		return fmt.Errorf("git push: %w", err)
+	}
+	return nil
+}
+
+// parsePRNumber extracts the PR number from a GitHub PR URL.
+func parsePRNumber(prURL string) string {
+	if idx := strings.LastIndex(prURL, "/"); idx >= 0 {
+		candidate := prURL[idx+1:]
+		if _, err := strconv.Atoi(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // startCBMForRole indexes the worktree and starts the CBM broker.

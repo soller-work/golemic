@@ -44,6 +44,9 @@ type Broker struct {
 	once       sync.Once
 	cachedBody string
 	fetchErr   error
+
+	devDoneMu sync.Mutex
+	devDone   *DevDoneParams
 }
 
 // gmRequest is the payload the pi extension sends for each tool call.
@@ -168,7 +171,7 @@ func (b *Broker) dispatch(req gmRequest) json.RawMessage {
 	case "gm_slice_get":
 		return b.handleSliceGet()
 	case "gm_dev_done":
-		return handleDevDone(req.Params)
+		return b.handleDevDone(req.Params)
 	case "gm_review_submit":
 		return handleReviewSubmit(req.Params)
 	case "gm_project_check":
@@ -202,9 +205,11 @@ func (b *Broker) handleSliceGet() json.RawMessage {
 type DevDoneParams struct {
 	Summary   string `json:"summary"`
 	CommitMsg string `json:"commitMsg"`
+	PrTitle   string `json:"prTitle"`
+	PrBody    string `json:"prBody"`
 }
 
-func handleDevDone(raw json.RawMessage) json.RawMessage {
+func (b *Broker) handleDevDone(raw json.RawMessage) json.RawMessage {
 	var p DevDoneParams
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return errResult("SCHEMA_INVALID", "gm_dev_done: "+err.Error())
@@ -215,8 +220,29 @@ func handleDevDone(raw json.RawMessage) json.RawMessage {
 	if p.CommitMsg == "" {
 		return errResult("SCHEMA_INVALID", "gm_dev_done: commitMsg is required")
 	}
+	if p.PrTitle == "" {
+		return errResult("SCHEMA_INVALID", "gm_dev_done: prTitle is required")
+	}
+	if p.PrBody == "" {
+		return errResult("SCHEMA_INVALID", "gm_dev_done: prBody is required")
+	}
+	b.devDoneMu.Lock()
+	b.devDone = &p
+	b.devDoneMu.Unlock()
 	out, _ := json.Marshal(map[string]any{"ok": true, "echo": p})
 	return json.RawMessage(out)
+}
+
+// DevDoneResult returns the stored DevDoneParams if gm_dev_done was called
+// successfully during this broker's lifetime, and false otherwise.
+func (b *Broker) DevDoneResult() (*DevDoneParams, bool) {
+	b.devDoneMu.Lock()
+	p := b.devDone
+	b.devDoneMu.Unlock()
+	if p == nil {
+		return nil, false
+	}
+	return p, true
 }
 
 // ReviewSubmitParams is the expected payload for gm_review_submit.
