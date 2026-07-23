@@ -2,14 +2,13 @@ package runner
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"golemic/internal/agent"
 )
 
-// TestRunnerEnv_CredTokensInjected_Dev verifies that GOLEMIC_DEV_TOKEN and
-// GOLEMIC_REVIEWER_TOKEN are present in the dev agent subprocess environment.
+// TestRunnerEnv_CredTokensInjected_Dev verifies that DevToken and ReviewerToken
+// are set in the dev agent RoleConfig so newPiCmd injects them as GOLEMIC_*_TOKEN env vars.
 func TestRunnerEnv_CredTokensInjected_Dev(t *testing.T) {
 	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_test_token")
 	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_test_token")
@@ -34,12 +33,16 @@ func TestRunnerEnv_CredTokensInjected_Dev(t *testing.T) {
 		t.Fatalf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
 
-	assertEnvContains(t, "dev", capturedDevCfg.Env, "GOLEMIC_DEV_TOKEN", "ghp_dev_test_token")
-	assertEnvContains(t, "dev", capturedDevCfg.Env, "GOLEMIC_REVIEWER_TOKEN", "ghp_rev_test_token")
+	if capturedDevCfg.DevToken != "ghp_dev_test_token" {
+		t.Errorf("dev RoleConfig.DevToken = %q, want %q", capturedDevCfg.DevToken, "ghp_dev_test_token")
+	}
+	if capturedDevCfg.ReviewerToken != "ghp_rev_test_token" {
+		t.Errorf("dev RoleConfig.ReviewerToken = %q, want %q", capturedDevCfg.ReviewerToken, "ghp_rev_test_token")
+	}
 }
 
-// TestRunnerEnv_CredTokensInjected_Reviewer verifies that GOLEMIC_DEV_TOKEN and
-// GOLEMIC_REVIEWER_TOKEN are present in the reviewer agent subprocess environment.
+// TestRunnerEnv_CredTokensInjected_Reviewer verifies that DevToken and ReviewerToken
+// are set in the reviewer agent RoleConfig so newPiCmd injects them as GOLEMIC_*_TOKEN env vars.
 func TestRunnerEnv_CredTokensInjected_Reviewer(t *testing.T) {
 	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_test_token")
 	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_test_token")
@@ -64,21 +67,10 @@ func TestRunnerEnv_CredTokensInjected_Reviewer(t *testing.T) {
 		t.Fatalf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
 
-	assertEnvContains(t, "reviewer", capturedRevCfg.Env, "GOLEMIC_DEV_TOKEN", "ghp_dev_test_token")
-	assertEnvContains(t, "reviewer", capturedRevCfg.Env, "GOLEMIC_REVIEWER_TOKEN", "ghp_rev_test_token")
-}
-
-func assertEnvContains(t *testing.T, role string, env []string, key, wantVal string) {
-	t.Helper()
-	want := key + "=" + wantVal
-	for _, e := range env {
-		if e == want {
-			return
-		}
-		if strings.HasPrefix(e, key+"=") {
-			t.Errorf("role %q: %s=%q, want %q", role, key, strings.TrimPrefix(e, key+"="), wantVal)
-			return
-		}
+	if capturedRevCfg.DevToken != "ghp_dev_test_token" {
+		t.Errorf("reviewer RoleConfig.DevToken = %q, want %q", capturedRevCfg.DevToken, "ghp_dev_test_token")
 	}
-	t.Errorf("role %q: %s not found in Env %v", role, key, env)
+	if capturedRevCfg.ReviewerToken != "ghp_rev_test_token" {
+		t.Errorf("reviewer RoleConfig.ReviewerToken = %q, want %q", capturedRevCfg.ReviewerToken, "ghp_rev_test_token")
+	}
 }

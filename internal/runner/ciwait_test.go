@@ -1011,3 +1011,60 @@ func TestPollCIChecks_RequireCIChecksTrue_AlwaysNoChecksTimesOut_AC005(t *testin
 		t.Errorf("result: got %q, want %q (empty results must timeout when require_ci_checks=true)", result, "timeout")
 	}
 }
+
+// TestRunDevCIRetryAgent_CredTokensInjected verifies that DevToken and ReviewerToken
+// are set in the RoleConfig passed to the CI-retry dev agent, so nested golemic
+// subcommands (e.g. golemic slice) can call credentials.Load without sourcing rc files.
+func TestRunDevCIRetryAgent_CredTokensInjected(t *testing.T) {
+	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_pin_test")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_pin_test")
+
+	homeDir, repoRoot, project := setupRunnerTest(t)
+	creds := loadTestCreds(t, homeDir, project)
+
+	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
+	guidelinesDir := filepath.Join(golemicCfgDir, "guidelines")
+	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	agentsDir := filepath.Join(golemicCfgDir, "agents")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r := New(&fakeExecutor{}, homeDir, repoRoot, 42)
+	r.repoRoot = repoRoot
+	r.project = project
+	r.runID = "issue-42-ci-creds"
+	r.branchName = "golemic/issue-42"
+	r.creds = creds
+	r.cfg = &config.Config{VerifyCommand: "go test"}
+	r.issue = &issueData{Number: 42, Title: "T"}
+
+	var capturedCfg agent.RoleConfig
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		capturedCfg = cfg
+		return 0, agent.TranscriptPaths{}, nil
+	})
+
+	golemicDir := filepath.Join(homeDir, ".golemic", project)
+	logPath := filepath.Join(golemicDir, "runs", "issue-42-ci-creds", "events.jsonl")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, "### test\n```\nfailed\n```\n")
+
+	if capturedCfg.DevToken != "ghp_dev_pin_test" {
+		t.Errorf("CI-retry RoleConfig.DevToken = %q, want %q", capturedCfg.DevToken, "ghp_dev_pin_test")
+	}
+	if capturedCfg.ReviewerToken != "ghp_rev_pin_test" {
+		t.Errorf("CI-retry RoleConfig.ReviewerToken = %q, want %q", capturedCfg.ReviewerToken, "ghp_rev_pin_test")
+	}
+}

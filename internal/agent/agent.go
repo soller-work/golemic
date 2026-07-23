@@ -153,6 +153,8 @@ type RoleConfig struct {
 	RunID             string        // golemic run identifier, set as GOLEMIC_RUN_ID
 	EventLogPath      string        // path to the JSONL event log, set as GOLEMIC_EVENT_LOG
 	GHToken           string        // role-specific GitHub token, set as GH_TOKEN
+	DevToken          string        // golemic dev token, set as GOLEMIC_DEV_TOKEN
+	ReviewerToken     string        // golemic reviewer token, set as GOLEMIC_REVIEWER_TOKEN
 	GolemicBinaryPath string        // path to the golemic binary; its directory is prepended to PATH
 	Model             string        // model identifier passed to --model
 	Timeout           time.Duration // maximum wall-clock time for the subprocess
@@ -437,6 +439,8 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir s
 		"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
 		"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
 		"GH_TOKEN="+cfg.GHToken,
+		"GOLEMIC_DEV_TOKEN="+cfg.DevToken,
+		"GOLEMIC_REVIEWER_TOKEN="+cfg.ReviewerToken,
 		"PATH="+agentPath,
 		"PI_CODING_AGENT_DIR="+golemicPiDir,
 	)

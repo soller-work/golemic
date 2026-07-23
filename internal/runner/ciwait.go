@@ -435,6 +435,8 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		EventLogPath:      eventLogPath,
 		TurnID:            r.turnCounter,
 		GHToken:           r.creds.DevToken(),
+		DevToken:          r.creds.DevToken(),
+		ReviewerToken:     r.creds.ReviewerToken(),
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,

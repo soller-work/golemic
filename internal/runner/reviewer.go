@@ -238,12 +238,14 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		EventLogPath:      eventLogPath,
 		TurnID:            r.turnCounter,
 		GHToken:           r.creds.ReviewerToken(),
+		DevToken:          r.creds.DevToken(),
+		ReviewerToken:     r.creds.ReviewerToken(),
 		GolemicBinaryPath: golemicBinaryPath,
 		Model:             model,
 		Timeout:           timeout,
 		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
 		RunsDir:           runsDir,
-		Env:               r.credEnv(brokerEnv),
+		Env:               brokerEnv,
 	})
 	stopFollow()
 
