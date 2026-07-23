@@ -2,15 +2,12 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
 )
 
@@ -106,46 +103,8 @@ func TestRunSubmitReview_ApprovedSuccess(t *testing.T) { //nolint:cyclop,gocogni
 		t.Errorf("stderr should be empty, got: %q", stderr.String())
 	}
 
-	// Verify exactly one review_submitted event with correct fields.
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	ev := events[0]
-	if ev.Type != eventlog.EventReviewSubmitted {
-		t.Errorf("Type: got %q, want %q", ev.Type, eventlog.EventReviewSubmitted)
-	}
-	if ev.RunID != "run-review-1" {
-		t.Errorf("RunID: got %q, want %q", ev.RunID, "run-review-1")
-	}
-	if _, err := time.Parse(time.RFC3339, ev.Ts); err != nil {
-		t.Errorf("Ts is not valid RFC3339: %q (err: %v)", ev.Ts, err)
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-		t.Fatalf("failed to unmarshal payload: %v", err)
-	}
-	if payload["verdict"] != "approved" {
-		t.Errorf("verdict: got %q, want %q", payload["verdict"], "approved")
-	}
-	if payload["body"] != "LGTM" {
-		t.Errorf("body: got %q, want %q", payload["body"], "LGTM")
-	}
-	if payload["prNumber"] != float64(123) {
-		t.Errorf("prNumber: got %v, want %v", payload["prNumber"], 123)
-	}
-	if payload["mergeConfidence"] != "high" {
-		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "high")
-	}
-	if payload["reviewId"] != reviewID {
-		t.Errorf("reviewId: got %q, want %q", payload["reviewId"], reviewID)
-	}
-	if payload["inlineCommentCount"] != float64(0) {
-		t.Errorf("inlineCommentCount: got %v, want 0", payload["inlineCommentCount"])
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("submit-review should no longer write review_submitted")
 	}
 }
 
@@ -177,29 +136,8 @@ func TestRunSubmitReview_ChangesRequestedSuccess(t *testing.T) { //nolint:cyclop
 		t.Errorf("stderr should be empty, got: %q", stderr.String())
 	}
 
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
-		t.Fatalf("failed to unmarshal payload: %v", err)
-	}
-	if payload["verdict"] != "changes_requested" {
-		t.Errorf("verdict: got %q, want %q", payload["verdict"], "changes_requested")
-	}
-	if payload["mergeConfidence"] != "low" {
-		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "low")
-	}
-	if payload["reviewId"] != reviewID {
-		t.Errorf("reviewId: got %q, want %q", payload["reviewId"], reviewID)
-	}
-	if payload["inlineCommentCount"] != float64(2) {
-		t.Errorf("inlineCommentCount: got %v, want 2", payload["inlineCommentCount"])
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("submit-review should no longer write review_submitted")
 	}
 }
 
@@ -284,14 +222,9 @@ func TestRunSubmitReview_GhFailureNoEvent(t *testing.T) {
 	if !strings.Contains(stderr.String(), "PR not found or access denied") {
 		t.Errorf("stderr should include gh error message, got: %q", stderr.String())
 	}
-	// No event written on failure.
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatalf("failed to read event log: %v", err)
-	}
-	if len(events) != 0 {
-		t.Errorf("expected 0 events, got %d", len(events))
+	// No event should be written on failure.
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("event log should not be created on failure")
 	}
 }
 
@@ -492,11 +425,11 @@ func TestRunSubmitReview_EventLogPathInvalidAborts(t *testing.T) {
 	if got == 0 {
 		t.Fatalf("exit code: got 0, want != 0")
 	}
-	if !strings.Contains(stderr.String(), "Failed to write event") {
-		t.Errorf("stderr missing 'Failed to write event', got: %q", stderr.String())
+	if !strings.Contains(stderr.String(), "failed to get repo context") {
+		t.Errorf("stderr missing repo context error, got: %q", stderr.String())
 	}
-	if called {
-		t.Error("gh command should NOT have been called when event log path is invalid")
+	if !called {
+		t.Error("gh command should have been called to resolve repo context")
 	}
 }
 
@@ -617,23 +550,8 @@ func TestRunSubmitReview_MergeConfidenceLow_WrittenToPayload(t *testing.T) { //n
 	if got != 0 {
 		t.Fatalf("exit code: got %d, want 0; stderr: %s", got, stderr.String())
 	}
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["mergeConfidence"] != "low" {
-		t.Errorf("mergeConfidence: got %q, want %q", payload["mergeConfidence"], "low")
-	}
-	if payload["reviewId"] != "PRR_mc_low" {
-		t.Errorf("reviewId: got %q, want %q", payload["reviewId"], "PRR_mc_low")
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("submit-review should no longer write review_submitted")
 	}
 }
 
@@ -690,23 +608,8 @@ func TestRunSubmitReview_ExistingPendingReviewDiscovered(t *testing.T) { //nolin
 		t.Errorf("addPullRequestReview should NOT be called when existing pending review found; called %d time(s)", createCalled)
 	}
 
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	var payload map[string]interface{}
-	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["reviewId"] != "PRR_existing" {
-		t.Errorf("reviewId: got %q, want PRR_existing", payload["reviewId"])
-	}
-	if payload["inlineCommentCount"] != float64(3) {
-		t.Errorf("inlineCommentCount: got %v, want 3", payload["inlineCommentCount"])
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("submit-review should no longer write review_submitted")
 	}
 }
 
@@ -760,5 +663,8 @@ func TestRunSubmitReview_NoGhPrReviewCall(t *testing.T) { //nolint:cyclop
 	}
 	if ghPrReviewCalled {
 		t.Error("gh pr review must not be called; submit-review must use GraphQL exclusively (BR-001, BR-008)")
+	}
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("submit-review should no longer write review_submitted")
 	}
 }

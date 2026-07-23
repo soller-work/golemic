@@ -1,21 +1,16 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"golemic/internal/claim"
-	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
-	"golemic/internal/repo"
 )
 
 // runClaimIssue implements `golemic claim-issue --number N`.
@@ -41,8 +36,9 @@ func runClaimIssue(args []string, stdout, stderr io.Writer, getenv func(string) 
 		return 1
 	}
 
-	devLogin, devToken, ok := resolveClaimCredentials(executor, stderr)
-	if !ok {
+	devLogin, devToken, err := claim.ResolveCredentials(executor)
+	if err != nil {
+		fmt.Fprintf(stderr, "config/credentials error: %v\n", err)
 		return 1
 	}
 
@@ -99,62 +95,6 @@ func parseClaimEnvVars(getenv func(string) string, stderr io.Writer) (runID, eve
 		return "", "", 0, false
 	}
 	return runID, eventLogPath, n, true
-}
-
-// resolveClaimCredentials loads config and credentials, then resolves the dev-bot
-// GitHub login via gh api user. Returns (devLogin, devToken, ok).
-func resolveClaimCredentials(executor preflight.Executor, stderr io.Writer) (devLogin, devToken string, ok bool) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: failed to get home directory: %v\n", err)
-		return "", "", false
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: failed to get working directory: %v\n", err)
-		return "", "", false
-	}
-
-	repoRoot, err := repo.ResolveHostRepo(executor, cwd)
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: %v\n", err)
-		return "", "", false
-	}
-
-	cfg, err := config.Load(repoRoot)
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: %v\n", err)
-		return "", "", false
-	}
-
-	creds, err := credentials.NewLoader(homeDir).Load(cfg.Project)
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: %v\n", err)
-		return "", "", false
-	}
-
-	token := creds.DevToken()
-	userOut, err := executor.RunWithEnv(
-		map[string]string{"GH_TOKEN": token},
-		"gh", "api", "user",
-	)
-	if err != nil {
-		fmt.Fprintf(stderr, "gh api user failed: %v\n", err)
-		return "", "", false
-	}
-	var ghUser struct {
-		Login string `json:"login"`
-	}
-	if err := json.Unmarshal([]byte(userOut), &ghUser); err != nil {
-		fmt.Fprintf(stderr, "gh api user: failed to parse response: %v\n", err)
-		return "", "", false
-	}
-	if ghUser.Login == "" {
-		fmt.Fprintln(stderr, "gh api user: login field is empty")
-		return "", "", false
-	}
-	return ghUser.Login, token, true
 }
 
 // writeIssueClaimedEvent writes an issue_claimed event to the event log.
