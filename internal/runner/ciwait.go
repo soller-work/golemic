@@ -422,6 +422,18 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 	}
 
 	r.turnCounter++ // CI retry dev agent gets its own turn
+
+	var ciGMEnv []string
+	gmSockPath := filepath.Join(runsDir, r.runID, "gm-ci-retry.sock")
+	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath); ok {
+		defer gmb.Shutdown()
+		ciGMEnv = gmEnv
+	}
+	ciToolAllowlist := []string{"read", "bash", "write", "edit"}
+	if len(ciGMEnv) > 0 {
+		ciToolAllowlist = append(ciToolAllowlist, gmToolNames...)
+	}
+
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
@@ -441,8 +453,9 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		Model:             model,
 		Timeout:           timeout,
 		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		ToolAllowlist:     ciToolAllowlist,
 		RunsDir:           runsDir,
+		Env:               ciGMEnv,
 	})
 
 	if err != nil {

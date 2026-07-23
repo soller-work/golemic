@@ -19,6 +19,7 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
+	"golemic/internal/gmbroker"
 )
 
 // hasCBMEnv reports whether any entry in env is a CBM_* variable.
@@ -83,16 +84,24 @@ func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner,
 	return r, golemicDir
 }
 
-// injectNoopBroker overrides startCBMBrokerFn to return an error so no real
-// npx process is started. The test remains focused on the executor-level
-// behavior without a real MCP process.
+// injectNoopBroker overrides broker starters so no real child processes or
+// sockets are started. These tests remain focused on CBM behavior; the gm_
+// broker is disabled here so its tool allowlist additions cannot leak into CBM
+// assertions when the test environment has working GitHub credentials.
 func injectNoopBroker(t *testing.T) {
 	t.Helper()
-	orig := startCBMBrokerFn
+	origCBM := startCBMBrokerFn
 	startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.Broker, error) {
 		return nil, fmt.Errorf("noop broker: not started in tests")
 	}
-	t.Cleanup(func() { startCBMBrokerFn = orig })
+	origGM := startGMBrokerFn
+	startGMBrokerFn = func(sockPath string, issueNum int, devToken string) (*gmbroker.Broker, error) {
+		return nil, fmt.Errorf("noop gm broker: not started in CBM tests")
+	}
+	t.Cleanup(func() {
+		startCBMBrokerFn = origCBM
+		startGMBrokerFn = origGM
+	})
 }
 
 // startFakeBroker starts a minimal fake MCP broker backed by io.Pipe pairs so

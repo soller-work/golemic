@@ -194,6 +194,11 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 			cbmEnabled = true
 		}
 	}
+	gmSockPath := filepath.Join(runsDir, r.runID, "gm-reviewer.sock")
+	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath); ok {
+		defer gmb.Shutdown()
+		brokerEnv = append(brokerEnv, gmEnv...)
+	}
 
 	// Get PR number from pr_opened event
 	prNumber, err := r.getPRNumber(eventLogPath)
@@ -229,6 +234,13 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
+	reviewerTools := []string{"read", "bash", "write", "edit"}
+	for _, e := range brokerEnv {
+		if len(e) > len("GOLEMIC_GM_SOCK=") && e[:len("GOLEMIC_GM_SOCK=")] == "GOLEMIC_GM_SOCK=" {
+			reviewerTools = append(reviewerTools, gmToolNames...)
+			break
+		}
+	}
 	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
 		Role:              "reviewer",
 		SystemPromptFile:  systemPromptFile,
@@ -244,7 +256,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		Model:             model,
 		Timeout:           timeout,
 		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
+		ToolAllowlist:     reviewerTools,
 		RunsDir:           runsDir,
 		Env:               brokerEnv,
 	})

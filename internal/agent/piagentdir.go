@@ -20,15 +20,27 @@ func resolveLocalPiAgentDir() (string, error) {
 	return filepath.Join(home, ".pi", "agent"), nil
 }
 
+// checkLocalPiDir returns an error if localPiAgentDir does not exist or cannot
+// be stat'd, with a diagnostic message for the not-found case.
+func checkLocalPiDir(localPiAgentDir string) error {
+	_, err := os.Stat(localPiAgentDir)
+	if err == nil {
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return fmt.Errorf("pi agent dir not found at %s; pi must be installed (auto-install not yet supported)", localPiAgentDir)
+	}
+	return fmt.Errorf("agent: stat local pi agent dir %q: %w", localPiAgentDir, err)
+}
+
 // preparePiAgentDir ensures ~/.golemic/pi is seeded from localPiAgentDir and
-// returns the path to the golemic-owned agent dir. Idempotent and safe under
-// concurrent calls. Fails closed if localPiAgentDir does not exist (BR-7).
-func preparePiAgentDir(localPiAgentDir string) (string, error) {
-	if _, err := os.Stat(localPiAgentDir); err != nil {
-		if os.IsNotExist(err) {
-			return "", fmt.Errorf("pi agent dir not found at %s; pi must be installed (auto-install not yet supported)", localPiAgentDir)
-		}
-		return "", fmt.Errorf("agent: stat local pi agent dir %q: %w", localPiAgentDir, err)
+// returns the path to the golemic-owned agent dir. If gmExtensionSrcDir is
+// non-empty and exists, the gm_ pi extension is provisioned at
+// ~/.golemic/pi/extensions/golemic. Idempotent and safe under concurrent
+// calls. Fails closed if localPiAgentDir does not exist (BR-7).
+func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error) {
+	if err := checkLocalPiDir(localPiAgentDir); err != nil {
+		return "", err
 	}
 
 	home, err := os.UserHomeDir()
@@ -58,11 +70,84 @@ func preparePiAgentDir(localPiAgentDir string) (string, error) {
 		}
 	}
 
+	if err := seedGMExtension(golemicPiDir, gmExtensionSrcDir); err != nil {
+		return "", err
+	}
+
 	if err := deriveSettings(localPiAgentDir, golemicPiDir); err != nil {
 		return "", err
 	}
 
 	return golemicPiDir, nil
+}
+
+// seedGMExtension provisions the golemic gm_ pi extension into golemicPiDir/extensions/golemic.
+// If gmExtensionSrcDir is empty or does not exist on disk, the call is a no-op.
+// When golemicPiDir/extensions is currently a symlink, it is replaced with a real directory
+// so the golemic extension can be added without modifying the user's pi agent dir.
+func seedGMExtension(golemicPiDir, gmExtensionSrcDir string) error {
+	if gmExtensionSrcDir == "" {
+		return nil
+	}
+	if _, err := os.Stat(gmExtensionSrcDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("agent: stat gm extension source %q: %w", gmExtensionSrcDir, err)
+	}
+	extDir := filepath.Join(golemicPiDir, "extensions")
+	if err := expandExtSymlink(extDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(extDir, 0755); err != nil {
+		return fmt.Errorf("agent: create extensions dir %q: %w", extDir, err)
+	}
+	return ensureSymlink(filepath.Join(extDir, "golemic"), gmExtensionSrcDir)
+}
+
+// expandExtSymlink converts extDir from a symlink to a real directory,
+// relinking each existing extension individually so golemic can add its own
+// extension without writing into the user's pi agent dir.
+func expandExtSymlink(extDir string) error {
+	fi, err := os.Lstat(extDir)
+	if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		return nil
+	}
+	return replaceSymlinkWithDir(extDir)
+}
+
+// replaceSymlinkWithDir removes a symlink at extDir, creates a real directory,
+// and recreates individual symlinks for each entry in the original target.
+func replaceSymlinkWithDir(extDir string) error {
+	target, _ := os.Readlink(extDir)
+	if err := os.Remove(extDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("agent: remove extensions symlink %q: %w", extDir, err)
+	}
+	if err := os.MkdirAll(extDir, 0755); err != nil {
+		return fmt.Errorf("agent: create extensions dir %q: %w", extDir, err)
+	}
+	return relinkExtensions(extDir, target)
+}
+
+// relinkExtensions creates symlinks in extDir for each entry in srcDir,
+// skipping the "golemic" entry (handled by seedGMExtension).
+func relinkExtensions(extDir, srcDir string) error {
+	if srcDir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return nil // srcDir unreadable; skip without error
+	}
+	for _, e := range entries {
+		if e.Name() == "golemic" {
+			continue
+		}
+		if err := ensureSymlink(filepath.Join(extDir, e.Name()), filepath.Join(srcDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ensureSymlink creates dst as a symlink pointing to target.
