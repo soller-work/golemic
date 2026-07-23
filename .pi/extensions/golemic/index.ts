@@ -97,8 +97,8 @@ export default function (pi: { registerTool: (def: object) => void }) {
     label: "Signal dev work complete",
     description:
       "Signal that dev work is complete. " +
-      "Required fields: summary (string), commitMsg (string). " +
-      "Returns { ok: true, echo: { summary, commitMsg } } or a schema error.",
+      "Required fields: summary (string), commitMsg (string), prTitle (string), prBody (string). " +
+      "Returns { ok: true, accepted: true } or a schema/gate error.",
     parameters: {
       type: "object",
       properties: {
@@ -107,8 +107,13 @@ export default function (pi: { registerTool: (def: object) => void }) {
           type: "string",
           description: "Conventional commit message: type(scope): summary (NNN).",
         },
+        prTitle: { type: "string", description: "Concise pull-request title." },
+        prBody: {
+          type: "string",
+          description: "Pull-request description; must include `Closes #<issue>`.",
+        },
       },
-      required: ["summary", "commitMsg"],
+      required: ["summary", "commitMsg", "prTitle", "prBody"],
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
