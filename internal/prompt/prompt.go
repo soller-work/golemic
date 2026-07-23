@@ -32,6 +32,7 @@ type devTemplateData struct {
 	VerifyCommand  string
 	Guidelines     string
 	CodebaseMemory bool
+	Directives     string
 }
 
 // reviewerTemplateData holds the template variables for the reviewer user prompt.
@@ -41,6 +42,7 @@ type reviewerTemplateData struct {
 	VerifyCommand  string
 	Guidelines     string
 	CodebaseMemory bool
+	Directives     string
 }
 
 // workingDirDirective is injected into every runner prompt before ## Instructions.
@@ -55,15 +57,10 @@ const editOverWriteDirective = "## File Edits\n\nPrefer the `edit` tool over `wr
 // Nudges the dev agent to avoid re-reading unchanged files at full length to keep token usage low.
 const noReReadDirective = "## File Re-reads\n\nKeep track of files you have already read during this run. Do **not** re-read an unchanged file in full — re-reading re-emits the whole file into the run context and grows tokens over a long run. If you only need part of a file, use a targeted `read` range (offset/limit) or a `golemic cbm` lookup instead. A fresh full read is correct when the file has changed since you last read it (e.g. after an `edit`, `write`, or a command that rewrote it)."
 
-const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
-
-**Title:** {{.Issue.Title}}
-
-**Branch:** {{.Branch}}
-
-**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
-
----
+// scaffoldFrame is the shared middle section of every renderer: Guidelines block,
+// optional Code Intelligence block, injected Directives, and the ## Instructions header.
+// Each renderer concatenates its unique header + scaffoldFrame + unique instruction steps.
+const scaffoldFrame = `---
 
 ## Guidelines
 
@@ -77,15 +74,21 @@ Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intell
 {{end}}
 ---
 
-` + workingDirDirective + `
-
-` + editOverWriteDirective + `
-
-` + noReReadDirective + `
+{{.Directives}}
 
 ---
 
-## Instructions
+## Instructions`
+
+const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
+
+**Title:** {{.Issue.Title}}
+
+**Branch:** {{.Branch}}
+
+**Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
+
+` + scaffoldFrame + `
 
 1. **First, fetch the authoritative task specification:** run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The output is either a structured JSON slice or the raw issue body — treat that output as the source of truth. Do not rely on any summary rendered in the issue's web UI.
 2. Understand the spec and the guidelines above.
@@ -106,25 +109,7 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 
 **Verification Command:** ` + "`" + `{{.VerifyCommand}}` + "`" + `
 
----
-
-## Guidelines
-
-{{.Guidelines}}
-{{if .CodebaseMemory}}
----
-
-## Code Intelligence
-
-Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intelligence tools and their arguments.
-{{end}}
----
-
-` + workingDirDirective + `
-
----
-
-## Instructions
+` + scaffoldFrame + `
 
 1. **First, fetch the authoritative task specification:** run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + `. The output is the source of truth for what the PR is supposed to do — do not rely on any summary rendered in the issue's web UI.
 2. Fetch the diff: run ` + "`" + `git diff origin/main...HEAD` + "`" + ` and ` + "`" + `golemic pr-view --pr {{.PRNumber}}` + "`" + `
@@ -161,6 +146,7 @@ func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath 
 		VerifyCommand:  verifyCommand,
 		Guidelines:     guidelines,
 		CodebaseMemory: cbmEnabled,
+		Directives:     workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
 	}
 
 	tmpl, err := template.New("dev").Parse(devUserTemplate)
@@ -197,6 +183,7 @@ func RenderReviewer(prNumber int, issue Issue, verifyCommand string, guidelinesP
 		VerifyCommand:  verifyCommand,
 		Guidelines:     guidelines,
 		CodebaseMemory: cbmEnabled,
+		Directives:     workingDirDirective,
 	}
 
 	tmpl, err := template.New("reviewer").Parse(reviewerUserTemplate)
@@ -221,6 +208,7 @@ type devRetryTemplateData struct {
 	VerifyCommand  string
 	Guidelines     string
 	CodebaseMemory bool
+	Directives     string
 }
 
 const devRetryUserTemplate = `# Dev Retry: Address Review Findings for Issue #{{.Issue.Number}}
@@ -247,29 +235,7 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 {{.FindingsJSON}}
 ` + "```" + `
 {{end}}
----
-
-## Guidelines
-
-{{.Guidelines}}
-{{if .CodebaseMemory}}
----
-
-## Code Intelligence
-
-Run ` + "`" + `golemic cbm help` + "`" + ` to discover available codebase-intelligence tools and their arguments.
-{{end}}
----
-
-` + workingDirDirective + `
-
-` + editOverWriteDirective + `
-
-` + noReReadDirective + `
-
----
-
-## Instructions
+` + scaffoldFrame + `
 
 1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
 2. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
@@ -300,6 +266,7 @@ func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, v
 		VerifyCommand:  verifyCommand,
 		Guidelines:     guidelines,
 		CodebaseMemory: cbmEnabled,
+		Directives:     workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
 	}
 
 	tmpl, err := template.New("devRetry").Parse(devRetryUserTemplate)
@@ -322,6 +289,8 @@ type devCIRetryTemplateData struct {
 	FailedCheckInfo string
 	VerifyCommand   string
 	Guidelines      string
+	CodebaseMemory  bool
+	Directives      string
 }
 
 const devCIRetryUserTemplate = `# CI Retry: Fix Failing Checks for Issue #{{.Issue.Number}}
@@ -340,25 +309,9 @@ The following CI checks failed on the PR. Fix the failures and push to the same 
 
 {{.FailedCheckInfo}}
 
----
+` + scaffoldFrame + `
 
-## Guidelines
-
-{{.Guidelines}}
-
----
-
-` + workingDirDirective + `
-
-` + editOverWriteDirective + `
-
-` + noReReadDirective + `
-
----
-
-## Instructions
-
-1. The failing checks above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue’s web UI.
+1. The failing checks above are the primary input for this retry. If you need the original task specification, run ` + "`" + `golemic slice --issue {{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
 2. Diagnose and fix the failing CI checks described above on branch ` + "`" + `{{.Branch}}` + "`" + `.
 3. Run the verification command locally: ` + "`" + `{{.VerifyCommand}}` + "`" + `
 4. Stage and commit your changes: ` + "`" + `git add -A && git commit -m "<meaningful message>"` + "`" + `
@@ -385,6 +338,8 @@ func RenderDevCIRetry(failedCheckInfo string, issue Issue, branch string, verify
 		FailedCheckInfo: failedCheckInfo,
 		VerifyCommand:   verifyCommand,
 		Guidelines:      guidelines,
+		CodebaseMemory:  false,
+		Directives:      workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
 	}
 
 	tmpl, err := template.New("devCIRetry").Parse(devCIRetryUserTemplate)
@@ -409,6 +364,8 @@ type devRebaseConflictResolveTemplateData struct {
 	ConflictedFiles []string
 	VerifyCommand   string
 	Guidelines      string
+	CodebaseMemory  bool
+	Directives      string
 }
 
 const devRebaseConflictResolveUserTemplate = `# Rebase Conflict Resolution: PR #{{.PRNumber}}
@@ -422,23 +379,7 @@ const devRebaseConflictResolveUserTemplate = `# Rebase Conflict Resolution: PR #
 **Conflicted Files:**
 {{range .ConflictedFiles}}- {{.}}
 {{end}}
----
-
-## Guidelines
-
-{{.Guidelines}}
-
----
-
-` + workingDirDirective + `
-
-` + editOverWriteDirective + `
-
-` + noReReadDirective + `
-
----
-
-## Instructions
+` + scaffoldFrame + `
 
 Resolve all rebase conflicts and complete the rebase. **Do NOT run ` + "`" + `golemic open-pr` + "`" + `, ` + "`" + `golemic submit-review` + "`" + `, or ` + "`" + `golemic emit` + "`" + ` during this turn.**
 
@@ -474,6 +415,8 @@ func RenderDevRebaseConflictResolve(prNumber int, branch, base string, conflicte
 		ConflictedFiles: conflictedFiles,
 		VerifyCommand:   verifyCommand,
 		Guidelines:      guidelines,
+		CodebaseMemory:  false,
+		Directives:      workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
 	}
 
 	tmpl, err := template.New("devRebaseConflictResolve").Parse(devRebaseConflictResolveUserTemplate)
