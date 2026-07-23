@@ -2280,3 +2280,324 @@ func TestRunMergePhase_ConflictPostVerificationFails_NotAncestor_AC004c(t *testi
 		t.Errorf("outcome: got %q, want %q (AC-004c)", outcome, outcomeMergeFailed)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Issue #176: "Head branch is out of date" auto-retry (mergeWithOutOfDateRetry)
+// ---------------------------------------------------------------------------
+
+// buildOODRunner creates a minimal Runner for mergeWithOutOfDateRetry tests.
+func buildOODRunner(t *testing.T, exec *fakeExecutor) *Runner {
+	t.Helper()
+	homeDir := t.TempDir()
+	project := "proj"
+	mkCredDir(t, homeDir, project)
+	creds := mustLoadCredsFromDir(t, homeDir, project)
+	r := &Runner{
+		executor:               exec,
+		issueNum:               50,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                homeDir,
+		issue:                  &issueData{},
+		cfg:                    &config.Config{Project: project},
+		creds:                  creds,
+		branchName:             "golemic/issue-50",
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
+	}
+	r.stderr = &strings.Builder{}
+	return r
+}
+
+// Regression 1: first merge returns OOD, second succeeds → pr_merged, no automerge_failed.
+func TestMergeWithOutOfDateRetry_OODThenSuccess_RecoversWithRetry(t *testing.T) { //nolint:cyclop,funlen,gocognit
+	mergeCall := 0
+	rebaseCalled := false
+	pushCalled := false
+	ciAPICalled := false
+
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "rebase" && args[1] == "origin/main" {
+				rebaseCalled = true
+				return "", nil
+			}
+			if name == "git" && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-retry\n", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && ghArgsMatch(args, "pr", "merge") {
+				mergeCall++
+				if mergeCall == 1 {
+					return "", fmt.Errorf("gh pr merge failed: GraphQL: Head branch is out of date. Review and try the merge again.")
+				}
+				return "sha-merged-ood", nil
+			}
+			if name == "git" && args[0] == "push" {
+				pushCalled = true
+				return "", nil
+			}
+			if isGHRepoViewNWO(args) {
+				return ciTestNWO + "\n", nil
+			}
+			if isGHCheckRunsAPI(args) {
+				ciAPICalled = true
+				return requiredVerifyCheckRunsJSON(), nil
+			}
+			if name == "gh" && ghArgsMatch(args, "pr", "comment") {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := buildOODRunner(t, exec)
+	var written []eventlog.Event
+	outcome := r.mergeWithOutOfDateRetry(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	var hasPRMerged, hasAutomergeFailed, hasOODRetry bool
+	for _, ev := range written {
+		switch ev.Type {
+		case eventlog.EventPRMerged:
+			hasPRMerged = true
+		case eventlog.EventAutomergeFailed:
+			hasAutomergeFailed = true
+		case eventlog.EventAutomergeOutOfDateRetry:
+			hasOODRetry = true
+		}
+	}
+	if !hasPRMerged {
+		t.Error("pr_merged event must be written on successful retry")
+	}
+	if hasAutomergeFailed {
+		t.Error("automerge_failed must not be written when retry succeeds")
+	}
+	if !hasOODRetry {
+		t.Error("automerge_out_of_date_retry event must be written before retry attempt")
+	}
+	if !rebaseCalled {
+		t.Error("git rebase must be called during retry re-sync")
+	}
+	if !pushCalled {
+		t.Error("git push must be called during retry re-sync")
+	}
+	if !ciAPICalled {
+		t.Error("CI check-runs API must be polled during retry re-sync")
+	}
+	if mergeCall != 2 {
+		t.Errorf("squashMerge call count: got %d, want 2", mergeCall)
+	}
+}
+
+// Regression 3: all merge attempts return OOD → budget exhausted → exactly one automerge_failed.
+func TestMergeWithOutOfDateRetry_AlwaysOOD_ExhaustsRetryBudget(t *testing.T) { //nolint:cyclop,funlen
+	const oodMsg = "gh pr merge failed: GraphQL: Head branch is out of date. Review and try the merge again."
+
+	mergeCallCount := 0
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && (args[0] == "fetch" || args[0] == "rebase") {
+				return "", nil
+			}
+			if name == "git" && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-always-ood\n", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && ghArgsMatch(args, "pr", "merge") {
+				mergeCallCount++
+				return "", fmt.Errorf("%s", oodMsg)
+			}
+			if name == "git" && args[0] == "push" {
+				return "", nil
+			}
+			if isGHRepoViewNWO(args) {
+				return ciTestNWO + "\n", nil
+			}
+			if isGHCheckRunsAPI(args) {
+				return requiredVerifyCheckRunsJSON(), nil
+			}
+			if name == "gh" && ghArgsMatch(args, "pr", "comment") {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := buildOODRunner(t, exec)
+	var written []eventlog.Event
+	outcome := r.mergeWithOutOfDateRetry(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+	var automergeFailedCount, prMergedCount int
+	for _, ev := range written {
+		switch ev.Type {
+		case eventlog.EventAutomergeFailed:
+			automergeFailedCount++
+		case eventlog.EventPRMerged:
+			prMergedCount++
+		}
+	}
+	if automergeFailedCount != 1 {
+		t.Errorf("automerge_failed count: got %d, want exactly 1", automergeFailedCount)
+	}
+	if prMergedCount > 0 {
+		t.Error("pr_merged must not be written when budget is exhausted")
+	}
+	if mergeCallCount != maxOutOfDateRetries {
+		t.Errorf("merge call count: got %d, want %d (maxOutOfDateRetries)", mergeCallCount, maxOutOfDateRetries)
+	}
+}
+
+// Regression 4: non-OOD merge error fails immediately without any retry.
+func TestMergeWithOutOfDateRetry_NonOODError_FailsImmediately(t *testing.T) { //nolint:cyclop
+	mergeCallCount := 0
+	exec := &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && ghArgsMatch(args, "pr", "merge") {
+				mergeCallCount++
+				return "", fmt.Errorf("gh pr merge failed: GraphQL: Required status check \"ci\" is expected")
+			}
+			if name == "gh" && ghArgsMatch(args, "pr", "comment") {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	r := buildOODRunner(t, exec)
+	var written []eventlog.Event
+	outcome := r.mergeWithOutOfDateRetry(&recordingWriter{events: &written}, 50, t.TempDir())
+
+	if outcome != outcomeMergeFailed {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeMergeFailed)
+	}
+	if mergeCallCount != 1 {
+		t.Errorf("merge call count: got %d, want 1 (no retry on non-OOD error)", mergeCallCount)
+	}
+	var hasOODRetry bool
+	for _, ev := range written {
+		if ev.Type == eventlog.EventAutomergeOutOfDateRetry {
+			hasOODRetry = true
+		}
+	}
+	if hasOODRetry {
+		t.Error("automerge_out_of_date_retry must not be written for non-OOD errors")
+	}
+}
+
+// Integration: up-to-date branch path (mergeIfCIGreen) recovers from OOD via retry.
+func TestRunMergePhase_UpToDate_OODRetry_Recovers(t *testing.T) { //nolint:cyclop,gocognit,funlen
+	logPath := newLogPath(t)
+	writePROpenedEvent(t, logPath, 42)
+	writeReviewEventForMerge(t, logPath, "approved", "high")
+
+	mergeCall := 0
+	exec := &fakeExecutor{
+		runFunc: func(name string, args ...string) (string, error) {
+			if name == "git" && args[0] == "fetch" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "merge-base" {
+				return "", nil // branch is up to date
+			}
+			if name == "git" && args[0] == "rebase" && args[1] == "origin/main" {
+				return "", nil
+			}
+			if name == "git" && args[0] == "rev-parse" && args[1] == "HEAD" {
+				return "sha-ood-int\n", nil
+			}
+			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
+		},
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			// pollCIChecks calls queryCIChecks which uses getPRHeadSHA + check-runs API.
+			if isGHPRViewHeadSHA(args) {
+				return ciTestHeadSHA + "\n", nil
+			}
+			if isGHRepoViewNWO(args) {
+				return ciTestNWO + "\n", nil
+			}
+			if isGHCheckRunsAPI(args) {
+				return requiredVerifyCheckRunsJSON(), nil
+			}
+			if name == "gh" && ghArgsMatch(args, "pr", "merge") {
+				mergeCall++
+				if mergeCall == 1 {
+					return "", fmt.Errorf("gh pr merge failed: GraphQL: Head branch is out of date. Review and try the merge again.")
+				}
+				return "sha-ood-merged", nil
+			}
+			if name == "git" && args[0] == "push" {
+				return "", nil
+			}
+			if name == "gh" && ghArgsMatch(args, "pr", "comment") {
+				return "", nil
+			}
+			if name == "git" && args[0] == "ls-remote" {
+				return "", nil
+			}
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		},
+	}
+
+	homeDir := t.TempDir()
+	project := "proj"
+	mkCredDir(t, homeDir, project)
+	creds := mustLoadCredsFromDir(t, homeDir, project)
+
+	var written []eventlog.Event
+	r := &Runner{
+		executor:               exec,
+		issueNum:               42,
+		runID:                  "test-run",
+		repoRoot:               "/repo",
+		homeDir:                homeDir,
+		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
+		cfg:                    &config.Config{Project: project},
+		creds:                  creds,
+		branchName:             "golemic/issue-42",
+		ciTimeoutOverride:      100 * time.Millisecond,
+		ciPollIntervalOverride: 1 * time.Millisecond,
+		stderr:                 &strings.Builder{},
+	}
+
+	outcome := r.runMergePhase(&recordingWriter{events: &written}, logPath)
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	var hasPRMerged, hasAutomergeFailed bool
+	for _, ev := range written {
+		switch ev.Type {
+		case eventlog.EventPRMerged:
+			hasPRMerged = true
+		case eventlog.EventAutomergeFailed:
+			hasAutomergeFailed = true
+		}
+	}
+	if !hasPRMerged {
+		t.Error("pr_merged event must be written after OOD retry recovery (up-to-date path)")
+	}
+	if hasAutomergeFailed {
+		t.Error("automerge_failed must not be written when OOD retry succeeds")
+	}
+}
