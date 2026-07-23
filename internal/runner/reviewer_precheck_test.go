@@ -241,7 +241,7 @@ func TestReviewerPrompt_DiscoveryTools(t *testing.T) {
 func TestReviewerPrompt_PrecheckBlockInjected(t *testing.T) {
 	_, repoRoot, _ := setupRunnerTest(t)
 	guidelinesPath := filepath.Join(repoRoot, ".golemic", "guidelines", "reviewer.md")
-	os.MkdirAll(filepath.Dir(guidelinesPath), 0755)           //nolint:errcheck
+	os.MkdirAll(filepath.Dir(guidelinesPath), 0755)            //nolint:errcheck
 	os.WriteFile(guidelinesPath, []byte("# Guidelines"), 0644) //nolint:errcheck
 
 	precheckBlock := "## Precheck Result\n\nok: false | command: `go test` | exitCode: 1 | tree-mutated: false\n"
@@ -274,8 +274,6 @@ func newPrecheckRunner(t *testing.T, homeDir, repoRoot string) *Runner {
 	r.turnCounter = 1
 	return r
 }
-
-
 
 // assertPrecheckEvent finds the reviewer_precheck event in events and returns its payload map.
 func assertPrecheckEvent(t *testing.T, events []eventlog.Event, notFoundMsg string) map[string]interface{} {

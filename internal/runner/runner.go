@@ -44,14 +44,14 @@ type Preflighter interface {
 
 // Runner orchestrates a golemic run.
 type Runner struct {
-	executor    preflight.Executor
-	homeDir     string
-	cwd         string
-	stdout      io.Writer
-	stderr      io.Writer
-	issueNum    int
-	preflighter Preflighter // nil = create from executor+homeDir+repoRoot in Run()
-	lookupEnv   func(string) (string, bool)
+	executor           preflight.Executor
+	homeDir            string
+	cwd                string
+	stdout             io.Writer
+	stderr             io.Writer
+	issueNum           int
+	preflighter        Preflighter // nil = create from executor+homeDir+repoRoot in Run()
+	lookupEnv          func(string) (string, bool)
 	runAgentFn         func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
 	reviewerPrecheckFn func(worktreePath, eventLogPath string) (string, error)
 

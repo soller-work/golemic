@@ -749,7 +749,7 @@ func TestBroker_RepoTree_NotConfigured_ReturnsError(t *testing.T) {
 func TestBroker_RepoTree_ListsRootCorrectly(t *testing.T) {
 	wtDir := t.TempDir()
 	os.WriteFile(filepath.Join(wtDir, "main.go"), []byte("package main"), 0644) //nolint:errcheck
-	os.MkdirAll(filepath.Join(wtDir, "internal"), 0755)                          //nolint:errcheck
+	os.MkdirAll(filepath.Join(wtDir, "internal"), 0755)                         //nolint:errcheck
 
 	b, sockPath := startTestBroker(t, nil)
 	b.SetAllowedTools([]string{"gm_repo_tree"})
@@ -775,7 +775,7 @@ func TestBroker_RepoTree_ListsRootCorrectly(t *testing.T) {
 
 func TestBroker_RepoTree_ListsSubdir(t *testing.T) {
 	wtDir := t.TempDir()
-	os.MkdirAll(filepath.Join(wtDir, "internal", "runner"), 0755) //nolint:errcheck
+	os.MkdirAll(filepath.Join(wtDir, "internal", "runner"), 0755)              //nolint:errcheck
 	os.WriteFile(filepath.Join(wtDir, "internal", "foo.go"), []byte(""), 0644) //nolint:errcheck
 
 	b, sockPath := startTestBroker(t, nil)
