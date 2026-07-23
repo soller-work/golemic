@@ -3,6 +3,11 @@
 // GitHub credentials and performs all side effects; the agent process carries
 // no token for these operations.
 import * as net from "net";
+import {
+  isBrokerErrorDetails,
+  normalizeBrokerErrorResult,
+  normalizeBrokerSuccessResult,
+} from "./broker-result.ts";
 
 const SOCK_ENV = "GOLEMIC_GM_SOCK";
 
@@ -42,7 +47,25 @@ function callBroker(tool: string, callId: string, params: unknown): Promise<unkn
   });
 }
 
-export default function (pi: { registerTool: (def: object) => void }) {
+async function executeBrokerTool(tool: string, callId: string, params: unknown): Promise<unknown> {
+  try {
+    return normalizeBrokerSuccessResult(await callBroker(tool, callId, params));
+  } catch (error) {
+    return normalizeBrokerErrorResult(error);
+  }
+}
+
+export default function (pi: { registerTool: (def: object) => void; on: (event: "tool_result", handler: (event: { toolName: string; details: unknown }) => unknown) => void }) {
+  pi.on("tool_result", async (event) => {
+    if (!event.toolName.startsWith("gm_")) {
+      return;
+    }
+    if (!isBrokerErrorDetails(event.details)) {
+      return;
+    }
+    return { isError: true };
+  });
+
   // gm_slice_get — fetches the issue Markdown body from the broker.
   // The broker caches the result for the duration of this invocation;
   // each new invocation re-fetches so edits between runs are seen.
@@ -60,7 +83,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_slice_get", callId, params);
+      return executeBrokerTool("gm_slice_get", callId, params);
     },
   });
 
@@ -85,7 +108,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_project_check", callId, params);
+      return executeBrokerTool("gm_project_check", callId, params);
     },
   });
 
@@ -117,7 +140,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_dev_done", callId, params);
+      return executeBrokerTool("gm_dev_done", callId, params);
     },
   });
 
@@ -136,7 +159,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_pr_view", callId, params);
+      return executeBrokerTool("gm_pr_view", callId, params);
     },
   });
 
@@ -161,7 +184,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_repo_tree", callId, params);
+      return executeBrokerTool("gm_repo_tree", callId, params);
     },
   });
 
@@ -194,7 +217,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_review_submit", callId, params);
+      return executeBrokerTool("gm_review_submit", callId, params);
     },
   });
 
@@ -235,7 +258,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_search_graph", callId, params);
+      return executeBrokerTool("gm_code_search_graph", callId, params);
     },
   });
 
@@ -256,7 +279,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_query_graph", callId, params);
+      return executeBrokerTool("gm_code_query_graph", callId, params);
     },
   });
 
@@ -292,7 +315,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_trace_call_path", callId, params);
+      return executeBrokerTool("gm_code_trace_call_path", callId, params);
     },
   });
 
@@ -316,7 +339,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_get_snippet", callId, params);
+      return executeBrokerTool("gm_code_get_snippet", callId, params);
     },
   });
 
@@ -332,7 +355,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_get_graph_schema", callId, params);
+      return executeBrokerTool("gm_code_get_graph_schema", callId, params);
     },
   });
 
@@ -361,7 +384,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_get_architecture", callId, params);
+      return executeBrokerTool("gm_code_get_architecture", callId, params);
     },
   });
 
@@ -392,7 +415,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_search", callId, params);
+      return executeBrokerTool("gm_code_search", callId, params);
     },
   });
 
@@ -412,7 +435,7 @@ export default function (pi: { registerTool: (def: object) => void }) {
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {
-      return callBroker("gm_code_detect_changes", callId, params);
+      return executeBrokerTool("gm_code_detect_changes", callId, params);
     },
   });
 }
