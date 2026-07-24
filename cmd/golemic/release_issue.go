@@ -1,21 +1,16 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"golemic/internal/claim"
-	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
-	"golemic/internal/repo"
 )
 
 func registerReleaseFlags(fs *flag.FlagSet) (*int, *string) {
@@ -64,63 +59,6 @@ func validateReleaseEnv(getenv func(string) string, stderr io.Writer) (string, s
 		return "", "", 0, 1
 	}
 	return runID, eventLogPath, turnID, 0
-}
-
-func resolveReleaseCredentials(executor preflight.Executor, stderr io.Writer) (string, int) {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: failed to get home directory: %v\n", err) //nolint:errcheck
-		return "", 1
-	}
-
-	cwd, err := os.Getwd()
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: failed to get working directory: %v\n", err) //nolint:errcheck
-		return "", 1
-	}
-
-	repoRoot, err := repo.ResolveHostRepo(executor, cwd)
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: %v\n", err) //nolint:errcheck
-		return "", 1
-	}
-
-	cfg, err := config.Load(repoRoot)
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: %v\n", err) //nolint:errcheck
-		return "", 1
-	}
-
-	creds, err := credentials.NewLoader(homeDir).Load(cfg.Project)
-	if err != nil {
-		fmt.Fprintf(stderr, "config/credentials error: %v\n", err) //nolint:errcheck
-		return "", 1
-	}
-
-	return creds.DevToken(), 0
-}
-
-func lookupGHUser(executor preflight.Executor, devToken string, stderr io.Writer) (string, int) {
-	userOut, err := executor.RunWithEnv(
-		map[string]string{"GH_TOKEN": devToken},
-		"gh", "api", "user",
-	)
-	if err != nil {
-		fmt.Fprintf(stderr, "gh api user failed: %v\n", err) //nolint:errcheck
-		return "", 1
-	}
-	var ghUser struct {
-		Login string `json:"login"`
-	}
-	if err := json.Unmarshal([]byte(userOut), &ghUser); err != nil {
-		fmt.Fprintf(stderr, "gh api user: failed to parse response: %v\n", err) //nolint:errcheck
-		return "", 1
-	}
-	if ghUser.Login == "" {
-		fmt.Fprintln(stderr, "gh api user: login field is empty") //nolint:errcheck
-		return "", 1
-	}
-	return ghUser.Login, 0
 }
 
 func writeReleaseEvent(eventLogPath, runID string, turnID, numberFlag int, reasonFlag string, stdout io.Writer, stderr io.Writer) int {
@@ -172,14 +110,10 @@ func runReleaseIssue(args []string, stdout, stderr io.Writer, getenv func(string
 		return code
 	}
 
-	devToken, code := resolveReleaseCredentials(executor, stderr)
-	if code != 0 {
-		return code
-	}
-
-	ghLogin, code := lookupGHUser(executor, devToken, stderr)
-	if code != 0 {
-		return code
+	ghLogin, devToken, err := claim.ResolveCredentials(executor)
+	if err != nil {
+		fmt.Fprintf(stderr, "config/credentials error: %v\n", err) //nolint:errcheck
+		return 1
 	}
 
 	result, releaseErr := claim.Release(executor, *numberFlag, ghLogin, devToken, *reasonFlag)

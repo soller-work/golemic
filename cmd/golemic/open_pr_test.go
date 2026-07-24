@@ -2,13 +2,11 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"golemic/internal/config"
 	"golemic/internal/eventlog"
@@ -69,39 +67,8 @@ func TestRunOpenPR_Success(t *testing.T) { //nolint:cyclop,gocognit // moved ver
 		t.Errorf("stdout should contain PR URL, got: %q", stdout.String())
 	}
 
-	// Verify exactly one pr_opened event was written with correct fields.
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	ev := events[0]
-	if ev.Type != eventlog.EventPROpened {
-		t.Errorf("Type: got %q, want %q", ev.Type, eventlog.EventPROpened)
-	}
-	if ev.RunID != "run-pr-1" {
-		t.Errorf("RunID: got %q, want %q", ev.RunID, "run-pr-1")
-	}
-	// Verify ts is a valid RFC3339 timestamp.
-	if _, err := time.Parse(time.RFC3339, ev.Ts); err != nil {
-		t.Errorf("Ts is not valid RFC3339: %q (err: %v)", ev.Ts, err)
-	}
-	// Verify payload contains prNumber, url, branch
-	var payload map[string]string
-	if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-		t.Fatalf("failed to unmarshal payload: %v", err)
-	}
-	if payload["prNumber"] != "42" {
-		t.Errorf("prNumber: got %q, want %q", payload["prNumber"], "42")
-	}
-	if payload["url"] != "https://github.com/owner/repo/pull/42" {
-		t.Errorf("url: got %q, want %q", payload["url"], "https://github.com/owner/repo/pull/42")
-	}
-	if payload["branch"] != "feature/my-branch" {
-		t.Errorf("branch: got %q, want %q", payload["branch"], "feature/my-branch")
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("open-pr should no longer write pr_opened")
 	}
 }
 
@@ -522,16 +489,8 @@ func TestRunOpenPR_ArbitraryFlagOrder(t *testing.T) {
 		t.Errorf("stderr should be empty, got: %q", stderr.String())
 	}
 
-	var r eventlog.Reader
-	events, err := r.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("expected 1 event, got %d", len(events))
-	}
-	if events[0].Type != eventlog.EventPROpened {
-		t.Errorf("Type: got %q, want %q", events[0].Type, eventlog.EventPROpened)
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("open-pr should no longer write pr_opened")
 	}
 }
 
@@ -768,13 +727,8 @@ func TestRunOpenPR_VerifySucceeds_PROpened(t *testing.T) { //nolint:cyclop
 		t.Errorf("stdout missing PR URL; got: %q", stdout.String())
 	}
 
-	reader := eventlog.Reader{}
-	events, err := reader.Read(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) != 1 || events[0].Type != eventlog.EventPROpened {
-		t.Errorf("expected one pr_opened event; got: %v", events)
+	if _, err := os.Stat(logPath); err == nil {
+		t.Error("open-pr should no longer write pr_opened")
 	}
 }
 

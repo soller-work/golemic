@@ -264,11 +264,12 @@ func (r *Runner) synthesizePROpenedEvent(writer worktree.EventWriter, prNumber i
 
 // synthesizeReviewSubmittedEvent writes a synthetic review_submitted event.
 // Used to pre-populate the bot-round count and to carry merge confidence for the APPROVED case.
-func (r *Runner) synthesizeReviewSubmittedEvent(writer worktree.EventWriter, verdict, confidence, reviewID string) error {
+func (r *Runner) synthesizeReviewSubmittedEvent(writer worktree.EventWriter, prNumber int, verdict, confidence, reviewID string) error {
 	inlineCount := 0
 	payload, err := json.Marshal(map[string]interface{}{
 		"verdict":            verdict,
 		"body":               "",
+		"prNumber":           prNumber,
 		"mergeConfidence":    confidence,
 		"reviewId":           reviewID,
 		"inlineCommentCount": &inlineCount,
@@ -450,10 +451,10 @@ func filterDecisionReviews(reviews []githubReview) []githubReview {
 }
 
 // resumeSynthesizeBotCREvents writes a review_submitted event for each bot CHANGES_REQUESTED review.
-func (r *Runner) resumeSynthesizeBotCREvents(writer worktree.EventWriter, submittedReviews []githubReview, botLogin string) error {
+func (r *Runner) resumeSynthesizeBotCREvents(writer worktree.EventWriter, prNumber int, submittedReviews []githubReview, botLogin string) error {
 	for _, rv := range submittedReviews {
 		if rv.State == "CHANGES_REQUESTED" && rv.AuthorLogin == botLogin {
-			if err := r.synthesizeReviewSubmittedEvent(writer, "changes_requested", "high", rv.databaseIDStr()); err != nil {
+			if err := r.synthesizeReviewSubmittedEvent(writer, prNumber, "changes_requested", "high", rv.databaseIDStr()); err != nil {
 				return err
 			}
 		}
@@ -473,7 +474,7 @@ func (r *Runner) resumeHandleChangesRequested(
 	timeout time.Duration,
 	runSpanID string,
 ) string {
-	if err := r.resumeSynthesizeBotCREvents(writer, submittedReviews, botLogin); err != nil {
+	if err := r.resumeSynthesizeBotCREvents(writer, prNumber, submittedReviews, botLogin); err != nil {
 		fmt.Fprintf(r.stderr, "resume: failed to synthesize review event: %v\n", err)
 		return outcomeAborted
 	}
@@ -512,7 +513,7 @@ func (r *Runner) resumeHandleChangesRequested(
 // resumeHandleApproved handles the APPROVED resume path.
 func (r *Runner) resumeHandleApproved(writer worktree.EventWriter, eventLogPath string, pr *prInfo, lastReview githubReview) string {
 	confidence := mergeConfidenceFromLabels(pr.Labels)
-	if synthErr := r.synthesizeReviewSubmittedEvent(writer, "approved", confidence, lastReview.databaseIDStr()); synthErr != nil {
+	if synthErr := r.synthesizeReviewSubmittedEvent(writer, pr.Number, "approved", confidence, lastReview.databaseIDStr()); synthErr != nil {
 		fmt.Fprintf(r.stderr, "resume: failed to write review_submitted event: %v\n", synthErr)
 		return outcomeAborted
 	}

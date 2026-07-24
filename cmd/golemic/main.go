@@ -376,42 +376,13 @@ func probeOpenPRs(executor preflight.Executor, branch string, stderr io.Writer) 
 	return openPRs, true
 }
 
-// recordExistingPR opens the event log and writes a pr_opened event for an already-open PR.
-func recordExistingPR(existing prListEntry, setup *openPRSetup, stdout, stderr io.Writer) int {
-	writer, err := eventlog.NewWriter(setup.eventLogPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return 1
-	}
-	defer writer.Close()
-
-	payload := map[string]string{
-		"prNumber": strconv.Itoa(existing.Number),
-		"url":      existing.URL,
-		"branch":   setup.branch,
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return 1
-	}
-	event := eventlog.Event{
-		Type:    eventlog.EventPROpened,
-		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   setup.runID,
-		TurnID:  setup.turnID,
-		Payload: payloadJSON,
-	}
-	if err := writer.Write(event); err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return 1
-	}
+// recordExistingPR prints the already-open PR URL.
+func recordExistingPR(existing prListEntry, _ *openPRSetup, stdout, _ io.Writer) int {
 	fmt.Fprintln(stdout, existing.URL)
 	return 0
 }
 
-// createAndRecordNewPR creates a PR via gh pr create, then opens the event log and
-// writes the pr_opened event. The event log is opened only after gh succeeds.
+// createAndRecordNewPR creates a PR via gh pr create and prints the URL.
 func createAndRecordNewPR(executor preflight.Executor, setup *openPRSetup, stdout, stderr io.Writer) int {
 	prOut, err := executor.RunWithEnv(
 		nil,
@@ -427,21 +398,10 @@ func createAndRecordNewPR(executor preflight.Executor, setup *openPRSetup, stdou
 	}
 
 	prURL := strings.TrimSpace(prOut)
-	prNumber, ok := parsePRNumberFromURL(prURL, stderr)
-	if !ok {
+	if _, ok := parsePRNumberFromURL(prURL, stderr); !ok {
 		return 1
 	}
 
-	writer, err := eventlog.NewWriter(setup.eventLogPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return 1
-	}
-	defer writer.Close()
-
-	if !recordPROpenedEvent(writer, setup, prNumber, prURL, stderr) {
-		return 1
-	}
 	fmt.Fprintln(stdout, prURL)
 	return 0
 }
@@ -462,16 +422,6 @@ func runOpenPR(args []string, stdout, stderr io.Writer, getenv func(string) stri
 	}
 
 	setup.body = ensureBodyClosesIssue(setup.body, setup.branch)
-
-	existingEvents, err := readEventsForDedup(setup.eventLogPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to create PR: %v\n", err)
-		return 1
-	}
-	if eventlog.HasTurnTypeEvent(existingEvents, setup.turnID, eventlog.EventPROpened) {
-		fmt.Fprintf(stdout, "PR already opened for this turn\n")
-		return 0
-	}
 
 	openPRs, ok := probeOpenPRs(executor, setup.branch, stderr)
 	if !ok {
@@ -715,8 +665,8 @@ func runReviewComment(args []string, stdout, stderr io.Writer, getenv func(strin
 	return 0
 }
 
-// submitAndRecordReview calls gh to submit the review then writes the event and sets the label.
-func submitAndRecordReview(executor preflight.Executor, writer *eventlog.Writer, reviewID, verdictFlag, bodyFlag, mergeConfidenceFlag, runID string, prFlag, turnID int, stdout, stderr io.Writer) int {
+// submitAndRecordReview calls gh to submit the review and sets the label.
+func submitAndRecordReview(executor preflight.Executor, reviewID, verdictFlag, bodyFlag, mergeConfidenceFlag, runID string, prFlag, turnID int, stdout, stderr io.Writer) int {
 	ghEvent := "APPROVE"
 	if verdictFlag == "changes_requested" {
 		ghEvent = "REQUEST_CHANGES"
@@ -738,9 +688,8 @@ func submitAndRecordReview(executor preflight.Executor, writer *eventlog.Writer,
 		return 1
 	}
 
-	if !recordReviewSubmittedEvent(writer, verdictFlag, bodyFlag, mergeConfidenceFlag, submittedReviewID, runID, prFlag, turnID, inlineCount, stderr) {
-		return 1
-	}
+	_ = submittedReviewID
+	_ = inlineCount
 
 	if !setMergeConfidenceLabel(executor, mergeConfidenceFlag, prFlag, stderr) {
 		return 1
@@ -753,7 +702,7 @@ func submitAndRecordReview(executor preflight.Executor, writer *eventlog.Writer,
 // runSubmitReview executes the submit-review subcommand:
 // golemic submit-review --verdict approved|changes_requested --body <text> --pr <n> --merge-confidence high|low
 // It validates env var context and verdict (fail-fast), then uses GraphQL to discover-or-create
-// a pending review and submit it, writing a review_submitted event atomically (only on gh success).
+// a pending review and submit it, then sets the merge-confidence label.
 func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string) string, executor preflight.Executor) int {
 	flags, ok := parseSubmitReviewFlags(args, stderr)
 	if !ok {
@@ -766,30 +715,12 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 1
 	}
 
-	turnID, ok := requireTurnID(getenv, stderr)
-	if !ok {
+	if _, ok := requireTurnID(getenv, stderr); !ok {
 		return 1
 	}
 
 	if !validateSubmitReviewInputs(flags.Verdict, flags.MergeConfidence, flags.Body, flags.PR, stderr) {
 		return 1
-	}
-
-	writer, err := eventlog.NewWriter(eventLogPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return 1
-	}
-	defer writer.Close()
-
-	existingEvents, err := readEventsForDedup(eventLogPath)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to submit review: %v\n", err)
-		return 1
-	}
-	if eventlog.HasTurnTypeEvent(existingEvents, turnID, eventlog.EventReviewSubmitted) {
-		fmt.Fprintf(stdout, "review already submitted for this turn\n")
-		return 0
 	}
 
 	owner, repoName, err := getRepoContext(executor)
@@ -804,7 +735,7 @@ func runSubmitReview(args []string, stdout, stderr io.Writer, getenv func(string
 		return 1
 	}
 
-	return submitAndRecordReview(executor, writer, reviewID, flags.Verdict, flags.Body, flags.MergeConfidence, runID, flags.PR, turnID, stdout, stderr)
+	return submitAndRecordReview(executor, reviewID, flags.Verdict, flags.Body, flags.MergeConfidence, runID, flags.PR, 0, stdout, stderr)
 }
 
 func runRun(args []string, stdout, stderr io.Writer) int {

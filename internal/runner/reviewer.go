@@ -708,7 +708,7 @@ func (r *Runner) submitReviewAndWriteEvent(state *reviewerInvocationState, event
 		return fmt.Errorf("submitReviewAndWriteEvent: %w", err)
 	}
 
-	if err := r.writeReviewSubmittedEventFromRunner(eventLogPath, submittedID, params.Verdict, params.Body, params.MergeConfidence, inlineCount); err != nil {
+	if err := r.writeReviewSubmittedEventFromRunner(eventLogPath, submittedID, params.Verdict, params.Body, params.MergeConfidence, inlineCount, prNumber); err != nil {
 		return fmt.Errorf("submitReviewAndWriteEvent: write event: %w", err)
 	}
 
@@ -864,7 +864,7 @@ func (r *Runner) submitPendingReview(reviewID, verdict, body string) (submittedR
 }
 
 // writeReviewSubmittedEventFromRunner writes a review_submitted event (BR-10).
-func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, mergeConfidence string, inlineCommentCount int) error {
+func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, mergeConfidence string, inlineCommentCount, prNumber int) error {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
 		return err
@@ -875,6 +875,7 @@ func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, ver
 		"reviewId":           reviewID,
 		"verdict":            verdict,
 		"body":               body,
+		"prNumber":           prNumber,
 		"mergeConfidence":    mergeConfidence,
 		"inlineCommentCount": inlineCommentCount,
 	})

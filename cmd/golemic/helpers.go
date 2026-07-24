@@ -8,9 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"time"
 
-	"golemic/internal/eventlog"
 	"golemic/internal/preflight"
 )
 
@@ -143,32 +141,6 @@ func parsePRNumberFromURL(prURL string, stderr io.Writer) (string, bool) {
 	return prNumber, true
 }
 
-// recordPROpenedEvent writes a pr_opened event to the event log.
-func recordPROpenedEvent(writer *eventlog.Writer, setup *openPRSetup, prNumber, prURL string, stderr io.Writer) bool {
-	payload := map[string]string{
-		"prNumber": prNumber,
-		"url":      prURL,
-		"branch":   setup.branch,
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return false
-	}
-	event := eventlog.Event{
-		Type:    eventlog.EventPROpened,
-		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   setup.runID,
-		TurnID:  setup.turnID,
-		Payload: payloadJSON,
-	}
-	if err := writer.Write(event); err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return false
-	}
-	return true
-}
-
 // parseSubmitReviewResponse parses the GraphQL response and extracts review ID and comment count.
 func parseSubmitReviewResponse(submitOut string, stderr io.Writer) (string, int, bool) {
 	var submitResp struct {
@@ -194,35 +166,6 @@ func parseSubmitReviewResponse(submitOut string, stderr io.Writer) (string, int,
 	}
 	inlineCount := submitResp.Data.SubmitPullRequestReview.PullRequestReview.Comments.TotalCount
 	return submittedReviewID, inlineCount, true
-}
-
-// recordReviewSubmittedEvent writes a review_submitted event to the event log.
-func recordReviewSubmittedEvent(writer *eventlog.Writer, verdictFlag, bodyFlag, mergeConfidenceFlag, submittedReviewID, runID string, prFlag, turnID, inlineCount int, stderr io.Writer) bool {
-	payload := map[string]interface{}{
-		"verdict":            verdictFlag,
-		"body":               bodyFlag,
-		"prNumber":           prFlag,
-		"mergeConfidence":    mergeConfidenceFlag,
-		"reviewId":           submittedReviewID,
-		"inlineCommentCount": inlineCount,
-	}
-	payloadJSON, err := json.Marshal(payload)
-	if err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return false
-	}
-	event := eventlog.Event{
-		Type:    eventlog.EventReviewSubmitted,
-		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   runID,
-		TurnID:  turnID,
-		Payload: payloadJSON,
-	}
-	if err := writer.Write(event); err != nil {
-		fmt.Fprintf(stderr, "Failed to write event: %v\n", err)
-		return false
-	}
-	return true
 }
 
 // setMergeConfidenceLabel sets the merge confidence label on the PR.

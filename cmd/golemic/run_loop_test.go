@@ -187,10 +187,8 @@ func TestRunLoopDispatcher_EnvWiredCorrectly(t *testing.T) { //nolint:cyclop,goc
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	var capturedClaimEnv map[string]string
-	var capturedReleaseEnv map[string]string
 	var capturedRunEnv map[string]string
-
+	views := 0
 	exec := fakeRunLoopExecutor{
 		fakeExecutor: fakeExecutor{
 			runFunc: func(name string, args ...string) (string, error) {
@@ -206,20 +204,20 @@ func TestRunLoopDispatcher_EnvWiredCorrectly(t *testing.T) { //nolint:cyclop,goc
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
 			},
 			runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-				if len(args) > 0 && args[0] == "claim-issue" {
-					cp := make(map[string]string, len(env))
-					for k, v := range env {
-						cp[k] = v
-					}
-					capturedClaimEnv = cp
-					return "", nil
+				if name != "gh" {
+					return "", fmt.Errorf("not mocked: %s %v", name, args)
 				}
-				if len(args) > 0 && args[0] == "release-issue" {
-					cp := make(map[string]string, len(env))
-					for k, v := range env {
-						cp[k] = v
+				if len(args) >= 2 && args[0] == "api" && args[1] == "user" {
+					return `{"login":"golemic-dev"}`, nil
+				}
+				if len(args) >= 2 && args[0] == "issue" && args[1] == "view" {
+					views++
+					if views == 1 {
+						return `{"labels":[{"name":"ready-for-agent"}],"assignees":[]}`, nil
 					}
-					capturedReleaseEnv = cp
+					return `{"labels":[{"name":"in-progress"}],"assignees":[{"login":"golemic-dev"}]}`, nil
+				}
+				if len(args) >= 2 && args[0] == "issue" && args[1] == "edit" {
 					return "", nil
 				}
 				return "", fmt.Errorf("not mocked: %s %v", name, args)
@@ -252,23 +250,16 @@ func TestRunLoopDispatcher_EnvWiredCorrectly(t *testing.T) { //nolint:cyclop,goc
 		t.Fatal("test timed out")
 	}
 
-	for name, env := range map[string]map[string]string{
-		"claim":   capturedClaimEnv,
-		"run":     capturedRunEnv,
-		"release": capturedReleaseEnv,
-	} {
-		if env == nil {
-			t.Errorf("%s env was not captured", name)
-			continue
-		}
-		if env["GOLEMIC_RUN_ID"] == "" {
-			t.Errorf("%s: GOLEMIC_RUN_ID not set", name)
-		}
-		if env["GOLEMIC_EVENT_LOG"] == "" {
-			t.Errorf("%s: GOLEMIC_EVENT_LOG not set", name)
-		}
-		if env["GOLEMIC_TURN_ID"] != "0" {
-			t.Errorf("%s: GOLEMIC_TURN_ID: want 0, got %q", name, env["GOLEMIC_TURN_ID"])
-		}
+	if capturedRunEnv == nil {
+		t.Fatal("run env was not captured")
+	}
+	if capturedRunEnv["GOLEMIC_RUN_ID"] == "" {
+		t.Error("run: GOLEMIC_RUN_ID not set")
+	}
+	if capturedRunEnv["GOLEMIC_EVENT_LOG"] == "" {
+		t.Error("run: GOLEMIC_EVENT_LOG not set")
+	}
+	if capturedRunEnv["GOLEMIC_TURN_ID"] != "0" {
+		t.Errorf("run: GOLEMIC_TURN_ID: want 0, got %q", capturedRunEnv["GOLEMIC_TURN_ID"])
 	}
 }

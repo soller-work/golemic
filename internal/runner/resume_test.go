@@ -949,10 +949,11 @@ func TestResume_Approved_ConfidenceHigh_MergePath(t *testing.T) {
 		if ev.Type == eventlog.EventReviewSubmitted {
 			var d struct {
 				Verdict         string `json:"verdict"`
+				PRNumber        int    `json:"prNumber"`
 				MergeConfidence string `json:"mergeConfidence"`
 			}
 			_ = json.Unmarshal(ev.Payload, &d)
-			if d.Verdict == "approved" && d.MergeConfidence == "high" {
+			if d.Verdict == "approved" && d.PRNumber == 7 && d.MergeConfidence == "high" {
 				hasApprovedReview = true
 			}
 		}

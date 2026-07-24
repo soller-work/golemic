@@ -268,6 +268,39 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 	if reviewID != "9001" {
 		t.Errorf("latestReviewID: got %q, want 9001", reviewID)
 	}
+
+	events, err := eventlog.Reader{}.Read(logPath)
+	if err != nil {
+		t.Fatalf("read event log: %v", err)
+	}
+	var reviewEvent *eventlog.Event
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type == eventlog.EventReviewSubmitted {
+			reviewEvent = &events[i]
+			break
+		}
+	}
+	if reviewEvent == nil {
+		t.Fatal("expected review_submitted event")
+	}
+	var payload struct {
+		Verdict            string `json:"verdict"`
+		Body               string `json:"body"`
+		PRNumber           int    `json:"prNumber"`
+		MergeConfidence    string `json:"mergeConfidence"`
+		ReviewID           string `json:"reviewId"`
+		InlineCommentCount int    `json:"inlineCommentCount"`
+	}
+	if err := json.Unmarshal(reviewEvent.Payload, &payload); err != nil {
+		t.Fatalf("unmarshal review payload: %v", err)
+	}
+	if payload.Verdict != "approved" || payload.Body != "LGTM" || payload.PRNumber != 99 || payload.MergeConfidence != "high" || payload.ReviewID != "9001" || payload.InlineCommentCount != 1 {
+		t.Fatalf("unexpected review_submitted payload: %+v", payload)
+	}
+	const wantReviewPayload = `{"body":"LGTM","inlineCommentCount":1,"mergeConfidence":"high","prNumber":99,"reviewId":"9001","verdict":"approved"}`
+	if string(reviewEvent.Payload) != wantReviewPayload {
+		t.Fatalf("review_submitted payload mismatch:\n got: %s\nwant: %s", string(reviewEvent.Payload), wantReviewPayload)
+	}
 }
 
 func TestSubmitReviewAndWriteEvent_ChangesRequestedBuildsFindingsJSON(t *testing.T) {

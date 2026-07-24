@@ -591,36 +591,29 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 	cleanupReviewerBeforeNextRound := cleanupBeforeFirstReviewerRound
 	round := 1
 	for {
-		if cleanupReviewerBeforeNextRound {
-			r.cleanupReviewerWorktree(golemicDir, runSpanID)
+		reviewerWT, outcome := r.prepareReviewerWorktree(golemicDir, writer, runSpanID, cleanupReviewerBeforeNextRound)
+		if outcome != "" {
+			return outcome
 		}
 		cleanupReviewerBeforeNextRound = true
 
-		reviewerWT, createOutcome := r.createReviewerWorktree(golemicDir, writer, runSpanID)
-		if createOutcome != outcomeSuccess {
-			return createOutcome
-		}
-
-		finalState, reviewerOutcome := r.runReviewerAttempts(prNumber, reviewerWT, golemicDir, eventLogPath, timeout, runSpanID, round)
-		if reviewerOutcome != outcomeSuccess {
-			return reviewerOutcome
-		}
-
-		if outcome := r.finishReviewerTurn(finalState, eventLogPath, reviewerWT); outcome != outcomeSuccess {
+		finalState, outcome := r.runReviewerAttempts(golemicDir, reviewerWT, eventLogPath, timeout, runSpanID, round, prNumber)
+		if outcome != "" {
 			return outcome
 		}
 
-		next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, &round)
+		next, outcome := r.finishReviewerRound(finalState, eventLogPath, golemicDir, writer, timeout, runSpanID, maxRounds, &round)
 		if !next {
-			if outcome == outcomeSuccess {
-				return r.runMergePhase(writer, eventLogPath)
-			}
 			return outcome
 		}
 	}
 }
 
-func (r *Runner) createReviewerWorktree(golemicDir string, writer worktree.EventWriter, runSpanID string) (string, string) {
+func (r *Runner) prepareReviewerWorktree(golemicDir string, writer worktree.EventWriter, runSpanID string, cleanupBeforeFirstReviewerRound bool) (string, string) {
+	if cleanupBeforeFirstReviewerRound {
+		r.cleanupReviewerWorktree(golemicDir, runSpanID)
+	}
+
 	r.turnCounter++ // each reviewer round gets its own turn
 	_, endCreateRevWT := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCreate,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
@@ -631,75 +624,85 @@ func (r *Runner) createReviewerWorktree(golemicDir string, writer worktree.Event
 	}
 	endCreateRevWT(telemetry.StatusOK, nil)
 
-	return filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum)), outcomeSuccess
+	return filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum)), ""
 }
 
-func (r *Runner) runReviewerAttempts(prNumber int, reviewerWT, golemicDir, eventLogPath string, timeout time.Duration, runSpanID string, round int) (*reviewerInvocationState, string) {
+func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string, timeout time.Duration, runSpanID string, round, prNumber int) (*reviewerInvocationState, string) {
+	// Inner reviewer-attempt loop: bounded to maxReviewerAttempts per round (BR-6).
+	// On an invalid approved verdict, the runner preserves the Pending Review and
+	// restarts the reviewer without sweeping (BR-8).
 	const maxReviewerAttempts = 3 // 1 initial + 2 retries
-
 	prevGateRejected := false
 	var prevGateMsg string
 	var finalState *reviewerInvocationState
+
 	for attempt := 0; attempt < maxReviewerAttempts; attempt++ {
-		state, outcome, retry := r.runReviewerAttempt(prNumber, reviewerWT, golemicDir, eventLogPath, timeout, runSpanID, round, prevGateRejected, prevGateMsg)
+		if !prevGateRejected {
+			// BR-001: sweep orphaned pending reviews — not for gate-rejection retries (BR-8).
+			if err := r.sweepPendingReviews(prNumber); err != nil {
+				fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
+				return nil, outcomeReviewFailed
+			}
+		}
+
+		// §11: run reviewer precheck before each attempt.
+		precheckBlock, precheckResult, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath)
+		if precheckErr != nil {
+			fmt.Fprintf(r.stderr, "review_failed: %v\n", precheckErr) //nolint:errcheck
+			return nil, outcomeReviewFailed
+		}
+
+		// Pass gate-retry reason if this is a retry after a rejected approval.
+		var gateRetryReason string
+		if prevGateRejected {
+			gateRetryReason = prevGateMsg
+		}
+
+		outcome, state := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, precheckBlock, precheckResult, gateRetryReason)
 		finalState = state
-		if retry {
+
+		if state != nil && state.reviewSubmitGateRejected {
 			prevGateRejected = true
 			prevGateMsg = state.reviewSubmitGateMsg
 			if attempt == maxReviewerAttempts-1 {
 				fmt.Fprintf(r.stderr, "review_failed: reviewer gate rejected all %d attempts for this round\n", maxReviewerAttempts) //nolint:errcheck
 				return nil, outcomeReviewFailed
 			}
-			continue
+			continue // retry without sweeping the Pending Review (BR-8)
 		}
-		return finalState, outcome
+
+		if outcome != outcomeSuccess {
+			return nil, outcome
+		}
+		break
 	}
-	return finalState, outcomeSuccess
+
+	return finalState, ""
 }
 
-func (r *Runner) runReviewerAttempt(prNumber int, reviewerWT, golemicDir, eventLogPath string, timeout time.Duration, runSpanID string, round int, prevGateRejected bool, prevGateMsg string) (*reviewerInvocationState, string, bool) {
-	if !prevGateRejected {
-		// BR-001: sweep orphaned pending reviews — not for gate-rejection retries (BR-8).
-		if err := r.sweepPendingReviews(prNumber); err != nil {
-			fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
-			return nil, outcomeReviewFailed, false
-		}
-	}
-
-	precheckBlock, precheckResult, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath)
-	if precheckErr != nil {
-		fmt.Fprintf(r.stderr, "review_failed: %v\n", precheckErr) //nolint:errcheck
-		return nil, outcomeReviewFailed, false
-	}
-
-	gateRetryReason := ""
-	if prevGateRejected {
-		gateRetryReason = prevGateMsg
-	}
-	outcome, state := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, precheckBlock, precheckResult, gateRetryReason)
-	if state != nil && state.reviewSubmitGateRejected {
-		return state, "", true
-	}
-	return state, outcome, false
-}
-
-func (r *Runner) finishReviewerTurn(finalState *reviewerInvocationState, eventLogPath, reviewerWT string) string {
+func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventLogPath, golemicDir string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, maxRounds int, round *int) (bool, string) {
 	// Submit the review and write review_submitted event (BR-7, BR-10).
 	if err := r.submitReviewAndWriteEvent(finalState, eventLogPath); err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
-		return outcomeReviewFailed
+		return false, outcomeReviewFailed
 	}
 
-	isDirty, err := worktree.IsDirty(reviewerWT, r.executor)
+	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+	isDirty, err := worktree.IsDirty(reviewerWorktreePath, r.executor)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: failed to check dirty status: %v\n", err) //nolint:errcheck
-		return outcomeReviewFailed
+		return false, outcomeReviewFailed
 	}
 	if isDirty {
 		fmt.Fprintf(r.stderr, "review_failed: reviewer worktree has uncommitted changes\n") //nolint:errcheck
-		return outcomeReviewFailed
+		return false, outcomeReviewFailed
 	}
-	return outcomeSuccess
+
+	next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, round)
+	if !next && outcome == outcomeSuccess {
+		return false, r.runMergePhase(writer, eventLogPath)
+	}
+	return next, outcome
 }
 
 // handleVerdict processes the latest review verdict and returns (continueLoop, outcome).
