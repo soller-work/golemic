@@ -381,7 +381,7 @@ func (r *Runner) resumeStartReviewerTurn(writer worktree.EventWriter, eventLogPa
 		fmt.Fprintf(r.stderr, "%v\n", err)
 		return outcomeAborted
 	}
-	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeout, runSpanID)
+	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeout, runSpanID, true)
 }
 
 // resumeCheckPRState validates the PR state for the resume path.
