@@ -416,20 +416,8 @@ func TestPingPong_ChangesRequestedThenApproved_CleansReviewerWorktreeBetweenRoun
 	if outcome != outcomeSuccess {
 		t.Fatalf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
-	cleanupIdx := callIndexMatching(exec.calls, "git", "-C", r.repoRoot, "worktree", "remove", "--force", filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review"))
-	secondAddIdx := -1
-	seenFirstAdd := false
-	for i, c := range exec.calls {
-		if c.name != "git" || len(c.args) != 6 || c.args[0] != "-C" || c.args[1] != r.repoRoot || c.args[2] != "worktree" || c.args[3] != "add" {
-			continue
-		}
-		if !seenFirstAdd {
-			seenFirstAdd = true
-			continue
-		}
-		secondAddIdx = i
-		break
-	}
+	cleanupIdx := callIndexMatching(exec.calls, "git", "-C", r.repoRoot, "worktree", "remove", "--force", reviewerPath)
+	secondAddIdx := secondReviewerWorktreeAddIndex(exec.calls, r.repoRoot)
 	if cleanupIdx == -1 || secondAddIdx == -1 {
 		t.Fatalf("expected reviewer cleanup and second add calls, got calls: %+v", exec.calls)
 	}

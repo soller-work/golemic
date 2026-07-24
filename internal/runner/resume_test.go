@@ -305,24 +305,42 @@ func dispatchResumeGHAPIRepos(reviews []map[string]interface{}, ciCheckRunsJSON 
 
 func callIndexMatching(calls []callRecord, name string, wantArgs ...string) int {
 	for i, c := range calls {
-		if c.name != name {
-			continue
-		}
-		if len(c.args) != len(wantArgs) {
-			continue
-		}
-		match := true
-		for j := range wantArgs {
-			if c.args[j] != wantArgs[j] {
-				match = false
-				break
-			}
-		}
-		if match {
+		if callMatches(c, name, wantArgs) {
 			return i
 		}
 	}
 	return -1
+}
+
+func callMatches(c callRecord, name string, wantArgs []string) bool {
+	if c.name != name || len(c.args) != len(wantArgs) {
+		return false
+	}
+	for j := range wantArgs {
+		if c.args[j] != wantArgs[j] {
+			return false
+		}
+	}
+	return true
+}
+
+func secondReviewerWorktreeAddIndex(calls []callRecord, repoRoot string) int {
+	seenFirstAdd := false
+	for i, c := range calls {
+		if !isReviewerWorktreeAdd(c, repoRoot) {
+			continue
+		}
+		if seenFirstAdd {
+			return i
+		}
+		seenFirstAdd = true
+	}
+	return -1
+}
+
+func isReviewerWorktreeAdd(c callRecord, repoRoot string) bool {
+	return c.name == "git" && len(c.args) == 6 && c.args[0] == "-C" && c.args[1] == repoRoot &&
+		c.args[2] == "worktree" && c.args[3] == "add"
 }
 
 func mockReviewerWorktreeRegistered(exec *fakeExecutor, reviewerPath string) {
@@ -333,6 +351,72 @@ func mockReviewerWorktreeRegistered(exec *fakeExecutor, reviewerPath string) {
 		}
 		return inner(name, args...)
 	}
+}
+
+func changesRequestedReviews() []map[string]interface{} {
+	return []map[string]interface{}{
+		{"id": 101, "state": "CHANGES_REQUESTED", "body": "Fix the typo in main.go", "user": map[string]interface{}{"login": "golemic-reviewer"}},
+	}
+}
+
+func mockReviewerCurrentHead(exec *fakeExecutor, branch, head string) {
+	inner := exec.runFunc
+	exec.runFunc = func(name string, args ...string) (string, error) {
+		if isGitRevParse(name, args, branch) {
+			return head + "\n", nil
+		}
+		return inner(name, args...)
+	}
+}
+
+func isGitRevParse(name string, args []string, branch string) bool {
+	return name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "rev-parse" && args[3] == "origin/"+branch
+}
+
+func mockReviewerStatusOnce(exec *fakeExecutor, reviewerPath, firstStatus string) {
+	inner := exec.runFunc
+	statusCalls := 0
+	exec.runFunc = func(name string, args ...string) (string, error) {
+		if isGitStatusPorcelain(name, args, reviewerPath) {
+			statusCalls++
+			if statusCalls == 1 {
+				return firstStatus, nil
+			}
+			return "", nil
+		}
+		return inner(name, args...)
+	}
+}
+
+func isGitStatusPorcelain(name string, args []string, reviewerPath string) bool {
+	return name == "git" && len(args) >= 4 && args[0] == "-C" && args[1] == reviewerPath &&
+		args[2] == "status" && args[3] == "--porcelain"
+}
+
+func assertReviewerWorktreeCreatedBaseSHA(t *testing.T, logPath, wantBaseSHA string) {
+	t.Helper()
+	events, err := eventlog.Reader{}.Read(logPath)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	for _, ev := range events {
+		if ev.Type == eventlog.EventWorktreeCreated && reviewerBaseSHA(t, ev.Payload) == wantBaseSHA {
+			return
+		}
+	}
+	t.Fatal("expected reviewer worktree_created event with current baseSha")
+}
+
+func reviewerBaseSHA(t *testing.T, payloadJSON []byte) string {
+	t.Helper()
+	var payload map[string]string
+	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
+		t.Fatalf("unmarshal worktree payload: %v", err)
+	}
+	if payload["role"] != "reviewer" {
+		return ""
+	}
+	return payload["baseSha"]
 }
 
 // baseResumeExecutor builds a fakeExecutor for happy-path resume tests.
@@ -717,10 +801,7 @@ func TestResume_ChangesRequested_DevRetry_ThenReviewer(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResume_ChangesRequested_AbsentReviewerWorktree_SkipsCleanup_AC203(t *testing.T) {
-	reviews := []map[string]interface{}{
-		{"id": 101, "state": "CHANGES_REQUESTED", "body": "Fix the typo in main.go", "user": map[string]interface{}{"login": "golemic-reviewer"}},
-	}
-	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", reviews, nil)
+	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", changesRequestedReviews(), nil)
 
 	r, logPath, stderr := setupResumeRunner(t, exec)
 	capture := &promptCapture{}
@@ -750,10 +831,7 @@ func TestResume_ChangesRequested_AbsentReviewerWorktree_SkipsCleanup_AC203(t *te
 // ---------------------------------------------------------------------------
 
 func TestResume_ChangesRequested_CleansReviewerWorktreeBeforeReviewer_AC203(t *testing.T) {
-	reviews := []map[string]interface{}{
-		{"id": 101, "state": "CHANGES_REQUESTED", "body": "Fix the typo in main.go", "user": map[string]interface{}{"login": "golemic-reviewer"}},
-	}
-	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", reviews, nil)
+	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", changesRequestedReviews(), nil)
 
 	r, logPath, stderr := setupResumeRunner(t, exec)
 	reviewerPath := filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review")
@@ -763,13 +841,7 @@ func TestResume_ChangesRequested_CleansReviewerWorktreeBeforeReviewer_AC203(t *t
 
 	const currentHead = "current-review-head"
 	mockReviewerWorktreeRegistered(exec, reviewerPath)
-	innerRun := exec.runFunc
-	exec.runFunc = func(name string, args ...string) (string, error) {
-		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "rev-parse" && args[3] == "origin/golemic/issue-42" {
-			return currentHead + "\n", nil
-		}
-		return innerRun(name, args...)
-	}
+	mockReviewerCurrentHead(exec, "golemic/issue-42", currentHead)
 
 	capture := &promptCapture{}
 	r.SetRunAgentFn(makeResumeFakeAgent(t, []agentRoundConfig{
@@ -801,30 +873,7 @@ func TestResume_ChangesRequested_CleansReviewerWorktreeBeforeReviewer_AC203(t *t
 		t.Fatalf("expected cleanup before reviewer worktree recreation, got cleanup=%d add=%d", cleanupIdx, addIdx)
 	}
 
-	reader := eventlog.Reader{}
-	events, err := reader.Read(logPath)
-	if err != nil {
-		t.Fatalf("read events: %v", err)
-	}
-	var found bool
-	for _, ev := range events {
-		if ev.Type != eventlog.EventWorktreeCreated {
-			continue
-		}
-		var payload map[string]string
-		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
-			t.Fatalf("unmarshal worktree payload: %v", err)
-		}
-		if payload["role"] == "reviewer" {
-			found = true
-			if payload["baseSha"] != currentHead {
-				t.Fatalf("reviewer worktree baseSha: got %q, want %q", payload["baseSha"], currentHead)
-			}
-		}
-	}
-	if !found {
-		t.Fatal("expected reviewer worktree_created event")
-	}
+	assertReviewerWorktreeCreatedBaseSHA(t, logPath, currentHead)
 }
 
 // ---------------------------------------------------------------------------
@@ -832,10 +881,7 @@ func TestResume_ChangesRequested_CleansReviewerWorktreeBeforeReviewer_AC203(t *t
 // ---------------------------------------------------------------------------
 
 func TestResume_DirtyReviewerWorktree_WarnsAndForceRemoves_AC203(t *testing.T) {
-	reviews := []map[string]interface{}{
-		{"id": 101, "state": "CHANGES_REQUESTED", "body": "Fix the typo in main.go", "user": map[string]interface{}{"login": "golemic-reviewer"}},
-	}
-	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", reviews, nil)
+	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", changesRequestedReviews(), nil)
 
 	r, logPath, stderr := setupResumeRunner(t, exec)
 	reviewerPath := filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review")
@@ -844,19 +890,8 @@ func TestResume_DirtyReviewerWorktree_WarnsAndForceRemoves_AC203(t *testing.T) {
 	}
 
 	dirtyStatus := " M changed.go\n?? new-file.txt\n"
-	statusCalls := 0
 	mockReviewerWorktreeRegistered(exec, reviewerPath)
-	innerRun := exec.runFunc
-	exec.runFunc = func(name string, args ...string) (string, error) {
-		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "status" && args[3] == "--porcelain" && args[1] == reviewerPath {
-			statusCalls++
-			if statusCalls == 1 {
-				return dirtyStatus, nil
-			}
-			return "", nil
-		}
-		return innerRun(name, args...)
-	}
+	mockReviewerStatusOnce(exec, reviewerPath, dirtyStatus)
 
 	r.SetRunAgentFn(makeResumeFakeAgent(t, []agentRoundConfig{
 		{role: "dev", exitCode: 0},
