@@ -303,6 +303,28 @@ func dispatchResumeGHAPIRepos(reviews []map[string]interface{}, ciCheckRunsJSON 
 	return "[]", nil
 }
 
+func callIndexMatching(calls []callRecord, name string, wantArgs ...string) int {
+	for i, c := range calls {
+		if c.name != name {
+			continue
+		}
+		if len(c.args) != len(wantArgs) {
+			continue
+		}
+		match := true
+		for j := range wantArgs {
+			if c.args[j] != wantArgs[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
+}
+
 // baseResumeExecutor builds a fakeExecutor for happy-path resume tests.
 func baseResumeExecutor(
 	prNumber int, prState string, prLabels []string, botLogin string,
@@ -677,6 +699,139 @@ func TestResume_ChangesRequested_DevRetry_ThenReviewer(t *testing.T) {
 	}
 	if !strings.Contains(capture.devPrompts[0], "Fix the typo in main.go") {
 		t.Errorf("dev retry prompt must contain review findings, got: %s", capture.devPrompts[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC: Resume after CHANGES_REQUESTED cleans the stale reviewer worktree before recreating it.
+// ---------------------------------------------------------------------------
+
+func TestResume_ChangesRequested_CleansReviewerWorktreeBeforeReviewer_AC203(t *testing.T) {
+	reviews := []map[string]interface{}{
+		{"id": 101, "state": "CHANGES_REQUESTED", "body": "Fix the typo in main.go", "user": map[string]interface{}{"login": "golemic-reviewer"}},
+	}
+	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", reviews, nil)
+
+	r, logPath, stderr := setupResumeRunner(t, exec)
+	reviewerPath := filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review")
+	if err := os.MkdirAll(reviewerPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	const currentHead = "current-review-head"
+	innerRun := exec.runFunc
+	exec.runFunc = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "rev-parse" && args[3] == "origin/golemic/issue-42" {
+			return currentHead + "\n", nil
+		}
+		return innerRun(name, args...)
+	}
+
+	capture := &promptCapture{}
+	r.SetRunAgentFn(makeResumeFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "approved", body: "Good now", exitCode: 0},
+	}, capture))
+
+	outcome := runResumeOrchestrate(t, r, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Fatalf("outcome: got %q, want %q; stderr: %s", outcome, outcomeSuccess, stderr.String())
+	}
+	if len(capture.devPrompts) != 1 {
+		t.Fatalf("expected 1 dev call, got %d", len(capture.devPrompts))
+	}
+	if !strings.Contains(capture.devPrompts[0], "Fix the typo in main.go") {
+		t.Errorf("dev retry prompt must contain review findings, got: %s", capture.devPrompts[0])
+	}
+
+	cleanupIdx := callIndexMatching(exec.calls, "git", "-C", r.repoRoot, "worktree", "remove", "--force", reviewerPath)
+	addIdx := callIndexMatching(exec.calls, "git", "-C", r.repoRoot, "worktree", "add", reviewerPath, "origin/golemic/issue-42")
+	if cleanupIdx == -1 {
+		t.Fatalf("expected reviewer worktree cleanup call, got calls: %+v", exec.calls)
+	}
+	if addIdx == -1 {
+		t.Fatalf("expected reviewer worktree add call, got calls: %+v", exec.calls)
+	}
+	if cleanupIdx > addIdx {
+		t.Fatalf("expected cleanup before reviewer worktree recreation, got cleanup=%d add=%d", cleanupIdx, addIdx)
+	}
+
+	reader := eventlog.Reader{}
+	events, err := reader.Read(logPath)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	var found bool
+	for _, ev := range events {
+		if ev.Type != eventlog.EventWorktreeCreated {
+			continue
+		}
+		var payload map[string]string
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal worktree payload: %v", err)
+		}
+		if payload["role"] == "reviewer" {
+			found = true
+			if payload["baseSha"] != currentHead {
+				t.Fatalf("reviewer worktree baseSha: got %q, want %q", payload["baseSha"], currentHead)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected reviewer worktree_created event")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC: Dirty stale reviewer worktree emits a warning and is force-removed on resume.
+// ---------------------------------------------------------------------------
+
+func TestResume_DirtyReviewerWorktree_WarnsAndForceRemoves_AC203(t *testing.T) {
+	reviews := []map[string]interface{}{
+		{"id": 101, "state": "CHANGES_REQUESTED", "body": "Fix the typo in main.go", "user": map[string]interface{}{"login": "golemic-reviewer"}},
+	}
+	exec := baseResumeExecutor(7, "OPEN", nil, "golemic-reviewer", reviews, nil)
+
+	r, logPath, stderr := setupResumeRunner(t, exec)
+	reviewerPath := filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review")
+	if err := os.MkdirAll(reviewerPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	dirtyStatus := " M changed.go\n?? new-file.txt\n"
+	statusCalls := 0
+	innerRun := exec.runFunc
+	exec.runFunc = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[2] == "status" && args[3] == "--porcelain" && args[1] == reviewerPath {
+			statusCalls++
+			if statusCalls == 1 {
+				return dirtyStatus, nil
+			}
+			return "", nil
+		}
+		return innerRun(name, args...)
+	}
+
+	r.SetRunAgentFn(makeResumeFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "approved", body: "Good now", exitCode: 0},
+	}, nil))
+
+	outcome := runResumeOrchestrate(t, r, logPath)
+
+	if outcome != outcomeSuccess {
+		t.Fatalf("outcome: got %q, want %q; stderr: %s", outcome, outcomeSuccess, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Warning: reviewer worktree") {
+		t.Fatalf("stderr missing reviewer cleanup warning, got: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "changed.go") || !strings.Contains(stderr.String(), "new-file.txt") {
+		t.Fatalf("stderr missing dirty status details, got: %s", stderr.String())
+	}
+	cleanupIdx := callIndexMatching(exec.calls, "git", "-C", r.repoRoot, "worktree", "remove", "--force", reviewerPath)
+	if cleanupIdx == -1 {
+		t.Fatalf("expected force cleanup call, got calls: %+v", exec.calls)
 	}
 }
 

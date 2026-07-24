@@ -393,6 +393,55 @@ func TestPingPong_ChangesRequestedThenApproved_AC002(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// AC-203: Normal ping-pong still cleans reviewer worktrees between rounds.
+// ---------------------------------------------------------------------------
+
+func TestPingPong_ChangesRequestedThenApproved_CleansReviewerWorktreeBetweenRounds_AC203(t *testing.T) {
+	var commentCalls []string
+	exec := pingPongExecutor(false, &commentCalls)
+	capture := &promptCapture{}
+
+	r, logPath, _ := setupPingPongRunner(t, exec)
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix the typo in README", exitCode: 0},
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "approved", body: "LGTM now", exitCode: 0},
+	}, capture))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeSuccess {
+		t.Fatalf("outcome: got %q, want %q", outcome, outcomeSuccess)
+	}
+	cleanupIdx := callIndexMatching(exec.calls, "git", "-C", r.repoRoot, "worktree", "remove", "--force", filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review"))
+	secondAddIdx := -1
+	seenFirstAdd := false
+	for i, c := range exec.calls {
+		if c.name != "git" || len(c.args) != 6 || c.args[0] != "-C" || c.args[1] != r.repoRoot || c.args[2] != "worktree" || c.args[3] != "add" {
+			continue
+		}
+		if !seenFirstAdd {
+			seenFirstAdd = true
+			continue
+		}
+		secondAddIdx = i
+		break
+	}
+	if cleanupIdx == -1 || secondAddIdx == -1 {
+		t.Fatalf("expected reviewer cleanup and second add calls, got calls: %+v", exec.calls)
+	}
+	if cleanupIdx > secondAddIdx {
+		t.Fatalf("expected reviewer cleanup before second reviewer add, got cleanup=%d add=%d", cleanupIdx, secondAddIdx)
+	}
+	if len(capture.devPrompts) != 2 {
+		t.Fatalf("expected 2 dev calls, got %d", len(capture.devPrompts))
+	}
+	if len(commentCalls) != 0 {
+		t.Errorf("no escalation comment expected, got %d", len(commentCalls))
+	}
+}
+
 // assertEscalationComment checks that the comment contains required fields (BR-007).
 func assertEscalationComment(t *testing.T, comment string, issueNum, prNum, roundCount int) {
 	t.Helper()
@@ -577,6 +626,42 @@ func TestPingPong_EmptyFindings_AC007(t *testing.T) {
 	}
 	if len(commentCalls) != 0 {
 		t.Errorf("no escalation comment expected on empty findings, got %d", len(commentCalls))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AC-203: Active reviewer-turn dirtiness still fails the current run.
+// ---------------------------------------------------------------------------
+
+func TestPingPong_ReviewerTurnDirtyCheckFails_AC203(t *testing.T) {
+	var commentCalls []string
+	exec := pingPongExecutor(false, &commentCalls)
+	r, logPath, stderr := setupPingPongRunner(t, exec)
+
+	reviewerPath := filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review")
+	dirtyStatus := " M reviewer-write.go\n"
+	innerRun := exec.runFunc
+	exec.runFunc = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) >= 4 && args[0] == "-C" && args[1] == reviewerPath && args[2] == "status" && args[3] == "--porcelain" {
+			return dirtyStatus, nil
+		}
+		return innerRun(name, args...)
+	}
+
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "approved", body: "LGTM", exitCode: 0},
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeReviewFailed {
+		t.Fatalf("outcome: got %q, want %q", outcome, outcomeReviewFailed)
+	}
+	if !strings.Contains(stderr.String(), "review_failed: reviewer worktree has uncommitted changes") {
+		t.Fatalf("stderr missing dirty reviewer diagnostic, got: %s", stderr.String())
+	}
+	if len(commentCalls) != 0 {
+		t.Errorf("no escalation comment expected, got %d", len(commentCalls))
 	}
 }
 

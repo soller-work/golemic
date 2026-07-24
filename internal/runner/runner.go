@@ -432,9 +432,18 @@ func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
 
 // cleanupReviewerWorktree emits a worktree.cleanup span and cleans up the reviewer worktree.
 func (r *Runner) cleanupReviewerWorktree(golemicDir, parentSpanID string) {
+	reviewerWT := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+
+	statusOut, statusErr := r.executor.Run("git", "-C", reviewerWT, "status", "--porcelain")
+	if statusErr != nil {
+		fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup status check failed: %v\n", statusErr) //nolint:errcheck
+	} else if strings.TrimSpace(statusOut) != "" {
+		fmt.Fprintf(r.stderr, "Warning: reviewer worktree is dirty; reviewer worktrees must be read-only/disposable. git status --porcelain:\n%s", statusOut) //nolint:errcheck
+	}
+
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanWorktreeCleanup,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
-	if err := worktree.CleanupReviewer(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
+	if _, err := r.executor.Run("git", "-C", r.repoRoot, "worktree", "remove", "--force", reviewerWT); err != nil {
 		fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", err) //nolint:errcheck
 		endSpan(telemetry.StatusError, nil)
 	} else {
@@ -550,11 +559,11 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 		return ciGateOutcome
 	}
 
-	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeoutDuration, runSpanID)
+	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeoutDuration, runSpanID, false)
 }
 
 // pingPongLoop runs the bounded reviewer ping-pong loop (up to maxRounds).
-func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.EventWriter, timeout time.Duration, runSpanID string) string {
+func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, cleanupBeforeFirstReviewerRound bool) string {
 	maxRounds := r.cfg.MaxReviewRounds
 
 	prNumber, err := r.getPRNumber(eventLogPath)
@@ -563,13 +572,13 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 		return outcomeReviewFailed
 	}
 
-	firstReviewerRound := true
+	cleanupReviewerBeforeNextRound := cleanupBeforeFirstReviewerRound
 	round := 1
 	for {
-		if !firstReviewerRound {
+		if cleanupReviewerBeforeNextRound {
 			r.cleanupReviewerWorktree(golemicDir, runSpanID)
 		}
-		firstReviewerRound = false
+		cleanupReviewerBeforeNextRound = true
 
 		r.turnCounter++ // each reviewer round gets its own turn
 		_, endCreateRevWT := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCreate,
