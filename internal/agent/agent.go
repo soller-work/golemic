@@ -71,17 +71,25 @@ func (e *ModelChainExhaustedError) Is(target error) bool {
 // inject a fake binary without a real pi installation.
 var CommandFactory = exec.Command
 
-// loginShellPATHResolver returns the PATH from the developer's login shell so
-// the agent subprocess can resolve toolchain binaries (e.g. golangci-lint)
-// without sourcing rc files. Override in tests.
-var loginShellPATHResolver = defaultLoginShellPATH
-
-func defaultLoginShellPATH() string {
-	out, err := exec.Command("sh", "-l", "-c", "echo $PATH").Output()
-	if err != nil {
-		return os.Getenv("PATH")
+func filterEnv(env []string, banned ...string) []string {
+	if len(banned) == 0 {
+		return append([]string(nil), env...)
 	}
-	return strings.TrimSpace(string(out))
+	blocked := make(map[string]struct{}, len(banned))
+	for _, key := range banned {
+		blocked[key] = struct{}{}
+	}
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if _, found := blocked[key]; found {
+				continue
+			}
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 // ---------------------------------------------------------------------------
@@ -147,9 +155,8 @@ func parseMaxStallRetries() int {
 // Types
 // ---------------------------------------------------------------------------
 
-// RoleConfig holds all parameters needed to invoke an agent role as a pi
-// subprocess. Every field is required; validation is performed at the top of
-// RunRole.
+// RoleConfig holds the parameters needed to invoke an agent role as a pi
+// subprocess. Validation is performed at the top of RunRole.
 type RoleConfig struct {
 	Role              string        // "dev" or "reviewer" (informational, used for transcript filenames)
 	SystemPromptFile  string        // path to the system prompt file, passed as @<file>
@@ -157,10 +164,10 @@ type RoleConfig struct {
 	WorktreeDir       string        // CWD for the subprocess
 	RunID             string        // golemic run identifier, set as GOLEMIC_RUN_ID
 	EventLogPath      string        // path to the JSONL event log, set as GOLEMIC_EVENT_LOG
-	GHToken           string        // role-specific GitHub token, set as GH_TOKEN
-	DevToken          string        // golemic dev token, set as GOLEMIC_DEV_TOKEN
-	ReviewerToken     string        // golemic reviewer token, set as GOLEMIC_REVIEWER_TOKEN
-	GolemicBinaryPath string        // path to the golemic binary; its directory is prepended to PATH
+	GHToken           string        // retained for caller compatibility; not injected into agent subprocess
+	DevToken          string        // retained for caller compatibility; not injected into agent subprocess
+	ReviewerToken     string        // retained for caller compatibility; not injected into agent subprocess
+	GolemicBinaryPath string        // path to the golemic binary; retained for caller compatibility
 	Model             string        // model identifier passed to --model
 	Timeout           time.Duration // maximum wall-clock time for the subprocess
 	IdleTimeout       time.Duration // idle window for stall detection; 0 means use env/default
@@ -285,15 +292,9 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 	if cfg.UserPrompt == "" {
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: userPrompt must not be empty")
 	}
-	if cfg.GHToken == "" {
-		return 0, TranscriptPaths{}, fmt.Errorf("agent: ghToken must not be empty")
-	}
 	// P3-5: defense-in-depth — ensure paths needed for env construction are set.
 	if cfg.EventLogPath == "" {
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: eventLogPath must not be empty")
-	}
-	if cfg.GolemicBinaryPath == "" {
-		return 0, TranscriptPaths{}, fmt.Errorf("agent: golemicBinaryPath must not be empty")
 	}
 	if cfg.RunsDir == "" {
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: runsDir must not be empty")
@@ -337,7 +338,6 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role)
 	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".activity.jsonl")
 	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stderr.log")
-	golemicDir := filepath.Dir(cfg.GolemicBinaryPath)
 
 	if err := os.MkdirAll(filepath.Join(cfg.RunsDir, cfg.RunID), 0755); err != nil {
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create transcript directory: %w", err)
@@ -361,7 +361,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 
 	for _, model := range chain {
 		var attemptErr error
-		exitCode, attemptErr = runModelAttempt(ctx, cfg, model, sessionID, golemicDir, golemicPiDir, stdoutPath, stderrPath)
+		exitCode, attemptErr = runModelAttempt(ctx, cfg, model, sessionID, golemicPiDir, stdoutPath, stderrPath)
 
 		// Wall-clock timeout is always terminal (BR-9).
 		if errors.Is(attemptErr, ErrTimeout) {
@@ -432,27 +432,18 @@ func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File
 }
 
 // newPiCmd builds and configures the pi subprocess without starting it.
-// shimDir, when non-empty, is prepended to PATH so its gh shim takes precedence
-// over any system gh binary, blocking direct gh usage from agent bash.
 func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir string, stdoutFile, stderrFile *os.File, terminalDone chan struct{}) *exec.Cmd {
 	cmd := CommandFactory("pi", args...)
 	cmd.Dir = cfg.WorktreeDir
-	agentPath := golemicDir + string(filepath.ListSeparator) + loginShellPATHResolver()
-	if shimDir != "" {
-		agentPath = shimDir + string(filepath.ListSeparator) + agentPath
-	}
-	env := append(
-		os.Environ(),
+	env := filterEnv(os.Environ(), "GH_TOKEN", "GOLEMIC_DEV_TOKEN", "GOLEMIC_REVIEWER_TOKEN")
+	env = append(env,
 		"GOLEMIC_RUN_ID="+cfg.RunID,
 		"GOLEMIC_EVENT_LOG="+cfg.EventLogPath,
 		"GOLEMIC_TURN_ID="+strconv.Itoa(cfg.TurnID),
-		"GH_TOKEN="+cfg.GHToken,
-		"GOLEMIC_DEV_TOKEN="+cfg.DevToken,
-		"GOLEMIC_REVIEWER_TOKEN="+cfg.ReviewerToken,
-		"PATH="+agentPath,
 		"PI_CODING_AGENT_DIR="+golemicPiDir,
 	)
 	env = append(env, cfg.Env...)
+	env = filterEnv(env, "GH_TOKEN", "GOLEMIC_DEV_TOKEN", "GOLEMIC_REVIEWER_TOKEN")
 	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout = &lineFilterWriter{dst: stdoutFile, onLine: func(line []byte) {
@@ -467,16 +458,13 @@ func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir s
 	return cmd
 }
 
-func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, golemicDir, golemicPiDir, stdoutPath, stderrPath string) (exitCode int, err error) {
+func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, golemicPiDir, stdoutPath, stderrPath string) (exitCode int, err error) {
 	args := buildPiArgs(cfg, model, sessionID)
 	idleTimeout := cfg.IdleTimeout
 	if idleTimeout <= 0 {
 		idleTimeout = parseIdleTimeout()
 	}
 	maxStallRetries := parseMaxStallRetries()
-
-	shimDir, cleanupShim := ghShimCreator()
-	defer cleanupShim()
 
 	for attempt := 0; attempt <= maxStallRetries; attempt++ {
 		stdoutFile, stderrFile, fileErr := openTranscriptFiles(stdoutPath, stderrPath)
@@ -485,7 +473,7 @@ func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, gole
 		}
 		terminalDone := make(chan struct{}, 1)
 		cfg.TerminalDone = terminalDone
-		cmd := newPiCmd(cfg, args, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile, terminalDone)
+		cmd := newPiCmd(cfg, args, "", golemicPiDir, "", stdoutFile, stderrFile, terminalDone)
 		if startErr := cmd.Start(); startErr != nil {
 			stdoutFile.Close() //nolint:errcheck
 			stderrFile.Close() //nolint:errcheck

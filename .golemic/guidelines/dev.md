@@ -26,4 +26,4 @@ Conventional Commits with slice number: `type(scope): summary (NNN)` — e.g. `f
 - Do not store `context.Context` in structs; no premature optimization; no clever one-liners at the cost of readability.
 
 ## Exploring the Codebase
-The worktree is indexed into a code-intelligence graph. Prefer `golemic cbm search_graph`, `golemic cbm search_code`, `golemic cbm get_code_snippet`, `golemic cbm trace_call_path`, `golemic cbm query_graph`, `golemic cbm get_architecture`, and `golemic cbm get_graph_schema` over `grep`/`find`/broad `read` for structural exploration — they answer in one call instead of many.
+The worktree is indexed into a code-intelligence graph. Prefer `gm_code_search_graph`, `gm_code_search`, `gm_code_get_snippet`, `gm_code_trace_call_path`, `gm_code_query_graph`, `gm_code_get_architecture`, and `gm_code_get_graph_schema` over `grep`/`find`/broad `read` for structural exploration — they answer in one call instead of many.

@@ -93,6 +93,10 @@ func defaultRoleConfig(t *testing.T, role string) RoleConfig {
 	t.Setenv("PI_CODING_AGENT_DIR", fakePiAgentDir)
 	// Redirect HOME so preparePiAgentDir writes ~/.golemic/pi to a temp dir.
 	t.Setenv("HOME", t.TempDir())
+	// Seed parent credentials to prove the agent subprocess scrubs them.
+	t.Setenv("GH_TOKEN", "parent-gh-token")
+	t.Setenv("GOLEMIC_DEV_TOKEN", "parent-dev-token")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "parent-reviewer-token")
 	return RoleConfig{
 		Role:              role,
 		SystemPromptFile:  systemPromptFile,
@@ -116,6 +120,7 @@ func defaultRoleConfig(t *testing.T, role string) RoleConfig {
 func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.ToolAllowlist = []string{"read", "bash", "write", "edit"}
+	t.Setenv("PATH", "/base/bin")
 
 	var capturedArgs []string
 	scriptPath := writeScript(t, captureEnvScript())
@@ -189,15 +194,11 @@ func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
 	if !strings.Contains(stdoutStr, "GOLEMIC_EVENT_LOG:") {
 		t.Errorf("stdout transcript should contain GOLEMIC_EVENT_LOG, got: %s", stdoutStr)
 	}
-	if !strings.Contains(stdoutStr, "GH_TOKEN: ghp_test_token_dev") {
-		t.Errorf("stdout transcript should contain dev GH_TOKEN, got: %s", stdoutStr)
+	if strings.Contains(stdoutStr, "parent-gh-token") || strings.Contains(stdoutStr, "parent-dev-token") || strings.Contains(stdoutStr, "parent-reviewer-token") {
+		t.Errorf("stdout transcript must not expose parent credentials, got: %s", stdoutStr)
 	}
-	if !strings.Contains(stdoutStr, "PATH:") {
-		t.Errorf("stdout transcript should contain PATH, got: %s", stdoutStr)
-	}
-	// PATH should have /usr/local/bin prepended
-	if !strings.Contains(stdoutStr, "/usr/local/bin:") {
-		t.Errorf("stdout transcript should contain golemic binary dir prepended in PATH, got: %s", stdoutStr)
+	if !strings.Contains(stdoutStr, "PATH: /base/bin") {
+		t.Errorf("stdout transcript should preserve PATH without prepending toolchain dirs, got: %s", stdoutStr)
 	}
 	if !strings.Contains(stdoutStr, "PI_CODING_AGENT_DIR:") {
 		t.Errorf("stdout transcript should contain PI_CODING_AGENT_DIR, got: %s", stdoutStr)
@@ -229,6 +230,7 @@ func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
 func TestRunRole_ReviewerToolAllowlist_AC004(t *testing.T) {
 	cfg := defaultRoleConfig(t, "reviewer")
 	cfg.ToolAllowlist = []string{"read", "bash"}
+	t.Setenv("PATH", "/base/bin")
 
 	var capturedArgs []string
 	scriptPath := writeScript(t, captureEnvScript())
@@ -271,14 +273,11 @@ func TestRunRole_ReviewerToolAllowlist_AC004(t *testing.T) {
 	if !strings.Contains(stdoutStr, "GOLEMIC_EVENT_LOG:") {
 		t.Errorf("stdout transcript should contain GOLEMIC_EVENT_LOG, got: %s", stdoutStr)
 	}
-	if !strings.Contains(stdoutStr, "GH_TOKEN: ghp_test_token_reviewer") {
-		t.Errorf("stdout transcript should contain reviewer GH_TOKEN, got: %s", stdoutStr)
+	if strings.Contains(stdoutStr, "parent-gh-token") || strings.Contains(stdoutStr, "parent-dev-token") || strings.Contains(stdoutStr, "parent-reviewer-token") {
+		t.Errorf("stdout transcript must not expose parent credentials, got: %s", stdoutStr)
 	}
-	if !strings.Contains(stdoutStr, "PATH:") {
-		t.Errorf("stdout transcript should contain PATH, got: %s", stdoutStr)
-	}
-	if !strings.Contains(stdoutStr, "/usr/local/bin:") {
-		t.Errorf("stdout transcript should contain golemic binary dir prepended in PATH, got: %s", stdoutStr)
+	if !strings.Contains(stdoutStr, "PATH: /base/bin") {
+		t.Errorf("stdout transcript should preserve PATH without prepending toolchain dirs, got: %s", stdoutStr)
 	}
 }
 
@@ -484,20 +483,25 @@ func TestRunRole_Validation_EmptyWorktreeDir(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Validation: empty GH token
+// Validation: empty GH token is no longer required
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_EmptyGHToken(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.GHToken = ""
 
+	var capturedArgs []string
+	scriptPath := writeScript(t, captureEnvScript())
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	t.Setenv("PATH", "/base/bin")
+
 	ctx := context.Background()
-	_, _, err := RunRole(ctx, cfg)
-	if err == nil {
-		t.Fatal("expected error for empty GH token, got nil")
+	exitCode, _, err := RunRole(ctx, cfg)
+	if err != nil {
+		t.Fatalf("expected empty GH token to be accepted, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "ghToken must not be empty") {
-		t.Errorf("error should mention empty ghToken, got: %v", err)
+	if exitCode != 0 {
+		t.Fatalf("exit code: got %d, want 0", exitCode)
 	}
 }
 
@@ -1941,22 +1945,15 @@ done`
 }
 
 // ---------------------------------------------------------------------------
-// Issue-167: Login-shell PATH injection and gh-shim precedence
+// Issue-167 cleanup: the agent subprocess preserves PATH and scrubs secrets.
 // ---------------------------------------------------------------------------
 
-// TestNewPiCmd_PathContainsLoginShellToolchain_AndShimFirst verifies that:
-//  1. The subprocess PATH includes a toolchain directory from the login-shell PATH.
-//  2. The gh shim directory appears before the toolchain directory on the PATH.
-func TestNewPiCmd_PathContainsLoginShellToolchain_AndShimFirst(t *testing.T) {
-	fakeToolchain := "/fake/toolchain/bin"
-
-	old := loginShellPATHResolver
-	loginShellPATHResolver = func() string { return fakeToolchain }
-	t.Cleanup(func() { loginShellPATHResolver = old })
-
-	shimDir := t.TempDir()
-	golemicDir := "/usr/local/bin"
+func TestNewPiCmd_PreservesPATHAndOmitsSecrets(t *testing.T) {
 	golemicPiDir := t.TempDir()
+	t.Setenv("PATH", "/base/bin")
+	t.Setenv("GH_TOKEN", "parent-gh-token")
+	t.Setenv("GOLEMIC_DEV_TOKEN", "parent-dev-token")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "parent-reviewer-token")
 
 	tmpDir := t.TempDir()
 	stdoutFile, err := os.Create(filepath.Join(tmpDir, "stdout"))
@@ -1974,7 +1971,7 @@ func TestNewPiCmd_PathContainsLoginShellToolchain_AndShimFirst(t *testing.T) {
 	t.Cleanup(func() { CommandFactory = oldCF })
 
 	cfg := RoleConfig{WorktreeDir: t.TempDir()}
-	cmd := newPiCmd(cfg, nil, golemicDir, golemicPiDir, shimDir, stdoutFile, stderrFile, nil)
+	cmd := newPiCmd(cfg, nil, "/unused", golemicPiDir, "/unused-shim", stdoutFile, stderrFile, nil)
 
 	var agentPath string
 	for _, e := range cmd.Env {
@@ -1983,28 +1980,12 @@ func TestNewPiCmd_PathContainsLoginShellToolchain_AndShimFirst(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(agentPath, fakeToolchain) {
-		t.Errorf("PATH missing toolchain dir %q; got %q", fakeToolchain, agentPath)
+	if agentPath != "/base/bin" {
+		t.Fatalf("PATH = %q, want %q", agentPath, "/base/bin")
 	}
-
-	shimIdx := strings.Index(agentPath, shimDir)
-	toolchainIdx := strings.Index(agentPath, fakeToolchain)
-	golemicIdx := strings.Index(agentPath, golemicDir)
-
-	if shimIdx < 0 {
-		t.Errorf("shim dir %q not found in PATH %q", shimDir, agentPath)
-	}
-	if toolchainIdx < 0 {
-		t.Errorf("toolchain dir %q not found in PATH %q", fakeToolchain, agentPath)
-	}
-	// Shim must precede toolchain (gh-shim keeps precedence over any toolchain gh).
-	if shimIdx > toolchainIdx {
-		t.Errorf("shim dir must precede toolchain dir in PATH; shim=%d toolchain=%d path=%q",
-			shimIdx, toolchainIdx, agentPath)
-	}
-	// Shim must precede golemicDir.
-	if shimIdx > golemicIdx {
-		t.Errorf("shim dir must precede golemic dir in PATH; shim=%d golemic=%d path=%q",
-			shimIdx, golemicIdx, agentPath)
+	for _, secret := range []string{"parent-gh-token", "parent-dev-token", "parent-reviewer-token", "/unused-shim", "/unused"} {
+		if strings.Contains(strings.Join(cmd.Env, "\n"), secret) {
+			t.Errorf("command environment must not contain %q: %v", secret, cmd.Env)
+		}
 	}
 }

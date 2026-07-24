@@ -160,7 +160,7 @@ func TestRenderDev_CommitAndPushBeforeOpenPR(t *testing.T) {
 	assertBefore(t, userPrompt, "gm_project_check", "gm_dev_done")
 	// Banned terms must not appear as affirmative step instructions (numbered or backtick-command lines).
 	// They may appear in prohibition notes ("Do not run `git add`...").
-	for _, banned := range []string{"git add -A", "git push -u", "golemic open-pr --title"} {
+	for _, banned := range []string{"git add -A", "git push -u", "golemic open-pr"} {
 		if strings.Contains(userPrompt, banned) {
 			t.Errorf("dev prompt must not contain affirmative instruction %q after cutover", banned)
 		}
@@ -539,7 +539,7 @@ func TestRenderDev_StepListEndsWithOpenPR(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	// After cutover: step list ends with gm_dev_done, not golemic open-pr.
+	// After cutover: step list ends with gm_dev_done.
 	if !strings.Contains(userPrompt, "gm_dev_done") {
 		t.Error("step list must contain 'gm_dev_done'")
 	}
@@ -596,7 +596,7 @@ func TestRenderDev_EmptyTitleBody(t *testing.T) {
 	}
 }
 
-// AS-1/AS-2: Dev prompt prohibits gh pr create and mandates golemic open-pr as sole PR opener
+// AS-1/AS-2: Dev prompt prohibits gh pr create and does not mention legacy golemic commands
 func TestRenderDev_GhPrCreateProhibition(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
 
@@ -605,38 +605,16 @@ func TestRenderDev_GhPrCreateProhibition(t *testing.T) {
 		t.Fatalf("RenderDev() unexpected error: %v", err)
 	}
 
-	// After cutover: neither gh pr create nor golemic open-pr appear as affirmative instructions.
-	// The prompt must reference gm_dev_done as the terminal tool.
+	// After cutover: the prompt must reference gm_dev_done as the terminal tool
+	// and must not mention legacy golemic subcommands.
 	if !strings.Contains(userPrompt, "gm_dev_done") {
 		t.Fatal("dev prompt missing 'gm_dev_done'")
 	}
-
-	// gh pr create and golemic open-pr must only appear in a prohibition context (if at all).
-	lower := strings.ToLower(userPrompt)
-	for _, term := range []string{"gh pr create", "golemic open-pr"} {
-		if idx := strings.Index(lower, term); idx >= 0 {
-			window := lower[max(0, idx-100):min(len(lower), idx+100)]
-			hasNeg := strings.Contains(window, "do not") || strings.Contains(window, "must not") ||
-				strings.Contains(window, "never") || strings.Contains(window, "do **not**")
-			if !hasNeg {
-				t.Errorf("%q appears in dev prompt without a nearby negative directive; context: %q", term, window)
-			}
+	for _, banned := range []string{"golemic open-pr", "golemic submit-review", "golemic review-comment", "golemic emit"} {
+		if strings.Contains(userPrompt, banned) {
+			t.Errorf("dev prompt must not contain %q", banned)
 		}
 	}
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // AC-001: Adversarial input renders without b64 and includes the title/body in the display section
@@ -774,11 +752,11 @@ func TestRenderDevRebaseConflictResolve_ProhibitsAgentSubcommands(t *testing.T) 
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	mustContain(t, out, []string{
-		"golemic open-pr",
-		"golemic submit-review",
-		"golemic emit",
-	})
+	for _, banned := range []string{"golemic open-pr", "golemic submit-review", "golemic emit"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("rebase prompt must not contain %q", banned)
+		}
+	}
 }
 
 func TestRenderDevRebaseConflictResolve_StepListOrder(t *testing.T) {
