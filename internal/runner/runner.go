@@ -433,6 +433,9 @@ func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
 // cleanupReviewerWorktree emits a worktree.cleanup span and cleans up the reviewer worktree.
 func (r *Runner) cleanupReviewerWorktree(golemicDir, parentSpanID string) {
 	reviewerWT := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
+	if !r.reviewerWorktreeRegistered(reviewerWT) {
+		return
+	}
 
 	statusOut, statusErr := r.executor.Run("git", "-C", reviewerWT, "status", "--porcelain")
 	if statusErr != nil {
@@ -449,6 +452,19 @@ func (r *Runner) cleanupReviewerWorktree(golemicDir, parentSpanID string) {
 	} else {
 		endSpan(telemetry.StatusOK, nil)
 	}
+}
+
+func (r *Runner) reviewerWorktreeRegistered(reviewerWT string) bool {
+	out, err := r.executor.RunInDir(r.repoRoot, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "worktree "+reviewerWT {
+			return true
+		}
+	}
+	return false
 }
 
 // postEscalationCommentWithSpan emits an escalation.comment span and posts the comment.

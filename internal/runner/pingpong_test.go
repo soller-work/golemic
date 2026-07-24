@@ -403,6 +403,8 @@ func TestPingPong_ChangesRequestedThenApproved_CleansReviewerWorktreeBetweenRoun
 	capture := &promptCapture{}
 
 	r, logPath, _ := setupPingPongRunner(t, exec)
+	reviewerPath := filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", "issue-42-review")
+	mockReviewerWorktreeRegistered(exec, reviewerPath)
 	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
 		{role: "dev", exitCode: 0},
 		{role: "reviewer", verdict: "changes_requested", body: "Fix the typo in README", exitCode: 0},
