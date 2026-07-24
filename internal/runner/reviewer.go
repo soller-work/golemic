@@ -844,7 +844,7 @@ func (r *Runner) submitPendingReview(reviewID, verdict, body string) (submittedR
 		Data struct {
 			SubmitPullRequestReview struct {
 				PullRequestReview struct {
-					FullDatabaseID int64 `json:"fullDatabaseId"`
+					FullDatabaseID string `json:"fullDatabaseId"`
 					Comments       struct {
 						TotalCount int `json:"totalCount"`
 					} `json:"comments"`
@@ -857,10 +857,10 @@ func (r *Runner) submitPendingReview(reviewID, verdict, body string) (submittedR
 	}
 	dbID := resp.Data.SubmitPullRequestReview.PullRequestReview.FullDatabaseID
 	count := resp.Data.SubmitPullRequestReview.PullRequestReview.Comments.TotalCount
-	if dbID == 0 {
+	if dbID == "" {
 		return "", 0, fmt.Errorf("submit review returned empty id")
 	}
-	return fmt.Sprintf("%d", dbID), count, nil
+	return dbID, count, nil
 }
 
 // writeReviewSubmittedEventFromRunner writes a review_submitted event (BR-10).
