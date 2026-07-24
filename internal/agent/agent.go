@@ -158,24 +158,20 @@ func parseMaxStallRetries() int {
 // RoleConfig holds the parameters needed to invoke an agent role as a pi
 // subprocess. Validation is performed at the top of RunRole.
 type RoleConfig struct {
-	Role              string        // "dev" or "reviewer" (informational, used for transcript filenames)
-	SystemPromptFile  string        // path to the system prompt file, passed as @<file>
-	UserPrompt        string        // the rendered user prompt text (last positional arg)
-	WorktreeDir       string        // CWD for the subprocess
-	RunID             string        // golemic run identifier, set as GOLEMIC_RUN_ID
-	EventLogPath      string        // path to the JSONL event log, set as GOLEMIC_EVENT_LOG
-	GHToken           string        // retained for caller compatibility; not injected into agent subprocess
-	DevToken          string        // retained for caller compatibility; not injected into agent subprocess
-	ReviewerToken     string        // retained for caller compatibility; not injected into agent subprocess
-	GolemicBinaryPath string        // path to the golemic binary; retained for caller compatibility
-	Model             string        // model identifier passed to --model
-	Timeout           time.Duration // maximum wall-clock time for the subprocess
-	IdleTimeout       time.Duration // idle window for stall detection; 0 means use env/default
-	ToolAllowlist     []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
-	RunsDir           string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
-	TurnID            int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
-	Env               []string      // additional "KEY=VALUE" pairs merged into the subprocess environment
-	TerminalDone      chan struct{} // closed when gm_dev_done or accepted gm_review_submit reaches a terminal result
+	Role             string        // "dev" or "reviewer" (informational, used for transcript filenames)
+	SystemPromptFile string        // path to the system prompt file, passed as @<file>
+	UserPrompt       string        // the rendered user prompt text (last positional arg)
+	WorktreeDir      string        // CWD for the subprocess
+	RunID            string        // golemic run identifier, set as GOLEMIC_RUN_ID
+	EventLogPath     string        // path to the JSONL event log, set as GOLEMIC_EVENT_LOG
+	Model            string        // model identifier passed to --model
+	Timeout          time.Duration // maximum wall-clock time for the subprocess
+	IdleTimeout      time.Duration // idle window for stall detection; 0 means use env/default
+	ToolAllowlist    []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
+	RunsDir          string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
+	TurnID           int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
+	Env              []string      // additional "KEY=VALUE" pairs merged into the subprocess environment
+	TerminalDone     chan struct{} // closed when gm_dev_done or accepted gm_review_submit reaches a terminal result
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.

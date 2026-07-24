@@ -98,18 +98,16 @@ func defaultRoleConfig(t *testing.T, role string) RoleConfig {
 	t.Setenv("GOLEMIC_DEV_TOKEN", "parent-dev-token")
 	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "parent-reviewer-token")
 	return RoleConfig{
-		Role:              role,
-		SystemPromptFile:  systemPromptFile,
-		UserPrompt:        "Implement the feature",
-		WorktreeDir:       worktreeDir,
-		RunID:             "test-run-001",
-		EventLogPath:      filepath.Join(t.TempDir(), "events.jsonl"),
-		GHToken:           "ghp_test_token_" + role,
-		GolemicBinaryPath: "/usr/local/bin/golemic",
-		Model:             "z-ai/glm-4.6",
-		Timeout:           30 * time.Second,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
-		RunsDir:           t.TempDir(),
+		Role:             role,
+		SystemPromptFile: systemPromptFile,
+		UserPrompt:       "Implement the feature",
+		WorktreeDir:      worktreeDir,
+		RunID:            "test-run-001",
+		EventLogPath:     filepath.Join(t.TempDir(), "events.jsonl"),
+		Model:            "z-ai/glm-4.6",
+		Timeout:          30 * time.Second,
+		ToolAllowlist:    []string{"read", "bash", "write", "edit"},
+		RunsDir:          t.TempDir(),
 	}
 }
 
@@ -483,29 +481,6 @@ func TestRunRole_Validation_EmptyWorktreeDir(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Validation: empty GH token is no longer required
-// ---------------------------------------------------------------------------
-
-func TestRunRole_Validation_EmptyGHToken(t *testing.T) {
-	cfg := defaultRoleConfig(t, "dev")
-	cfg.GHToken = ""
-
-	var capturedArgs []string
-	scriptPath := writeScript(t, captureEnvScript())
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
-	t.Setenv("PATH", "/base/bin")
-
-	ctx := context.Background()
-	exitCode, _, err := RunRole(ctx, cfg)
-	if err != nil {
-		t.Fatalf("expected empty GH token to be accepted, got: %v", err)
-	}
-	if exitCode != 0 {
-		t.Fatalf("exit code: got %d, want 0", exitCode)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Validation: zero/negative timeout
 // ---------------------------------------------------------------------------
 
@@ -570,58 +545,6 @@ func TestRunRole_Validation_EmptyRunID(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "runID must not be empty") {
 		t.Errorf("error should mention empty runID, got: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// GH_TOKEN is never in command-line args (security check)
-// ---------------------------------------------------------------------------
-
-func TestRunRole_GHTokenNotInArgs(t *testing.T) {
-	cfg := defaultRoleConfig(t, "dev")
-	cfg.GHToken = "ghp_super_secret_12345"
-
-	var capturedArgs []string
-	scriptPath := writeScript(t, captureEnvScript())
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
-
-	ctx := context.Background()
-	_, _, err := RunRole(ctx, cfg)
-	if err != nil {
-		t.Fatalf("RunRole failed: %v", err)
-	}
-
-	// Check that no arg contains the token value
-	for _, arg := range capturedArgs {
-		if strings.Contains(arg, "ghp_super_secret_12345") {
-			t.Errorf("GH_TOKEN value found in command-line arg: %q", arg)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// GH_TOKEN is never in transcript paths (security check)
-// ---------------------------------------------------------------------------
-
-func TestRunRole_GHTokenNotInTranscriptPaths(t *testing.T) {
-	cfg := defaultRoleConfig(t, "dev")
-	cfg.GHToken = "ghp_super_secret_12345"
-
-	var capturedArgs []string
-	scriptPath := writeScript(t, captureEnvScript())
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
-
-	ctx := context.Background()
-	_, paths, err := RunRole(ctx, cfg)
-	if err != nil {
-		t.Fatalf("RunRole failed: %v", err)
-	}
-
-	if strings.Contains(paths.Stdout, "ghp_super_secret_12345") {
-		t.Errorf("GH_TOKEN found in stdout transcript path: %s", paths.Stdout)
-	}
-	if strings.Contains(paths.Stderr, "ghp_super_secret_12345") {
-		t.Errorf("GH_TOKEN found in stderr transcript path: %s", paths.Stderr)
 	}
 }
 

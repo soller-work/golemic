@@ -376,6 +376,7 @@ func (r *Runner) startCBMForRole(wtPath, cbmCacheDir, sockPath, projectName stri
 }
 
 func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, brokerEnv []string) agent.RoleConfig {
+	_ = golemicBinaryPath
 	toolAllowlist := []string{"read", "bash", "write", "edit"}
 	hasGMSock := false
 	hasCBMSock := false
@@ -394,23 +395,19 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 		}
 	}
 	return agent.RoleConfig{
-		Role:              "dev",
-		SystemPromptFile:  systemPromptFile,
-		UserPrompt:        userPrompt,
-		WorktreeDir:       devWorktreePath,
-		RunID:             r.runID,
-		EventLogPath:      eventLogPath,
-		TurnID:            r.turnCounter,
-		GHToken:           r.creds.DevToken(),
-		DevToken:          r.creds.DevToken(),
-		ReviewerToken:     r.creds.ReviewerToken(),
-		GolemicBinaryPath: golemicBinaryPath,
-		Model:             model,
-		Timeout:           timeout,
-		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:     toolAllowlist,
-		RunsDir:           runsDir,
-		Env:               brokerEnv,
+		Role:             "dev",
+		SystemPromptFile: systemPromptFile,
+		UserPrompt:       userPrompt,
+		WorktreeDir:      devWorktreePath,
+		RunID:            r.runID,
+		EventLogPath:     eventLogPath,
+		TurnID:           r.turnCounter,
+		Model:            model,
+		Timeout:          timeout,
+		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
+		ToolAllowlist:    toolAllowlist,
+		RunsDir:          runsDir,
+		Env:              brokerEnv,
 	}
 }
 
