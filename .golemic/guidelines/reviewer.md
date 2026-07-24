@@ -20,7 +20,7 @@ Go 1.21, standard library only — no frameworks. Module `golemic`; non-public p
 - `context.Context` stored in structs; premature optimization; clever one-liners at the cost of readability.
 
 ## Exploring the Codebase
-The worktree is indexed into a code-intelligence graph. Prefer `golemic cbm search_graph`, `golemic cbm search_code`, `golemic cbm get_code_snippet`, `golemic cbm trace_call_path`, `golemic cbm query_graph`, `golemic cbm get_architecture`, and `golemic cbm get_graph_schema` over `grep`/`find`/broad `read` for structural exploration. Use `golemic cbm detect_changes` to understand the blast radius of the PR's modifications before reading files.
+The worktree is indexed into a code-intelligence graph. Prefer `gm_code_search_graph`, `gm_code_search`, `gm_code_get_snippet`, `gm_code_trace_call_path`, `gm_code_query_graph`, `gm_code_get_architecture`, and `gm_code_get_graph_schema` over `grep`/`find`/broad `read` for structural exploration. Use `gm_code_detect_changes` to understand the blast radius of the PR's modifications before reading files.
 
 ## Verdict
-Exactly one `golemic submit-review --verdict approved|changes_requested`. When `changes_requested`, list concrete, actionable points.
+Exactly one `gm_review_submit` with `verdict="approved"|"changes_requested"`. When `changes_requested`, list concrete, actionable points.

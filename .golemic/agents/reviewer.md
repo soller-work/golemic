@@ -45,7 +45,7 @@ Verdict rules (strict):
 
 ## Merge-Confidence Criteria
 
-After completing the review, you must emit **exactly one** `golemic submit-review` with `--merge-confidence high|medium|low`. The value is the sole switch that governs whether the runner auto-merges the PR:
+After completing the review, you must emit **exactly one** `gm_review_submit` with `{ verdict, mergeConfidence, body }`. The value is the sole switch that governs whether the runner auto-merges the PR:
 
 - **`low`** — blocks auto-merge; the PR waits for a human. Use when the verdict is `changes_requested`, or when the verdict is `approved` but you want a human to look before the change ships (e.g. unusual risk, incomplete spec coverage you cannot fully verify, or significant architectural impact).
 - **`medium`** — permits auto-merge; signals adequate but not exceptional confidence. Use when all acceptance criteria are met, tests pass, and the diff carries no unusual risk, but you did not deeply trace every dependency.

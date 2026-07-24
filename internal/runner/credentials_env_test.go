@@ -2,14 +2,15 @@ package runner
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"golemic/internal/agent"
 )
 
-// TestRunnerEnv_CredTokensInjected_Dev verifies that DevToken and ReviewerToken
-// are set in the dev agent RoleConfig so newPiCmd injects them as GOLEMIC_*_TOKEN env vars.
-func TestRunnerEnv_CredTokensInjected_Dev(t *testing.T) {
+// TestRunnerEnv_CredTokensNotInjected_Dev verifies that the dev agent RoleConfig
+// does not carry GitHub credential env vars.
+func TestRunnerEnv_CredTokensNotInjected_Dev(t *testing.T) {
 	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_test_token")
 	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_test_token")
 
@@ -33,17 +34,17 @@ func TestRunnerEnv_CredTokensInjected_Dev(t *testing.T) {
 		t.Fatalf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
 
-	if capturedDevCfg.DevToken != "ghp_dev_test_token" {
-		t.Errorf("dev RoleConfig.DevToken = %q, want %q", capturedDevCfg.DevToken, "ghp_dev_test_token")
-	}
-	if capturedDevCfg.ReviewerToken != "ghp_rev_test_token" {
-		t.Errorf("dev RoleConfig.ReviewerToken = %q, want %q", capturedDevCfg.ReviewerToken, "ghp_rev_test_token")
+	joinedEnv := strings.Join(capturedDevCfg.Env, "\n")
+	for _, banned := range []string{"GH_TOKEN=", "GOLEMIC_DEV_TOKEN=", "GOLEMIC_REVIEWER_TOKEN="} {
+		if strings.Contains(joinedEnv, banned) {
+			t.Errorf("dev agent env unexpectedly contains %q: %v", banned, capturedDevCfg.Env)
+		}
 	}
 }
 
-// TestRunnerEnv_CredTokensInjected_Reviewer verifies that DevToken and ReviewerToken
-// are set in the reviewer agent RoleConfig so newPiCmd injects them as GOLEMIC_*_TOKEN env vars.
-func TestRunnerEnv_CredTokensInjected_Reviewer(t *testing.T) {
+// TestRunnerEnv_CredTokensNotInjected_Reviewer verifies that the reviewer agent
+// RoleConfig does not carry GitHub credential env vars.
+func TestRunnerEnv_CredTokensNotInjected_Reviewer(t *testing.T) {
 	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_test_token")
 	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_test_token")
 
@@ -67,10 +68,10 @@ func TestRunnerEnv_CredTokensInjected_Reviewer(t *testing.T) {
 		t.Fatalf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
 
-	if capturedRevCfg.DevToken != "ghp_dev_test_token" {
-		t.Errorf("reviewer RoleConfig.DevToken = %q, want %q", capturedRevCfg.DevToken, "ghp_dev_test_token")
-	}
-	if capturedRevCfg.ReviewerToken != "ghp_rev_test_token" {
-		t.Errorf("reviewer RoleConfig.ReviewerToken = %q, want %q", capturedRevCfg.ReviewerToken, "ghp_rev_test_token")
+	joinedEnv := strings.Join(capturedRevCfg.Env, "\n")
+	for _, banned := range []string{"GH_TOKEN=", "GOLEMIC_DEV_TOKEN=", "GOLEMIC_REVIEWER_TOKEN="} {
+		if strings.Contains(joinedEnv, banned) {
+			t.Errorf("reviewer agent env unexpectedly contains %q: %v", banned, capturedRevCfg.Env)
+		}
 	}
 }

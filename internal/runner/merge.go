@@ -568,23 +568,20 @@ func (r *Runner) collectConflictedFilesForRebase(devWT string) ([]string, error)
 
 // buildRebaseConflictAgentConfig creates the agent.RoleConfig for rebase conflict resolution.
 func (r *Runner) buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath string, runsDir string) agent.RoleConfig {
+	_ = golemicBinaryPath
 	return agent.RoleConfig{
-		Role:              "dev",
-		SystemPromptFile:  systemPromptFile,
-		UserPrompt:        userPrompt,
-		WorktreeDir:       devWT,
-		RunID:             r.runID,
-		EventLogPath:      eventLogPath,
-		TurnID:            r.turnCounter,
-		GHToken:           r.creds.DevToken(),
-		DevToken:          r.creds.DevToken(),
-		ReviewerToken:     r.creds.ReviewerToken(),
-		GolemicBinaryPath: golemicBinaryPath,
-		Model:             model,
-		Timeout:           r.agentTimeout(),
-		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:     []string{"read", "bash", "write", "edit"},
-		RunsDir:           runsDir,
+		Role:             "dev",
+		SystemPromptFile: systemPromptFile,
+		UserPrompt:       userPrompt,
+		WorktreeDir:      devWT,
+		RunID:            r.runID,
+		EventLogPath:     eventLogPath,
+		TurnID:           r.turnCounter,
+		Model:            model,
+		Timeout:          r.agentTimeout(),
+		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
+		ToolAllowlist:    []string{"read", "bash", "write", "edit"},
+		RunsDir:          runsDir,
 	}
 }
 
