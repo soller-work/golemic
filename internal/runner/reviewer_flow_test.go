@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
+	"golemic/internal/eventlog"
 	"golemic/internal/gmbroker"
 	"golemic/internal/prompt"
 )
@@ -59,7 +61,7 @@ func newReviewerGraphQLExecutor(commentJSON string) (*fakeExecutor, *reviewerGra
 						break
 					}
 				}
-				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":9001,"comments":{"totalCount":1}}}}}`, nil
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":"9001","comments":{"totalCount":1}}}}}`, nil
 			}
 		}
 		if name == "gh" && len(args) >= 2 && args[0] == "api" && strings.HasPrefix(args[1], "repos/") && strings.Contains(args[1], "/reviews/") && strings.HasSuffix(args[1], "/comments") {
@@ -115,6 +117,122 @@ func writeReviewerPrecheck(t *testing.T, r *Runner, logPath string, ok bool, bef
 	return buildReviewerPrecheckBlock(res)
 }
 
+func assertLatestReviewSubmittedEvent(t *testing.T, logPath, wantReviewID string, wantInlineCount int) {
+	t.Helper()
+	reader := eventlog.Reader{}
+	events, err := reader.Read(logPath)
+	if err != nil {
+		t.Fatalf("read event log: %v", err)
+	}
+	for i := len(events) - 1; i >= 0; i-- {
+		if events[i].Type != eventlog.EventReviewSubmitted {
+			continue
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(events[i].Payload, &payload); err != nil {
+			t.Fatalf("unmarshal review_submitted payload: %v", err)
+		}
+		if payload["reviewId"] != wantReviewID {
+			t.Fatalf("reviewId: got %v, want %q", payload["reviewId"], wantReviewID)
+		}
+		if payload["inlineCommentCount"] != float64(wantInlineCount) {
+			t.Fatalf("inlineCommentCount: got %v, want %d", payload["inlineCommentCount"], wantInlineCount)
+		}
+		return
+	}
+	t.Fatal("review_submitted event not found")
+}
+
+func submitReviewerAttempt(t *testing.T, cfg agent.RoleConfig, attempt int) {
+	t.Helper()
+	verdict := "approved"
+	mergeConfidence := "high"
+	body := "Looks good now"
+	if attempt == 1 {
+		verdict = "changes_requested"
+		mergeConfidence = "low"
+		body = "Please fix"
+	}
+	result := callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", attempt), map[string]any{
+		"verdict":         verdict,
+		"mergeConfidence": mergeConfidence,
+		"body":            body,
+	})
+	if result == nil || result["ok"] != true {
+		t.Fatalf("expected accepted %s submit, got %v", verdict, result)
+	}
+}
+
+func makeReviewerChangesRequestedAgent(t *testing.T, reviewerPrompts, devPrompts *[]string) func(context.Context, agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+	t.Helper()
+	reviewerCalls := 0
+	return func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		switch cfg.Role {
+		case "dev":
+			if !sendGMProjectCheck(cfg.Env) || !sendGMDevDone(cfg.Env) {
+				t.Fatal("dev gate failed")
+			}
+			*devPrompts = append(*devPrompts, cfg.UserPrompt)
+		case "reviewer":
+			*reviewerPrompts = append(*reviewerPrompts, cfg.UserPrompt)
+			reviewerCalls++
+			submitReviewerAttempt(t, cfg, reviewerCalls)
+		default:
+			t.Fatalf("unexpected role %q", cfg.Role)
+		}
+		return 0, fakeTranscriptPaths("/tmp", cfg.Role), nil
+	}
+}
+
+func makeReviewerInvalidApprovalAgent(t *testing.T) (func(context.Context, agent.RoleConfig) (int, agent.TranscriptPaths, error), *int) {
+	t.Helper()
+	reviewerCalls := 0
+	return func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		switch cfg.Role {
+		case "dev":
+			if !sendGMProjectCheck(cfg.Env) || !sendGMDevDone(cfg.Env) {
+				t.Fatal("dev gate failed")
+			}
+		case "reviewer":
+			reviewerCalls++
+			result := callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", reviewerCalls), map[string]any{
+				"verdict":         "approved",
+				"mergeConfidence": "high",
+				"body":            "Still approved",
+			})
+			if result == nil || result["ok"] != false || result["code"] != "REVIEWER_GATE" {
+				t.Fatalf("expected gate rejection, got %v", result)
+			}
+		default:
+			t.Fatalf("unexpected role %q", cfg.Role)
+		}
+		return 0, fakeTranscriptPaths("/tmp", cfg.Role), nil
+	}, &reviewerCalls
+}
+
+func TestSubmitPendingReview_StringFullDatabaseID(t *testing.T) {
+	exec := &fakeExecutor{
+		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+			if name == "gh" && len(args) >= 2 && args[0] == "api" && args[1] == "graphql" && strings.Contains(strings.Join(args, " "), "submitPullRequestReview") {
+				return `{"data":{"submitPullRequestReview":{"pullRequestReview":{"fullDatabaseId":"9001","comments":{"totalCount":1}}}}}`, nil
+			}
+			return "", fmt.Errorf("unexpected call: %s %v", name, args)
+		},
+	}
+	r, _, _ := newReviewerSubmitRunner(t, exec)
+
+	submittedID, inlineCount, err := r.submitPendingReview("PRR_1", "approved", "LGTM")
+	if err != nil {
+		t.Fatalf("submitPendingReview: %v", err)
+	}
+	if submittedID != "9001" {
+		t.Errorf("submitPendingReview id: got %q, want 9001", submittedID)
+	}
+	if inlineCount != 1 {
+		t.Errorf("submitPendingReview inlineCount: got %d, want 1", inlineCount)
+	}
+}
+
 func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 	exec, state := newReviewerGraphQLExecutor(`[]`)
 	r, logPath, _ := newReviewerSubmitRunner(t, exec)
@@ -163,6 +281,14 @@ func TestSubmitReviewAndWriteEvent_ChangesRequestedBuildsFindingsJSON(t *testing
 		pendingReviewID:    state.pendingReviewID,
 	}, logPath); err != nil {
 		t.Fatalf("submitReviewAndWriteEvent: %v", err)
+	}
+
+	reviewID, err := r.latestReviewID(logPath)
+	if err != nil {
+		t.Fatalf("latestReviewID: %v", err)
+	}
+	if reviewID != "9001" {
+		t.Errorf("latestReviewID: got %q, want 9001", reviewID)
 	}
 
 	findingsJSON, err := r.buildFindingsJSON(logPath)
@@ -309,6 +435,43 @@ func TestOrchestrate_ReviewerInvalidApproval_RestartsWithGatePromptAndPreservesP
 	}
 }
 
+func TestOrchestrate_ReviewerChangesRequested_SubmitsStringReviewIDAndRetriesDev(t *testing.T) {
+	exec, state := newReviewerGraphQLExecutor(`[]`)
+	r, logPath, stderr := setupPingPongRunner(t, exec)
+
+	r.reviewerPrecheckFn = func(_, evLogPath string) (string, error) {
+		return writeReviewerPrecheck(t, r, evLogPath, true, "pp-test-fp", "pp-test-fp"), nil
+	}
+
+	var reviewerPrompts []string
+	var devPrompts []string
+	r.SetRunAgentFn(makeReviewerChangesRequestedAgent(t, &reviewerPrompts, &devPrompts))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeSuccess {
+		t.Fatalf("outcome: got %q, want %q; stderr: %s", outcome, outcomeSuccess, stderr.String())
+	}
+	if len(reviewerPrompts) != 2 {
+		t.Fatalf("expected 2 reviewer prompts, got %d", len(reviewerPrompts))
+	}
+	if len(devPrompts) != 2 {
+		t.Fatalf("expected 2 dev prompts, got %d", len(devPrompts))
+	}
+	if !strings.Contains(devPrompts[1], "Please fix") {
+		t.Errorf("dev retry prompt missing review body: %s", devPrompts[1])
+	}
+	assertLatestReviewSubmittedEvent(t, logPath, "9001", 1)
+	if state.submitCalls != 2 {
+		t.Errorf("expected 2 GitHub review submissions, got %d", state.submitCalls)
+	}
+	if state.submitReviewID == "" {
+		t.Fatal("expected submitted review ID to be preserved")
+	}
+	if state.submitReviewID != state.pendingReviewID {
+		t.Errorf("submitted review ID %q did not match preserved pending review %q", state.submitReviewID, state.pendingReviewID)
+	}
+}
+
 func TestOrchestrate_ReviewerInvalidApproval_BoundedToThreeAttempts(t *testing.T) {
 	exec, _ := newReviewerGraphQLExecutor(`[]`)
 	r, logPath, stderr := setupPingPongRunner(t, exec)
@@ -317,31 +480,14 @@ func TestOrchestrate_ReviewerInvalidApproval_BoundedToThreeAttempts(t *testing.T
 		return writeReviewerPrecheck(t, r, evLogPath, false, "pp-test-fp", "pp-test-fp"), nil
 	}
 
-	var reviewerCalls int
-	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
-		if cfg.Role == "dev" {
-			if !sendGMProjectCheck(cfg.Env) || !sendGMDevDone(cfg.Env) {
-				t.Fatal("dev gate failed")
-			}
-		} else {
-			reviewerCalls++
-			result := callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", reviewerCalls), map[string]any{
-				"verdict":         "approved",
-				"mergeConfidence": "high",
-				"body":            "Still approved",
-			})
-			if result == nil || result["ok"] != false || result["code"] != "REVIEWER_GATE" {
-				t.Fatalf("expected gate rejection, got %v", result)
-			}
-		}
-		return 0, fakeTranscriptPaths("/tmp", cfg.Role), nil
-	})
+	agentFn, reviewerCalls := makeReviewerInvalidApprovalAgent(t)
+	r.SetRunAgentFn(agentFn)
 
 	outcome := runOrchestrate(t, r, logPath)
 	if outcome != outcomeReviewFailed {
 		t.Fatalf("outcome: got %q, want %q; stderr: %s", outcome, outcomeReviewFailed, stderr.String())
 	}
-	if reviewerCalls != 3 {
-		t.Errorf("expected exactly 3 reviewer attempts, got %d", reviewerCalls)
+	if *reviewerCalls != 3 {
+		t.Errorf("expected exactly 3 reviewer attempts, got %d", *reviewerCalls)
 	}
 }
