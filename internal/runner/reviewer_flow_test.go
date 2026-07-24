@@ -297,6 +297,10 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 	if payload.Verdict != "approved" || payload.Body != "LGTM" || payload.PRNumber != 99 || payload.MergeConfidence != "high" || payload.ReviewID != "9001" || payload.InlineCommentCount != 1 {
 		t.Fatalf("unexpected review_submitted payload: %+v", payload)
 	}
+	const wantReviewPayload = `{"body":"LGTM","inlineCommentCount":1,"mergeConfidence":"high","prNumber":99,"reviewId":"9001","verdict":"approved"}`
+	if string(reviewEvent.Payload) != wantReviewPayload {
+		t.Fatalf("review_submitted payload mismatch:\n got: %s\nwant: %s", string(reviewEvent.Payload), wantReviewPayload)
+	}
 }
 
 func TestSubmitReviewAndWriteEvent_ChangesRequestedBuildsFindingsJSON(t *testing.T) {
