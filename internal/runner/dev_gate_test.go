@@ -30,7 +30,7 @@ func gateTestCallGMTool(env []string, tool, callID string, params any) map[strin
 		return nil
 	}
 	for i := 0; i < 50; i++ {
-		if result := callGMTool(sockPath, tool, callID, params); result != nil {
+		if result := callGMTool(env, sockPath, tool, callID, params); result != nil {
 			return result
 		}
 		time.Sleep(10 * time.Millisecond)

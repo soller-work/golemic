@@ -90,6 +90,10 @@ type Broker struct {
 	listener net.Listener
 	fetcher  IssueFetcher
 
+	// §4/§17 identity: bound to one agent invocation; set by SetInvocationIdentity.
+	runID        string
+	invocationID string
+
 	projectCheck ProjectCheckConfig
 	allowedTools map[string]struct{}
 
@@ -105,6 +109,11 @@ type Broker struct {
 	cbmSchemaErr  error
 	// cbmFetchSchemaFn is injectable for tests.
 	cbmFetchSchemaFn func(sockPath string) (map[string]map[string]struct{}, error)
+
+	// §4 cross-terminal tracking: records the name of the accepted terminal tool
+	// for this invocation so a second different terminal call can be rejected.
+	terminalMu   sync.Mutex
+	terminalTool string // "" until one terminal is accepted
 
 	// §10 gate state (per invocation)
 	lastCheckMu            sync.Mutex
@@ -142,11 +151,14 @@ type Broker struct {
 	addReviewCommentFn         func(cfg ReviewerConfig, reviewID, path, body string, line int) (commentID, threadID string, anchorInvalid bool, err error)
 }
 
-// gmRequest is the payload the pi extension sends for each tool call.
+// gmRequest is the §4/§17 identity envelope the pi extension sends for each tool call.
 type gmRequest struct {
-	Tool   string          `json:"tool"`
-	CallID string          `json:"callId"`
-	Params json.RawMessage `json:"params"`
+	RunID        string          `json:"runId"`
+	InvocationID string          `json:"invocationId"`
+	Role         string          `json:"role"`
+	Tool         string          `json:"tool"`
+	CallID       string          `json:"callId"`
+	Params       json.RawMessage `json:"params"`
 }
 
 // gmResponse wraps the tool result for the pi extension.
@@ -238,6 +250,18 @@ func (b *Broker) SetAllowedTools(tools []string) {
 	b.allowedTools = toolSet(tools)
 }
 
+// SetInvocationIdentity binds the broker to a specific run and invocation.
+// Must be called before the agent subprocess is spawned. When set, every
+// incoming request must carry matching runId and invocationId or it is
+// rejected as an §17 identity mismatch before any tool handler runs.
+func (b *Broker) SetInvocationIdentity(runID, invocationID string) {
+	if b == nil {
+		return
+	}
+	b.runID = runID
+	b.invocationID = invocationID
+}
+
 // SetProjectCheckFn replaces the project-check function. Used in tests to return
 // a deterministic result without running real commands or accessing a git repo.
 func (b *Broker) SetProjectCheckFn(fn func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)) {
@@ -315,6 +339,19 @@ func (b *Broker) handleConn(conn net.Conn) {
 }
 
 func (b *Broker) dispatch(req gmRequest) json.RawMessage {
+	// §17 identity validation: reject before any tool-specific handling or side effects.
+	if req.CallID == "" {
+		return errResult("PROTOCOL_ERROR", "callId is required")
+	}
+	if b.invocationID != "" {
+		if req.RunID != b.runID {
+			return errResult("IDENTITY_MISMATCH", "runId does not match current invocation")
+		}
+		if req.InvocationID != b.invocationID {
+			return errResult("IDENTITY_MISMATCH", "invocationId does not match current invocation")
+		}
+	}
+
 	if !b.toolAllowed(req.Tool) {
 		return errResult("UNKNOWN_TOOL", "unknown tool: "+req.Tool)
 	}
@@ -395,6 +432,9 @@ func (b *Broker) handleDevDone(callID string, raw json.RawMessage) json.RawMessa
 	b.devDoneMu.Lock()
 	b.devDone = p
 	b.devDoneMu.Unlock()
+	b.terminalMu.Lock()
+	b.terminalTool = "gm_dev_done"
+	b.terminalMu.Unlock()
 	out, _ := json.Marshal(map[string]any{"ok": true, "accepted": true})
 	result := json.RawMessage(out)
 	b.finalizeDevDoneTerminal(callID, rawCopy, result)
@@ -402,6 +442,14 @@ func (b *Broker) handleDevDone(callID string, raw json.RawMessage) json.RawMessa
 }
 
 func (b *Broker) reserveDevDoneTerminal(callID string, raw json.RawMessage) json.RawMessage {
+	// §4 cross-terminal check: reject if a different terminal was already accepted.
+	b.terminalMu.Lock()
+	other := b.terminalTool
+	b.terminalMu.Unlock()
+	if other != "" && other != "gm_dev_done" {
+		return errResult("PROTOCOL_ERROR", "gm_dev_done: terminal "+other+" already accepted in this invocation")
+	}
+
 	b.devDoneMu.Lock()
 	defer b.devDoneMu.Unlock()
 
@@ -620,6 +668,9 @@ func (b *Broker) handleReviewSubmit(callID string, raw json.RawMessage) json.Raw
 	b.reviewerMu.Lock()
 	b.reviewSubmit = p
 	b.reviewerMu.Unlock()
+	b.terminalMu.Lock()
+	b.terminalTool = "gm_review_submit"
+	b.terminalMu.Unlock()
 
 	out, _ := json.Marshal(map[string]any{"ok": true, "accepted": true})
 	result := json.RawMessage(out)
@@ -628,6 +679,14 @@ func (b *Broker) handleReviewSubmit(callID string, raw json.RawMessage) json.Raw
 }
 
 func (b *Broker) reserveReviewSubmitTerminal(callID string, raw json.RawMessage) json.RawMessage {
+	// §4 cross-terminal check: reject if a different terminal was already accepted.
+	b.terminalMu.Lock()
+	other := b.terminalTool
+	b.terminalMu.Unlock()
+	if other != "" && other != "gm_review_submit" {
+		return errResult("PROTOCOL_ERROR", "gm_review_submit: terminal "+other+" already accepted in this invocation")
+	}
+
 	b.reviewerMu.Lock()
 	defer b.reviewerMu.Unlock()
 

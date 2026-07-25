@@ -1181,3 +1181,254 @@ func TestBroker_RepoTree_NotFound(t *testing.T) {
 		t.Errorf("code: got %q, want NOT_FOUND", result["code"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// §17 Identity validation
+// ---------------------------------------------------------------------------
+
+// callWithIdentity sends a gm_ request with explicit identity envelope fields.
+func callWithIdentity(t *testing.T, sockPath, runID, invocationID, role, tool, callID string, params any) map[string]any {
+	t.Helper()
+	raw, _ := json.Marshal(params)
+	req := map[string]any{
+		"runId":        runID,
+		"invocationId": invocationID,
+		"role":         role,
+		"tool":         tool,
+		"callId":       callID,
+		"params":       json.RawMessage(raw),
+	}
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial socket: %v", err)
+	}
+	defer conn.Close() //nolint:errcheck
+	enc, _ := json.Marshal(req)
+	enc = append(enc, '\n')
+	if _, err := conn.Write(enc); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	var resp struct {
+		CallID string          `json:"callId"`
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal(resp.Result, &result); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	return result
+}
+
+// startTestBrokerWithIdentity starts a broker bound to the given runId/invocationId.
+func startTestBrokerWithIdentity(t *testing.T, runID, invocationID string) (*Broker, string) {
+	t.Helper()
+	sockPath := filepath.Join(shortTempDir(t), "gm.sock")
+	b, err := StartWithFetcher(sockPath, func(_ context.Context) (string, error) { return "spec", nil })
+	if err != nil {
+		t.Fatalf("StartWithFetcher: %v", err)
+	}
+	t.Cleanup(b.Shutdown)
+	b.SetInvocationIdentity(runID, invocationID)
+	return b, sockPath
+}
+
+// TestIdentity_MatchingRunAndInvocation verifies a request with matching identity is dispatched.
+func TestIdentity_MatchingRunAndInvocation(t *testing.T) {
+	const runID = "run-abc"
+	const invID = "run-abc/dev/round-1/attempt-0"
+	b, sockPath := startTestBrokerWithIdentity(t, runID, invID)
+	b.SetAllowedTools([]string{"gm_slice_get"})
+
+	result := callWithIdentity(t, sockPath, runID, invID, "dev", "gm_slice_get", "c1", map[string]any{})
+
+	if result["ok"] != true {
+		t.Errorf("matching identity: got %v, want ok=true", result)
+	}
+}
+
+// TestIdentity_MismatchRunID verifies a wrong runId returns IDENTITY_MISMATCH.
+func TestIdentity_MismatchRunID(t *testing.T) {
+	const runID = "run-abc"
+	const invID = "run-abc/dev/round-1/attempt-0"
+	b, sockPath := startTestBrokerWithIdentity(t, runID, invID)
+	b.SetAllowedTools([]string{"gm_slice_get"})
+
+	result := callWithIdentity(t, sockPath, "run-WRONG", invID, "dev", "gm_slice_get", "c1", map[string]any{})
+
+	if result["ok"] != false {
+		t.Errorf("wrong runId: got %v, want ok=false", result)
+	}
+	if result["code"] != "IDENTITY_MISMATCH" {
+		t.Errorf("code: got %v, want IDENTITY_MISMATCH", result["code"])
+	}
+	_ = b
+}
+
+// TestIdentity_MismatchInvocationID verifies a wrong invocationId returns IDENTITY_MISMATCH.
+func TestIdentity_MismatchInvocationID(t *testing.T) {
+	const runID = "run-abc"
+	const invID = "run-abc/dev/round-1/attempt-0"
+	b, sockPath := startTestBrokerWithIdentity(t, runID, invID)
+	b.SetAllowedTools([]string{"gm_slice_get"})
+
+	result := callWithIdentity(t, sockPath, runID, "run-abc/dev/round-1/attempt-9", "dev", "gm_slice_get", "c1", map[string]any{})
+
+	if result["ok"] != false {
+		t.Errorf("wrong invocationId: got %v, want ok=false", result)
+	}
+	if result["code"] != "IDENTITY_MISMATCH" {
+		t.Errorf("code: got %v, want IDENTITY_MISMATCH", result["code"])
+	}
+	_ = b
+}
+
+// TestIdentity_MissingCallID verifies an empty callId returns PROTOCOL_ERROR before any dispatch.
+func TestIdentity_MissingCallID(t *testing.T) {
+	_, sockPath := startTestBroker(t, func(_ context.Context) (string, error) { return "spec", nil })
+
+	// Send a request with empty callId.
+	raw, _ := json.Marshal(map[string]any{})
+	req, _ := json.Marshal(map[string]any{"tool": "gm_slice_get", "callId": "", "params": json.RawMessage(raw)})
+	req = append(req, '\n')
+	conn, err := net.Dial("unix", sockPath)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close() //nolint:errcheck
+	conn.Write(req)    //nolint:errcheck
+	var resp struct {
+		Result json.RawMessage `json:"result"`
+	}
+	json.NewDecoder(conn).Decode(&resp) //nolint:errcheck
+	var result map[string]any
+	json.Unmarshal(resp.Result, &result) //nolint:errcheck
+
+	if result["code"] != "PROTOCOL_ERROR" {
+		t.Errorf("empty callId: code: got %v, want PROTOCOL_ERROR", result["code"])
+	}
+}
+
+// TestIdentity_MismatchBeforeToolDispatch verifies that identity mismatch prevents
+// any tool-specific side effects from running (e.g. gm_project_check is not executed).
+func TestIdentity_MismatchBeforeToolDispatch(t *testing.T) {
+	const runID = "run-abc"
+	const invID = "run-abc/dev/round-1/attempt-0"
+	b, sockPath := startTestBrokerWithIdentity(t, runID, invID)
+	b.SetAllowedTools([]string{"gm_project_check", "gm_dev_done"})
+	checkCallCount := 0
+	b.SetProjectCheckFn(func(_ ProjectCheckConfig, _ string) (*ProjectCheckResult, error) {
+		checkCallCount++
+		return &ProjectCheckResult{OK: true, WorkingTreeFingerprint: "fp"}, nil
+	})
+
+	// Send with wrong invocationId — should not reach projectCheckFn.
+	callWithIdentity(t, sockPath, runID, "run-abc/dev/round-1/attempt-9", "dev", "gm_project_check", "c1", map[string]any{})
+
+	if checkCallCount != 0 {
+		t.Errorf("projectCheckFn called %d times despite identity mismatch, want 0", checkCallCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Cross-terminal protocol errors
+// ---------------------------------------------------------------------------
+
+// TestCrossTerminal_ReviewSubmitAfterDevDone verifies that gm_review_submit is
+// rejected after gm_dev_done has been accepted in the same invocation.
+func TestCrossTerminal_ReviewSubmitAfterDevDone(t *testing.T) {
+	b, sockPath := startTestBrokerWithGate(t)
+	b.SetAllowedTools([]string{"gm_project_check", "gm_dev_done", "gm_review_submit"})
+
+	// Accept gm_dev_done.
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
+	first := call(t, sockPath, "gm_dev_done", "c1", devDoneParams())
+	if first["ok"] != true || first["accepted"] != true {
+		t.Fatalf("gm_dev_done: got %v, want accepted", first)
+	}
+
+	// Attempt gm_review_submit in the same invocation — protocol error.
+	result := call(t, sockPath, "gm_review_submit", "c2", map[string]any{
+		"verdict":         "changes_requested",
+		"mergeConfidence": "low",
+		"body":            "needs work",
+	})
+
+	if result["code"] != "PROTOCOL_ERROR" {
+		t.Errorf("code: got %v, want PROTOCOL_ERROR", result["code"])
+	}
+	_ = b
+}
+
+// TestCrossTerminal_DevDoneAfterReviewSubmit verifies that gm_dev_done is
+// rejected after gm_review_submit has been accepted in the same invocation.
+func TestCrossTerminal_DevDoneAfterReviewSubmit(t *testing.T) {
+	b, sockPath := startTestBrokerWithGate(t)
+	b.SetAllowedTools([]string{"gm_project_check", "gm_dev_done", "gm_review_submit"})
+
+	// Accept gm_review_submit.
+	first := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":         "changes_requested",
+		"mergeConfidence": "low",
+		"body":            "needs work",
+	})
+	if first["ok"] != true || first["accepted"] != true {
+		t.Fatalf("gm_review_submit: got %v, want accepted", first)
+	}
+
+	// Attempt gm_dev_done in the same invocation — protocol error.
+	call(t, sockPath, "gm_project_check", "c0", map[string]any{})
+	result := call(t, sockPath, "gm_dev_done", "c2", devDoneParams())
+
+	if result["code"] != "PROTOCOL_ERROR" {
+		t.Errorf("code: got %v, want PROTOCOL_ERROR", result["code"])
+	}
+	_ = b
+}
+
+// TestNewInvocationID_FreshTerminalState verifies that a broker created with a
+// new invocationId starts with empty terminal state regardless of prior invocations.
+func TestNewInvocationID_FreshTerminalState(t *testing.T) {
+	const runID = "run-abc"
+	const invID1 = "run-abc/dev/round-1/attempt-0"
+	const invID2 = "run-abc/dev/round-1/attempt-1"
+
+	// First invocation: accept gm_review_submit.
+	sockPath1 := filepath.Join(shortTempDir(t), "gm1.sock")
+	b1, err := StartWithFetcher(sockPath1, func(_ context.Context) (string, error) { return "spec", nil })
+	if err != nil {
+		t.Fatalf("start broker 1: %v", err)
+	}
+	defer b1.Shutdown()
+	b1.SetInvocationIdentity(runID, invID1)
+	b1.SetAllowedTools([]string{"gm_review_submit"})
+	res1 := callWithIdentity(t, sockPath1, runID, invID1, "reviewer", "gm_review_submit", "c1", map[string]any{
+		"verdict":         "changes_requested",
+		"mergeConfidence": "low",
+		"body":            "first",
+	})
+	if res1["ok"] != true {
+		t.Fatalf("first invocation terminal call: got %v, want ok=true", res1)
+	}
+
+	// Second invocation: new broker, new invocationId — terminal state is fresh.
+	sockPath2 := filepath.Join(shortTempDir(t), "gm2.sock")
+	b2, err := StartWithFetcher(sockPath2, func(_ context.Context) (string, error) { return "spec", nil })
+	if err != nil {
+		t.Fatalf("start broker 2: %v", err)
+	}
+	defer b2.Shutdown()
+	b2.SetInvocationIdentity(runID, invID2)
+	b2.SetAllowedTools([]string{"gm_review_submit"})
+	res2 := callWithIdentity(t, sockPath2, runID, invID2, "reviewer", "gm_review_submit", "c1", map[string]any{
+		"verdict":         "changes_requested",
+		"mergeConfidence": "low",
+		"body":            "second",
+	})
+
+	if res2["ok"] != true || res2["accepted"] != true {
+		t.Errorf("second invocation terminal call: got %v, want ok=true,accepted=true", res2)
+	}
+}

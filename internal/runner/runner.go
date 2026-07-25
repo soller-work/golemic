@@ -658,7 +658,7 @@ func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string
 			gateRetryReason = prevGateMsg
 		}
 
-		outcome, state := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, precheckBlock, precheckResult, gateRetryReason)
+		outcome, state := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, attempt, precheckBlock, precheckResult, gateRetryReason)
 		finalState = state
 
 		if state != nil && state.reviewSubmitGateRejected {

@@ -11,7 +11,7 @@ import {
 
 const SOCK_ENV = "GOLEMIC_GM_SOCK";
 
-// callBroker sends { tool, callId, params } over the unix socket and returns
+// callBroker sends the §4/§17 identity envelope over the unix socket and returns
 // the broker's result object. Rejects if the socket env var is unset or the
 // connection fails.
 function callBroker(tool: string, callId: string, params: unknown): Promise<unknown> {
@@ -42,7 +42,14 @@ function callBroker(tool: string, callId: string, params: unknown): Promise<unkn
       reject({ ok: false, code: "TRANSPORT_ERROR", message: `socket error: ${err.message}` });
     });
 
-    const payload = JSON.stringify({ tool, callId, params }) + "\n";
+    const payload = JSON.stringify({
+      runId: process.env["GOLEMIC_RUN_ID"] ?? "",
+      invocationId: process.env["GOLEMIC_INVOCATION_ID"] ?? "",
+      role: process.env["GOLEMIC_ROLE"] ?? "",
+      tool,
+      callId,
+      params,
+    }) + "\n";
     conn.write(payload);
   });
 }
