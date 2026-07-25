@@ -723,7 +723,11 @@ func (b *Broker) handleReviewSubmit(callID string, raw json.RawMessage) json.Raw
 
 	p, res := b.validateReviewSubmitParams(rawCopy)
 	if res != nil {
-		b.finalizeReviewSubmitTerminal(callID, rawCopy, res)
+		// A schema-invalid payload is not a terminal outcome: release the
+		// one-shot slot so the reviewer can correct params and retry in the
+		// same invocation (unlike gate rejection, which the runner routes to a
+		// gate-retry round).
+		b.releaseReviewSubmitTerminal()
 		return res
 	}
 
@@ -772,6 +776,14 @@ func (b *Broker) reserveReviewSubmitTerminal(callID string, raw json.RawMessage)
 	b.reviewSubmitTerminalCallID = callID
 	b.reviewSubmitTerminalRaw = cloneRawMessage(raw)
 	return nil
+}
+
+func (b *Broker) releaseReviewSubmitTerminal() {
+	b.reviewerMu.Lock()
+	b.reviewSubmitTerminalPending = false
+	b.reviewSubmitTerminalCallID = ""
+	b.reviewSubmitTerminalRaw = nil
+	b.reviewerMu.Unlock()
 }
 
 func (b *Broker) finalizeReviewSubmitTerminal(callID string, raw, result json.RawMessage) {

@@ -778,6 +778,37 @@ func TestReviewSubmit_InvalidConfidence(t *testing.T) {
 	}
 }
 
+// TestReviewSubmit_SchemaInvalidAllowsRetry verifies that a schema-invalid
+// gm_review_submit does not consume the one-shot terminal slot: the reviewer
+// can correct the payload and submit a valid review within the same invocation.
+func TestReviewSubmit_SchemaInvalidAllowsRetry(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+
+	// First call is schema-invalid (bad confidence tier).
+	bad := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":    "changes_requested",
+		"confidence": "urgent",
+		"body":       "needs work",
+	})
+	if bad["code"] != "SCHEMA_INVALID" {
+		t.Fatalf("first call: code: got %v, want SCHEMA_INVALID", bad["code"])
+	}
+
+	// Corrected retry with different params must be accepted, not rejected as
+	// "terminal already called".
+	ok := call(t, sockPath, "gm_review_submit", "c2", map[string]any{
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "needs work",
+	})
+	if ok["ok"] != true {
+		t.Fatalf("retry after schema error: ok: got %v, want true (result=%v)", ok["ok"], ok)
+	}
+	if _, got := b.ReviewSubmitResult(); !got {
+		t.Fatal("ReviewSubmitResult() should be set after successful retry")
+	}
+}
+
 // TestReviewSubmit_ChangesRequested verifies that "changes_requested" is a valid verdict.
 func TestReviewSubmit_ChangesRequested(t *testing.T) {
 	_, sockPath := startTestBroker(t, nil)
