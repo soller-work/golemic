@@ -82,6 +82,9 @@ type Runner struct {
 	sink         telemetry.Sink
 	traceID      string
 	sinkOverride bool // when true, Run() does not overwrite r.sink from config
+
+	// Token usage collected across all invocations in this run.
+	tokenUsageLog []invocationTokenUsage
 }
 
 // New creates a new Runner. executor is used for all gh/git commands, homeDir is
@@ -386,7 +389,10 @@ func (r *Runner) Run() int {
 	endRunSpan(runStatus, map[string]any{"outcome": finalOutcome})
 
 	// Write run_finished with final outcome (BR-001: always the last event)
-	finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: finalOutcome})
+	finishedPayload, _ := json.Marshal(runFinishedPayload{
+		Outcome:    finalOutcome,
+		TokenUsage: buildTokenUsageAggregate(r.tokenUsageLog),
+	})
 	_ = ew.Write(eventlog.Event{
 		Type:    eventlog.EventRunFinished,
 		Ts:      time.Now().Format(time.RFC3339),

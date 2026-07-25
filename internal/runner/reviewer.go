@@ -213,7 +213,8 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": model})
-	stopFollow := followActivity(r.progressRenderer, "reviewer", filepath.Join(runsDir, r.runID, fmt.Sprintf("reviewer-r%d-a%d.activity.jsonl", round, attempt)))
+	activityPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("reviewer-r%d-a%d.activity.jsonl", round, attempt))
+	stopFollow := followActivity(r.progressRenderer, "reviewer", activityPath)
 
 	runFn := r.runAgentFn
 	if runFn == nil {
@@ -222,6 +223,10 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	cfg := r.buildReviewerRoleConfig(systemPromptFile, userPrompt, reviewerWorktreePath, golemicBinaryPath, model, eventLogPath, runsDir, timeout, round, attempt, brokerEnv)
 	exitCode, paths, runErr := runFn(context.Background(), cfg)
 	stopFollow()
+
+	usage := parseActivityUsage(activityPath)
+	r.recordTokenUsage("reviewer", round, attempt, usage)
+	endSpan = wrapEndSpanWithUsage(endSpan, usage)
 
 	return r.handleReviewerAgentResult(runErr, exitCode, paths, eventLogPath, endSpan), captureReviewerBrokerState(gmBroker)
 }

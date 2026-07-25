@@ -196,6 +196,10 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 	exitCode, paths, err := runFn(context.Background(), cfg)
 	stopFollow()
 
+	usage := parseActivityUsage(activityPath)
+	r.recordTokenUsage("dev", round, attempt, usage)
+	endSpan = wrapEndSpanWithUsage(endSpan, usage)
+
 	if err != nil {
 		r.emitAgentWrittenEvents(eventLogPath)
 		return r.handleDevAgentErrorWithLog(eventLogPath, err, endSpan, paths.Stdout, paths.Stderr), ""

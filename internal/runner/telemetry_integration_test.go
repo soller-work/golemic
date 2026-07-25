@@ -578,6 +578,9 @@ func TestTelemetry_NoSecretsInRecords_AC006(t *testing.T) {
 		"run_id": true, "issue": true, "project": true, "role": true,
 		"round": true, "attempt": true, "model": true, "status": true, "outcome": true,
 		"pid": true, "worktree": true,
+		// Token usage attributes added to agent.turn span ends (issue #218).
+		"input_tokens": true, "output_tokens": true,
+		"cache_read_tokens": true, "cache_write_tokens": true, "turns": true,
 	}
 
 	secretStrings := []string{
