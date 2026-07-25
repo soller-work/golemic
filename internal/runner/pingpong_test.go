@@ -866,3 +866,144 @@ func TestPingPong_ApprovalBeforeLimit_NoEscalation(t *testing.T) {
 		t.Errorf("expected no escalation comment, got %d", len(commentCalls))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Issue-226: no-change dev-retry regression tests
+// ---------------------------------------------------------------------------
+
+// noChangePingPongExecutor wraps pingPongExecutor so that git diff --cached
+// --quiet returns nil (nothing staged), simulating a dev-retry that produces
+// no working-tree changes.
+func noChangePingPongExecutor(commentCalls *[]string) *fakeExecutor {
+	base := pingPongExecutor(false, commentCalls)
+	origRunFunc := base.runFunc
+	base.runFunc = func(name string, args ...string) (string, error) {
+		if name == "git" && len(args) >= 1 && args[0] == "diff" {
+			return "", nil // nothing staged
+		}
+		return origRunFunc(name, args...)
+	}
+	return base
+}
+
+// countGitCommitCalls returns the number of "git commit" calls recorded by the executor.
+func countGitCommitCalls(calls []callRecord) int {
+	n := 0
+	for _, c := range calls {
+		if c.name == "git" && len(c.args) >= 1 && c.args[0] == "commit" {
+			n++
+		}
+	}
+	return n
+}
+
+// countGitForcePushCalls returns the number of "git push --force-with-lease" calls.
+func countGitForcePushCalls(calls []callRecord) int {
+	n := 0
+	for _, c := range calls {
+		if c.name == "git" && len(c.args) >= 1 && c.args[0] == "push" {
+			for _, a := range c.args {
+				if a == "--force-with-lease" {
+					n++
+					break
+				}
+			}
+		}
+	}
+	return n
+}
+
+// TestPingPong_NoChangeDevRetry_SurvivesAndRereviews verifies that a dev-retry
+// that produces no working-tree changes does not crash with a commit error and
+// instead loops back to the reviewer for another round.
+func TestPingPong_NoChangeDevRetry_SurvivesAndRereviews(t *testing.T) {
+	var commentCalls []string
+	exec := noChangePingPongExecutor(&commentCalls)
+
+	r, logPath, stderr := setupPingPongRunner(t, exec)
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix the flaky test", exitCode: 0},
+		{role: "dev", exitCode: 0}, // retry: no working-tree changes
+		{role: "reviewer", verdict: "approved", body: "LGTM", exitCode: 0},
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q; stderr: %s", outcome, outcomeSuccess, stderr)
+	}
+	// The initial dev round commits once; the no-change retry must NOT commit.
+	if got := countGitCommitCalls(exec.calls); got != 1 {
+		t.Errorf("git commit calls: got %d, want 1 (retry must not commit)", got)
+	}
+	// The no-change retry must NOT force-push.
+	if got := countGitForcePushCalls(exec.calls); got != 0 {
+		t.Errorf("git push --force-with-lease calls: got %d, want 0", got)
+	}
+	// A log line must explain the no-change situation.
+	if !strings.Contains(stderr.String(), "no working-tree changes") {
+		t.Errorf("expected no-change log line in stderr, got: %s", stderr.String())
+	}
+}
+
+// TestPingPong_NonEmptyDevRetry_StillCommitsAndPushes verifies that a dev-retry
+// that DOES produce working-tree changes still stages, commits, and force-pushes.
+func TestPingPong_NonEmptyDevRetry_StillCommitsAndPushes(t *testing.T) {
+	var commentCalls []string
+	// Use the standard executor: git diff --cached --quiet is not mocked, so it
+	// returns an error, which the fix interprets as "has staged changes".
+	exec := pingPongExecutor(false, &commentCalls)
+
+	r, logPath, stderr := setupPingPongRunner(t, exec)
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix this bug", exitCode: 0},
+		{role: "dev", exitCode: 0}, // retry: has working-tree changes (diff returns error)
+		{role: "reviewer", verdict: "approved", body: "LGTM", exitCode: 0},
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeSuccess {
+		t.Errorf("outcome: got %q, want %q; stderr: %s", outcome, outcomeSuccess, stderr)
+	}
+	// Initial commit + retry commit = 2 total.
+	if got := countGitCommitCalls(exec.calls); got != 2 {
+		t.Errorf("git commit calls: got %d, want 2 (initial + retry)", got)
+	}
+	// The retry must force-push exactly once.
+	if got := countGitForcePushCalls(exec.calls); got != 1 {
+		t.Errorf("git push --force-with-lease calls: got %d, want 1", got)
+	}
+}
+
+// TestPingPong_RepeatedNoChangeRetries_BoundedByMaxRounds verifies that repeated
+// no-change dev-retries are bounded by MaxReviewRounds and escalate rather than
+// looping indefinitely.
+func TestPingPong_RepeatedNoChangeRetries_BoundedByMaxRounds(t *testing.T) {
+	var commentCalls []string
+	exec := noChangePingPongExecutor(&commentCalls)
+
+	r, logPath, _ := setupPingPongRunner(t, exec)
+	r.cfg.MaxReviewRounds = 3
+	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
+		{role: "dev", exitCode: 0},
+		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
+		{role: "dev", exitCode: 0}, // no-change retry
+		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
+		{role: "dev", exitCode: 0}, // no-change retry
+		{role: "reviewer", verdict: "changes_requested", body: "Fix C", exitCode: 0},
+	}, nil))
+
+	outcome := runOrchestrate(t, r, logPath)
+	if outcome != outcomeEscalated {
+		t.Errorf("outcome: got %q, want %q", outcome, outcomeEscalated)
+	}
+	// Escalation comment must have been posted.
+	if len(commentCalls) != 1 {
+		t.Errorf("expected 1 escalation comment, got %d", len(commentCalls))
+	}
+	// The no-change retries must never commit.
+	if got := countGitCommitCalls(exec.calls); got != 1 {
+		t.Errorf("git commit calls: got %d, want 1 (only initial round)", got)
+	}
+}
