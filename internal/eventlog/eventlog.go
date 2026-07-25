@@ -236,6 +236,8 @@ type reviewSubmittedData struct {
 	MergeConfidence    string `json:"mergeConfidence"`
 	ReviewID           string `json:"reviewId"`
 	InlineCommentCount *int   `json:"inlineCommentCount"`
+	HeadSHA            string `json:"headSha,omitempty"`
+	ReviewRound        int    `json:"reviewRound,omitempty"`
 }
 
 // ValidateReviewSubmittedPayload checks that payload decodes to an object with

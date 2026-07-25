@@ -28,7 +28,7 @@ func TestRunnerTurnIDMonotonic_AC006(t *testing.T) {
 				t.Errorf("TestRunnerTurnIDMonotonic_AC006: sendGMDevDone failed")
 			}
 		case "reviewer":
-			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 		}
 		return 0, agent.TranscriptPaths{}, nil
 	})
@@ -71,9 +71,9 @@ func TestRunnerTurnIDMonotonicPingPong_AC006(t *testing.T) {
 			}
 		case "reviewer":
 			if len(captured) == 2 { // first reviewer round
-				writeReviewEvent(t, cfg.EventLogPath, "changes_requested", "please fix")
+				writeReviewEvent(t, cfg.EventLogPath, "changes_requested", "please fix", cfg.Round, ciTestHeadSHA)
 			} else {
-				writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+				writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 			}
 		}
 		return 0, agent.TranscriptPaths{}, nil
@@ -128,9 +128,9 @@ func TestRunnerWorktreeCreatedAcrossRoundsNotDeduped_AC008(t *testing.T) { //nol
 			devCallCount++
 		case "reviewer":
 			if devCallCount == 1 { // first reviewer round
-				writeReviewEvent(t, cfg.EventLogPath, "changes_requested", "fix it")
+				writeReviewEvent(t, cfg.EventLogPath, "changes_requested", "fix it", cfg.Round, ciTestHeadSHA)
 			} else {
-				writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+				writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 			}
 		}
 		return 0, agent.TranscriptPaths{}, nil

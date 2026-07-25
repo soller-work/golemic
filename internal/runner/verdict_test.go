@@ -55,7 +55,7 @@ func TestLatestReviewVerdict_Approved_AC001(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewSubmittedEvent(t, logPath, "approved")
 
-	verdict, err := r.latestReviewVerdict(logPath)
+	verdict, err := r.latestReviewVerdict(logPath, 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestLatestReviewVerdict_ChangesRequested_AC002(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewSubmittedEvent(t, logPath, "changes_requested")
 
-	verdict, err := r.latestReviewVerdict(logPath)
+	verdict, err := r.latestReviewVerdict(logPath, 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestLatestReviewVerdict_MostRecentWins(t *testing.T) {
 	writeReviewSubmittedEvent(t, logPath, "approved")
 	writeReviewSubmittedEvent(t, logPath, "changes_requested")
 
-	verdict, err := r.latestReviewVerdict(logPath)
+	verdict, err := r.latestReviewVerdict(logPath, 0, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestLatestReviewVerdict_NoEvent_AC003(t *testing.T) {
 	_ = w.Write(eventlog.Event{Type: eventlog.EventRunStarted, Ts: time.Now().Format(time.RFC3339), RunID: "r1", Payload: payload})
 	_ = w.Close()
 
-	_, err := r.latestReviewVerdict(logPath)
+	_, err := r.latestReviewVerdict(logPath, 0, "")
 	if err == nil {
 		t.Fatal("expected error for missing review_submitted event, got nil")
 	}
@@ -115,7 +115,7 @@ func TestLatestReviewVerdict_NoEvent_AC003(t *testing.T) {
 // AC-003: non-existent log file returns NO_VALID_REVIEW error.
 func TestLatestReviewVerdict_MissingFile_AC003(t *testing.T) {
 	r := &Runner{}
-	_, err := r.latestReviewVerdict("/nonexistent/events.jsonl")
+	_, err := r.latestReviewVerdict("/nonexistent/events.jsonl", 0, "")
 	if err == nil {
 		t.Fatal("expected error for missing log file, got nil")
 	}
@@ -141,7 +141,7 @@ func TestLatestReviewVerdict_InvalidVerdict_AC004(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := r.latestReviewVerdict(logPath)
+	_, err := r.latestReviewVerdict(logPath, 0, "")
 	if err == nil {
 		t.Fatal("expected error for invalid verdict, got nil")
 	}
@@ -157,7 +157,7 @@ func TestOrchestrate_ApprovedVerdict_ReturnsSuccess_AC001(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewSubmittedEvent(t, logPath, "approved")
 
-	verdict, err := r.latestReviewVerdict(logPath)
+	verdict, err := r.latestReviewVerdict(logPath, 0, "")
 	if err != nil {
 		t.Fatalf("latestReviewVerdict: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestOrchestrate_ChangesRequestedVerdict_ReturnsEscalated_AC002(t *testing.T
 	logPath := newLogPath(t)
 	writeReviewSubmittedEvent(t, logPath, "changes_requested")
 
-	verdict, err := r.latestReviewVerdict(logPath)
+	verdict, err := r.latestReviewVerdict(logPath, 0, "")
 	if err != nil {
 		t.Fatalf("latestReviewVerdict: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestOrchestrate_MissingReviewEvent_ReturnsReviewFailed_AC003(t *testing.T) 
 	_ = w.Write(eventlog.Event{Type: eventlog.EventRunStarted, Ts: time.Now().Format(time.RFC3339), RunID: "r1", Payload: payload})
 	_ = w.Close()
 
-	_, err := r.latestReviewVerdict(logPath)
+	_, err := r.latestReviewVerdict(logPath, 0, "")
 	if err == nil {
 		t.Fatal("expected error for missing review_submitted event")
 	}

@@ -333,7 +333,12 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 	}
 
 	// ---- Prepare static values ----
+	// Reviewer session is scoped per round so each round starts a fresh pi session
+	// while attempts within the same round still resume (issue-212).
 	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role)
+	if cfg.Role == "reviewer" {
+		sessionID = sanitizeSessionID(fmt.Sprintf("%s-%s-r%d", cfg.RunID, cfg.Role, cfg.Round))
+	}
 	logBase := fmt.Sprintf("%s-r%d-a%d", cfg.Role, cfg.Round, cfg.Attempt)
 	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, logBase+".activity.jsonl")
 	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, logBase+".stderr.log")

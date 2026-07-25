@@ -336,7 +336,7 @@ func makeTelemetryFakeAgent(t *testing.T) func(ctx context.Context, cfg agent.Ro
 				t.Errorf("makeTelemetryFakeAgent: sendGMDevDone failed")
 			}
 		case "reviewer":
-			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 		}
 		return 0, agent.TranscriptPaths{}, nil
 	}

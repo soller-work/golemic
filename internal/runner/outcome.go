@@ -126,29 +126,55 @@ func (r *Runner) latestMergeConfidence(eventLogPath string) (string, error) {
 	return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")
 }
 
-// latestReviewVerdict reads the verdict from the most recent review_submitted event.
-// Returns the verdict string ("approved" or "changes_requested") or an error if
-// no valid review_submitted event exists.
-func (r *Runner) latestReviewVerdict(eventLogPath string) (string, error) {
+// reviewEventMatchesCriteria returns false when the event payload does not match
+// the given round or headSHA filter (non-zero/non-empty only).
+func reviewEventMatchesCriteria(payload []byte, round int, headSHA string) bool {
+	var meta struct {
+		ReviewRound int    `json:"reviewRound"`
+		HeadSHA     string `json:"headSha"`
+	}
+	if err := json.Unmarshal(payload, &meta); err != nil {
+		return false
+	}
+	if round > 0 && meta.ReviewRound != round {
+		return false
+	}
+	if headSHA != "" && meta.HeadSHA != headSHA {
+		return false
+	}
+	return true
+}
+
+// latestReviewVerdict returns the verdict from the most recent review_submitted event
+// that matches the given round and headSHA. When round==0 and headSHA=="", no
+// filtering is applied (used by unit tests that write events without these fields).
+func (r *Runner) latestReviewVerdict(eventLogPath string, round int, headSHA string) (string, error) {
 	reader := eventlog.Reader{}
 	events, err := reader.Read(eventLogPath)
 	if err != nil {
 		return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
 	}
-
+	filter := round > 0 || headSHA != ""
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type == eventlog.EventReviewSubmitted {
-			if err := eventlog.ValidateReviewSubmittedPayload(events[i].Payload); err != nil {
-				return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
-			}
-			var d struct {
-				Verdict string `json:"verdict"`
-			}
-			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
-				return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
-			}
-			return d.Verdict, nil
+		if events[i].Type != eventlog.EventReviewSubmitted {
+			continue
 		}
+		if err := eventlog.ValidateReviewSubmittedPayload(events[i].Payload); err != nil {
+			return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
+		}
+		if filter && !reviewEventMatchesCriteria(events[i].Payload, round, headSHA) {
+			continue
+		}
+		var d struct {
+			Verdict string `json:"verdict"`
+		}
+		if err := json.Unmarshal(events[i].Payload, &d); err != nil {
+			return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
+		}
+		return d.Verdict, nil
+	}
+	if filter {
+		return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found for round %d head %s", round, headSHA)
 	}
 	return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")
 }

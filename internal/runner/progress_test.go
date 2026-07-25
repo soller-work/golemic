@@ -42,7 +42,7 @@ func makeProgressFakeAgent(t *testing.T, devActivityLines, reviewerActivityLines
 				writeActivityLines(t, activityPath, devActivityLines)
 			}
 		case "reviewer":
-			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 			if len(reviewerActivityLines) > 0 {
 				writeActivityLines(t, activityPath, reviewerActivityLines)
 			}
@@ -252,7 +252,7 @@ func TestProgress_FollowReaderError(t *testing.T) {
 				t.Errorf("TestProgress_FollowReaderError: sendGMDevDone failed")
 			}
 		case "reviewer":
-			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 		}
 		return 0, agent.TranscriptPaths{Stderr: "/tmp/fake.stderr"}, nil
 	})
