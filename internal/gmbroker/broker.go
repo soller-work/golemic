@@ -692,9 +692,9 @@ func (b *Broker) LastCheckOutput() string {
 
 // ReviewSubmitParams is the expected payload for gm_review_submit.
 type ReviewSubmitParams struct {
-	Verdict         string `json:"verdict"`
-	MergeConfidence string `json:"mergeConfidence"`
-	Body            string `json:"body"`
+	Verdict    string `json:"verdict"`
+	Confidence string `json:"confidence"`
+	Body       string `json:"body"`
 }
 
 // ReviewSubmitCommentParams is the expected payload for gm_review_submit_comment.
@@ -791,8 +791,8 @@ func (b *Broker) validateReviewSubmitParams(raw json.RawMessage) (*ReviewSubmitP
 	if p.Verdict != "approved" && p.Verdict != "changes_requested" {
 		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: verdict must be "approved" or "changes_requested"`)
 	}
-	if p.MergeConfidence != "high" && p.MergeConfidence != "medium" && p.MergeConfidence != "low" {
-		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: mergeConfidence must be "high", "medium", or "low"`)
+	if p.Confidence != "high" && p.Confidence != "medium" && p.Confidence != "low" {
+		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: confidence must be "high", "medium", or "low"`)
 	}
 	if p.Body == "" {
 		return nil, errResult("SCHEMA_INVALID", "gm_review_submit: body is required")

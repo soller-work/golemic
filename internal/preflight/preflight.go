@@ -513,6 +513,9 @@ var requiredLabels = []struct {
 }{
 	{"in-progress", "fbca04", "Issue is currently claimed by an autonomous runner"},
 	{"needs-human", "d93f0b", "Autonomous runner failed; requires human triage"},
+	{"confidence:high", "0075ca", "Reviewer confidence: high"},
+	{"confidence:medium", "e4e669", "Reviewer confidence: medium"},
+	{"confidence:low", "d93f0b", "Reviewer confidence: low"},
 }
 
 // fetchExistingLabels runs gh label list and returns a set of existing label names.

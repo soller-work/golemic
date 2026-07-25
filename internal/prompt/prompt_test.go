@@ -701,19 +701,19 @@ func TestRenderReviewer_StepListEndsWithSubmitReview(t *testing.T) {
 	}
 }
 
-// AC-124: Reviewer prompt exposes all three merge-confidence tiers
-func TestRenderReviewer_MergeConfidenceAllTiers(t *testing.T) {
+// AC-124: Reviewer prompt exposes all three confidence tiers
+func TestRenderReviewer_ConfidenceAllTiers(t *testing.T) {
 	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
 	userPrompt, err := RenderReviewer(123, testIssue, "verify", guidelinesPath, false, "")
 	if err != nil {
 		t.Fatalf("RenderReviewer() unexpected error: %v", err)
 	}
 
-	if !strings.Contains(userPrompt, "mergeConfidence") {
-		t.Error("reviewer prompt must contain 'mergeConfidence' field")
+	if !strings.Contains(userPrompt, "confidence") {
+		t.Error("reviewer prompt must contain 'confidence' field")
 	}
 	if !strings.Contains(userPrompt, "\"high\"") || !strings.Contains(userPrompt, "\"medium\"") || !strings.Contains(userPrompt, "\"low\"") {
-		t.Error("reviewer prompt must offer high, medium, and low merge confidence options")
+		t.Error("reviewer prompt must offer high, medium, and low confidence options")
 	}
 }
 

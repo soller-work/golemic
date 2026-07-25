@@ -133,9 +133,9 @@ const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Iss
 5. For each finding that can be anchored to a specific file and line, call ` + "`" + `gm_review_submit_comment` + "`" + ` with ` + "`" + `{ path, line, body, severity }` + "`" + `.
    - If it returns ` + "`" + `{ ok: false, code: "ANCHOR_INVALID" }` + "`" + `, retry **once** with corrected coordinates.
    - If the second attempt also returns ANCHOR_INVALID, include the finding in the ` + "`" + `body` + "`" + ` of ` + "`" + `gm_review_submit` + "`" + ` instead.
-6. After posting all inline comments, call **exactly one** ` + "`" + `gm_review_submit` + "`" + ` with ` + "`" + `{ verdict, mergeConfidence, body }` + "`" + `.
+6. After posting all inline comments, call **exactly one** ` + "`" + `gm_review_submit` + "`" + ` with ` + "`" + `{ verdict, confidence, body }` + "`" + `.
    - ` + "`" + `verdict` + "`" + `: ` + "`" + `"approved"` + "`" + ` or ` + "`" + `"changes_requested"` + "`" + `
-   - ` + "`" + `mergeConfidence` + "`" + `: ` + "`" + `"high"` + "`" + `, ` + "`" + `"medium"` + "`" + `, or ` + "`" + `"low"` + "`" + `
+   - ` + "`" + `confidence` + "`" + `: ` + "`" + `"high"` + "`" + `, ` + "`" + `"medium"` + "`" + `, or ` + "`" + `"low"` + "`" + `
    - ` + "`" + `body` + "`" + ` must summarise all findings, including any that could not be anchored as inline comments.
    - **If the Precheck Result above was not ok, you MUST use ` + "`" + `changes_requested` + "`" + ` and explain why.**
 `
@@ -355,7 +355,7 @@ Please re-review and submit a valid verdict:
 1. Re-read the precheck result above carefully.
 2. If the precheck was not ok: you **must** submit ` + "`" + `changes_requested` + "`" + ` and explain the failures in the body.
 3. If the precheck was ok and the tree is unchanged: you may submit ` + "`" + `approved` + "`" + `.
-4. Call ` + "`" + `gm_review_submit` + "`" + ` with ` + "`" + `{ verdict, mergeConfidence, body }` + "`" + `. The body must justify your verdict.
+4. Call ` + "`" + `gm_review_submit` + "`" + ` with ` + "`" + `{ verdict, confidence, body }` + "`" + `. The body must justify your verdict.
    Do **not** call any other tools first unless you need more context from ` + "`" + `gm_pr_view` + "`" + ` or ` + "`" + `read` + "`" + `.
 `
 

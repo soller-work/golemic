@@ -57,7 +57,7 @@ func TestRunPreflight(t *testing.T) { //nolint:cyclop,funlen,gocognit // moved v
 						return `{"login":"unknown"}`, nil
 					}
 					if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "list" {
-						return `[{"name":"in-progress"},{"name":"needs-human"}]`, nil
+						return `[{"name":"in-progress"},{"name":"needs-human"},{"name":"confidence:high"},{"name":"confidence:medium"},{"name":"confidence:low"}]`, nil
 					}
 					return "", fmt.Errorf("not mocked")
 				},

@@ -116,7 +116,7 @@ GitHub die *Projektion*. Analog `open-pr` für den Dev.
    → `addPullRequestReviewThread` auf den viewer-pending-Review (discover-or-create via
    `reviews(states:PENDING)` + `addPullRequestReview`).
    Exit 2 = ANCHOR_FAILED → 1 Retry; zweiter Exit 2 → Finding in Summary-Body.
-2. Abschluss: `golemic submit-review --verdict … --body … --pr N --merge-confidence …`
+2. Abschluss: `golemic submit-review --verdict … --body … --pr N --confidence …`
    → `submitPullRequestReview(event:APPROVE|REQUEST_CHANGES, body)` → schreibt
    `review_submitted` Event mit erweitertem Payload.
 
@@ -162,7 +162,7 @@ Lifecycle-Events schreibt der Runner selbst.
 | Runner | `worktree_created` | `path`, `branch`, `baseSha`, `role` |
 | Dev (`emit`) | `dev_started` | – |
 | Dev (`open-pr`) | `pr_opened` | `prNumber`, `url`, `branch` |
-| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `mergeConfidence` (`low`/`medium`/`high`), `reviewId` (GraphQL node id), `inlineCommentCount` (int ≥ 0) |
+| Reviewer (`submit-review`) | `review_submitted` | `verdict` (`approved`/`changes_requested`), `body`, `prNumber`, `confidence` (`low`/`medium`/`high`), `reviewId` (GraphQL node id), `inlineCommentCount` (int ≥ 0) |
 | Runner | `ci_wait_finished` | `result`, `round` |
 | Runner | `automerge_skipped` | `reason` |
 | Runner | `automerge_failed` | `reason` |
@@ -399,7 +399,7 @@ After a successful reviewer phase (valid `review_submitted` event, clean worktre
 The merge phase evaluates two conditions in order:
 
 1. **Verdict** from the latest `review_submitted` event must be `approved`.
-2. **Merge confidence** from the same event must not be `low`. The reviewer sets this via `golemic submit-review --merge-confidence low|medium|high`. The event payload is authoritative; the `confidence:*` PR label is a read-only projection. Both `medium` and `high` allow auto-merge; `low` blocks it.
+2. **Confidence** from the same event must not be `low`. The reviewer sets this via `golemic submit-review --confidence low|medium|high`. The event payload is authoritative; the `confidence:*` PR label is a read-only projection. Both `medium` and `high` allow auto-merge; `low` blocks it.
 
 If either condition is not met, the runner writes an `automerge_skipped` event (with reason `confidence low`) and finishes with outcome `success` — a PR left open for the human is a valid delivery. Exit code 0, cleanup runs. Risk labels on the issue do not participate in any merge decision.
 
@@ -447,13 +447,13 @@ event payload now includes `reviewId` (GraphQL node id) and `inlineCommentCount`
 so the reviewer agent can apply the 1-retry contract (BR-003). Exit 1 is any other
 failure. No event is written by `review-comment`.
 
-The `--merge-confidence low|medium|high` flag on `submit-review` accepts three values (BR-009). It is
+The `--confidence low|medium|high` flag on `submit-review` accepts three values (BR-009). It is
 validated fail-fast before any `gh` call and mirrored as a `confidence:*` label on the PR.
 
 **Implementation modules:**
 - `internal/runner/merge.go` — gate, rebase, verify, push, squash merge
 - `internal/eventlog/eventlog.go` — `pr_merged`, `automerge_skipped`, `automerge_failed` event types; extended `review_submitted` payload with `reviewId` + `inlineCommentCount`
-- `cmd/golemic/main.go` — `review-comment` subcommand; GraphQL-based `submit-review`; `--merge-confidence` flag and PR label mirroring
+- `cmd/golemic/main.go` — `review-comment` subcommand; GraphQL-based `submit-review`; `--confidence` flag and PR label mirroring
 - `.golemic/agents/reviewer.md` — three-tier merge confidence criteria (low blocks; medium/high auto-merge)
 
 ### Pre-round Sweep and FindingsJSON Injection (Slice B of #35)

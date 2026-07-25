@@ -283,7 +283,7 @@ func makeMinimalFakeAgent(t *testing.T) func(context.Context, agent.RoleConfig) 
 			evType = eventlog.EventPROpened
 		case "reviewer":
 			payload, _ = json.Marshal(map[string]interface{}{
-				"verdict": "approved", "mergeConfidence": "high",
+				"verdict": "approved", "confidence": "high",
 				"reviewId": "rev1", "inlineCommentCount": &zero,
 			})
 			evType = eventlog.EventReviewSubmitted

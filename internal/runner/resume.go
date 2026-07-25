@@ -270,7 +270,7 @@ func (r *Runner) synthesizeReviewSubmittedEvent(writer worktree.EventWriter, prN
 		"verdict":            verdict,
 		"body":               "",
 		"prNumber":           prNumber,
-		"mergeConfidence":    confidence,
+		"confidence":         confidence,
 		"reviewId":           reviewID,
 		"inlineCommentCount": &inlineCount,
 	})
@@ -303,20 +303,17 @@ func (r *Runner) buildFindingsJSONForReview(prNumber int, reviewDatabaseID strin
 	return string(b), nil
 }
 
-// mergeConfidenceFromLabels infers merge confidence from PR labels (BR-R8).
-// Returns "high" only when a clear confidence:high label is present; otherwise "low".
-func mergeConfidenceFromLabels(labels []string) string {
-	hasHigh := false
+// confidenceFromLabels infers confidence from PR labels (BR-R8).
+func confidenceFromLabels(labels []string) string {
 	for _, l := range labels {
 		switch l {
 		case "confidence:low":
 			return "low"
+		case "confidence:medium":
+			return "medium"
 		case "confidence:high":
-			hasHigh = true
+			return "high"
 		}
-	}
-	if hasHigh {
-		return "high"
 	}
 	return "low"
 }
@@ -518,7 +515,7 @@ func (r *Runner) resumeHandleChangesRequested(
 
 // resumeHandleApproved handles the APPROVED resume path.
 func (r *Runner) resumeHandleApproved(writer worktree.EventWriter, eventLogPath string, pr *prInfo, lastReview githubReview) string {
-	confidence := mergeConfidenceFromLabels(pr.Labels)
+	confidence := confidenceFromLabels(pr.Labels)
 	if synthErr := r.synthesizeReviewSubmittedEvent(writer, pr.Number, "approved", confidence, lastReview.databaseIDStr()); synthErr != nil {
 		fmt.Fprintf(r.stderr, "resume: failed to write review_submitted event: %v\n", synthErr)
 		return outcomeAborted

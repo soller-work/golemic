@@ -19,9 +19,9 @@ import (
 
 // evaluateAutoMergeGate applies DT-001 given the already-known verdict=approved.
 // Returns (proceed bool, skipReason string).
-// Proceeds iff mergeConfidence != "low"; only skip reason is "confidence low".
+// Proceeds iff confidence != "low"; only skip reason is "confidence low".
 func (r *Runner) evaluateAutoMergeGate(eventLogPath string) (bool, string) {
-	confidence, err := r.latestMergeConfidence(eventLogPath)
+	confidence, err := r.latestConfidence(eventLogPath)
 	if err != nil || confidence == "low" {
 		return false, "confidence low"
 	}
@@ -48,19 +48,6 @@ func (r *Runner) writeAutomergeFailed(writer worktree.EventWriter, reason string
 		RunID:   r.runID,
 		Payload: payload,
 	})
-}
-
-// setConfidenceLowLabel adds the confidence:low label to the PR via the reviewer token.
-// Errors are logged to stderr but do not change the outcome.
-func (r *Runner) setConfidenceLowLabel(prNumber int) {
-	_, err := r.executor.RunWithEnvInDir(
-		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
-		r.repoRoot,
-		"gh", "pr", "edit", fmt.Sprintf("%d", prNumber), "--add-label", "confidence:low",
-	)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "Warning: failed to set confidence:low label: %v\n", err)
-	}
 }
 
 // postMergeFailureComment posts a PR comment explaining the auto-merge failure.
@@ -468,9 +455,6 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 	// PS-001: Gate evaluation (BR-001, BR-002)
 	proceed, skipReason := r.evaluateAutoMergeGate(eventLogPath)
 	if !proceed {
-		if skipReason == "confidence low" {
-			r.setConfidenceLowLabel(prNumber)
-		}
 		r.writeAutomergeSkipped(writer, skipReason)
 		return outcomeSuccess // BR-008: skip is a successful run
 	}

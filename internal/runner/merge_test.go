@@ -32,7 +32,7 @@ func writeReviewEventForMerge(t *testing.T, logPath, verdict, confidence string)
 	zero := 0
 	payload, _ := json.Marshal(map[string]interface{}{
 		"verdict":            verdict,
-		"mergeConfidence":    confidence,
+		"confidence":         confidence,
 		"reviewId":           "PRR_test",
 		"inlineCommentCount": &zero,
 	})
@@ -94,14 +94,14 @@ func TestEvaluateAutoMergeGate_HighNoRiskLabel_Proceeds(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// latestMergeConfidence unit tests
+// latestConfidence unit tests
 // ---------------------------------------------------------------------------
 
-func TestLatestMergeConfidence_High(t *testing.T) {
+func TestLatestConfidence_High(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
 	r := &Runner{}
-	conf, err := r.latestMergeConfidence(logPath)
+	conf, err := r.latestConfidence(logPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -110,11 +110,11 @@ func TestLatestMergeConfidence_High(t *testing.T) {
 	}
 }
 
-func TestLatestMergeConfidence_Low(t *testing.T) {
+func TestLatestConfidence_Low(t *testing.T) {
 	logPath := newLogPath(t)
 	writeReviewEventForMerge(t, logPath, "approved", "low")
 	r := &Runner{}
-	conf, err := r.latestMergeConfidence(logPath)
+	conf, err := r.latestConfidence(logPath)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,10 +123,10 @@ func TestLatestMergeConfidence_Low(t *testing.T) {
 	}
 }
 
-func TestLatestMergeConfidence_MissingEvent(t *testing.T) {
+func TestLatestConfidence_MissingEvent(t *testing.T) {
 	logPath := newLogPath(t)
 	r := &Runner{}
-	_, err := r.latestMergeConfidence(logPath)
+	_, err := r.latestConfidence(logPath)
 	if err == nil {
 		t.Fatal("expected error for missing event log")
 	}
@@ -254,19 +254,13 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop,goc
 // ---------------------------------------------------------------------------
 
 // TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped also asserts that
-// gh pr edit --add-label confidence:low is called (P3-1 / AC-005).
-func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) { //nolint:cyclop
+func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) {
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 12)
 	writeReviewEventForMerge(t, logPath, "approved", "low")
 
-	var labelCallArgs []string
 	exec := &fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
-				labelCallArgs = args
-				return "", nil
-			}
 			return "", fmt.Errorf("unexpected: %s %v", name, args)
 		},
 	}
@@ -290,18 +284,6 @@ func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) { //no
 
 	if outcome != outcomeSuccess {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
-	}
-
-	// Assert the label was set (P3-1 / AC-005)
-	if len(labelCallArgs) == 0 {
-		t.Error("gh pr edit --add-label confidence:low was not called")
-	} else {
-		wantArgs := []string{"pr", "edit", "12", "--add-label", "confidence:low"}
-		gotJoined := strings.Join(labelCallArgs, " ")
-		wantJoined := strings.Join(wantArgs, " ")
-		if gotJoined != wantJoined {
-			t.Errorf("gh pr edit args: got %q, want %q", gotJoined, wantJoined)
-		}
 	}
 
 	found := false
@@ -1351,9 +1333,6 @@ func TestRunMergePhase_GateSkipDoesNotDeleteRemote(t *testing.T) { //nolint:cycl
 
 	exec := &fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
-			if name == "gh" && args[0] == "pr" && args[1] == "edit" {
-				return "", nil // setConfidenceLowLabel
-			}
 			if name == "gh" && args[0] == "pr" && args[1] == "merge" {
 				t.Error("squashMerge must not be called when gate skips")
 			}

@@ -32,7 +32,7 @@ func testEvent(t *testing.T, typ, runID, ts string, payload interface{}) Event {
 
 func testPayload(verdict string) json.RawMessage {
 	zero := 0
-	b, _ := json.Marshal(map[string]interface{}{"verdict": verdict, "mergeConfidence": "high", "reviewId": "PRR_test123", "inlineCommentCount": &zero})
+	b, _ := json.Marshal(map[string]interface{}{"verdict": verdict, "confidence": "high", "reviewId": "PRR_test123", "inlineCommentCount": &zero})
 	return b
 }
 
@@ -316,7 +316,7 @@ func TestWriteReviewSubmitted_Valid(t *testing.T) {
 	defer w.Close()
 
 	zero := 0
-	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]interface{}{"verdict": "approved", "mergeConfidence": "high", "reviewId": "PRR_abc", "inlineCommentCount": &zero})
+	ev := testEvent(t, EventReviewSubmitted, "r1", "", map[string]interface{}{"verdict": "approved", "confidence": "high", "reviewId": "PRR_abc", "inlineCommentCount": &zero})
 	if err := w.Write(ev); err != nil {
 		t.Fatal(err)
 	}
@@ -341,7 +341,7 @@ func TestWriteReviewSubmitted_Invalid(t *testing.T) {
 func TestValidateReviewSubmitted_MissingReviewID_AC008(t *testing.T) {
 	zero := 0
 	raw, _ := json.Marshal(map[string]interface{}{
-		"verdict": "approved", "mergeConfidence": "high",
+		"verdict": "approved", "confidence": "high",
 		"inlineCommentCount": &zero,
 		// reviewId intentionally absent
 	})
@@ -354,7 +354,7 @@ func TestValidateReviewSubmitted_MissingReviewID_AC008(t *testing.T) {
 
 func TestValidateReviewSubmitted_MissingInlineCommentCount_AC008(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
-		"verdict": "approved", "mergeConfidence": "high",
+		"verdict": "approved", "confidence": "high",
 		"reviewId": "PRR_abc",
 		// inlineCommentCount intentionally absent
 	})
@@ -367,7 +367,7 @@ func TestValidateReviewSubmitted_MissingInlineCommentCount_AC008(t *testing.T) {
 
 func TestValidateReviewSubmitted_NegativeInlineCommentCount_AC008(t *testing.T) {
 	raw, _ := json.Marshal(map[string]interface{}{
-		"verdict": "approved", "mergeConfidence": "high",
+		"verdict": "approved", "confidence": "high",
 		"reviewId":           "PRR_abc",
 		"inlineCommentCount": -1,
 	})
@@ -379,7 +379,7 @@ func TestValidateReviewSubmitted_NegativeInlineCommentCount_AC008(t *testing.T) 
 func TestValidateReviewSubmitted_ZeroInlineCommentCount_Valid_AC008(t *testing.T) {
 	zero := 0
 	raw, _ := json.Marshal(map[string]interface{}{
-		"verdict": "approved", "mergeConfidence": "high",
+		"verdict": "approved", "confidence": "high",
 		"reviewId":           "PRR_abc",
 		"inlineCommentCount": &zero,
 	})
@@ -391,26 +391,26 @@ func TestValidateReviewSubmitted_ZeroInlineCommentCount_Valid_AC008(t *testing.T
 func TestValidateReviewSubmitted_MediumConfidence_Valid(t *testing.T) {
 	zero := 0
 	raw, _ := json.Marshal(map[string]interface{}{
-		"verdict": "approved", "mergeConfidence": "medium",
+		"verdict": "approved", "confidence": "medium",
 		"reviewId":           "PRR_abc",
 		"inlineCommentCount": &zero,
 	})
 	if err := ValidateReviewSubmittedPayload(raw); err != nil {
-		t.Errorf("expected no error for mergeConfidence=medium, got: %v", err)
+		t.Errorf("expected no error for confidence=medium, got: %v", err)
 	}
 }
 
 func TestValidateReviewSubmitted_BogusConfidence_Invalid(t *testing.T) {
 	zero := 0
 	raw, _ := json.Marshal(map[string]interface{}{
-		"verdict": "approved", "mergeConfidence": "bogus",
+		"verdict": "approved", "confidence": "bogus",
 		"reviewId":           "PRR_abc",
 		"inlineCommentCount": &zero,
 	})
 	if err := ValidateReviewSubmittedPayload(raw); err == nil {
-		t.Error("expected error for bogus mergeConfidence, got nil")
-	} else if !strings.Contains(err.Error(), "mergeConfidence") {
-		t.Errorf("error should mention mergeConfidence, got: %v", err)
+		t.Error("expected error for bogus confidence, got nil")
+	} else if !strings.Contains(err.Error(), "confidence") {
+		t.Errorf("error should mention confidence, got: %v", err)
 	}
 }
 

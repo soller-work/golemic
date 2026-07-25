@@ -948,18 +948,18 @@ func TestResume_Approved_ConfidenceHigh_MergePath(t *testing.T) {
 	for _, ev := range events {
 		if ev.Type == eventlog.EventReviewSubmitted {
 			var d struct {
-				Verdict         string `json:"verdict"`
-				PRNumber        int    `json:"prNumber"`
-				MergeConfidence string `json:"mergeConfidence"`
+				Verdict    string `json:"verdict"`
+				PRNumber   int    `json:"prNumber"`
+				Confidence string `json:"confidence"`
 			}
 			_ = json.Unmarshal(ev.Payload, &d)
-			if d.Verdict == "approved" && d.PRNumber == 7 && d.MergeConfidence == "high" {
+			if d.Verdict == "approved" && d.PRNumber == 7 && d.Confidence == "high" {
 				hasApprovedReview = true
 			}
 		}
 	}
 	if !hasApprovedReview {
-		t.Error("expected synthesized review_submitted event with verdict=approved and mergeConfidence=high")
+		t.Error("expected synthesized review_submitted event with verdict=approved and confidence=high")
 	}
 }
 
@@ -1398,5 +1398,33 @@ func TestResume_ChangesRequested_InlineCommentsAsFindings(t *testing.T) {
 	// Dev retry should have been invoked (inline comments are the findings)
 	if len(capture.devPrompts) != 1 {
 		t.Fatalf("expected 1 dev call, got %d", len(capture.devPrompts))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// confidenceFromLabels unit tests
+// ---------------------------------------------------------------------------
+
+func TestConfidenceFromLabels_High(t *testing.T) {
+	if got := confidenceFromLabels([]string{"confidence:high"}); got != "high" {
+		t.Errorf("got %q, want high", got)
+	}
+}
+
+func TestConfidenceFromLabels_Medium(t *testing.T) {
+	if got := confidenceFromLabels([]string{"confidence:medium"}); got != "medium" {
+		t.Errorf("got %q, want medium", got)
+	}
+}
+
+func TestConfidenceFromLabels_Low(t *testing.T) {
+	if got := confidenceFromLabels([]string{"confidence:low"}); got != "low" {
+		t.Errorf("got %q, want low", got)
+	}
+}
+
+func TestConfidenceFromLabels_Default(t *testing.T) {
+	if got := confidenceFromLabels([]string{"in-progress"}); got != "low" {
+		t.Errorf("got %q, want low (default)", got)
 	}
 }

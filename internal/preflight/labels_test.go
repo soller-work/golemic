@@ -103,7 +103,7 @@ func TestCheckLabels_GHTokenIsDevToken_NoLeak(t *testing.T) {
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			capturedToken = env["GH_TOKEN"]
 			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "list" {
-				return `[{"name":"in-progress"},{"name":"needs-human"}]`, nil
+				return `[{"name":"in-progress"},{"name":"needs-human"},{"name":"confidence:high"},{"name":"confidence:medium"},{"name":"confidence:low"}]`, nil
 			}
 			return "", fmt.Errorf("not mocked: %s %v", name, args)
 		},
@@ -131,7 +131,7 @@ func TestCheckLabels_SetupMode_BothPresent(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "list" {
-				return `[{"name":"in-progress"},{"name":"needs-human"}]`, nil
+				return `[{"name":"in-progress"},{"name":"needs-human"},{"name":"confidence:high"},{"name":"confidence:medium"},{"name":"confidence:low"}]`, nil
 			}
 			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "create" {
 				createCalled = true
@@ -262,7 +262,7 @@ func TestCheckLabels_CheckMode_BothPresent(t *testing.T) {
 	exec := &fakeExecutor{
 		runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
 			if name == "gh" && len(args) >= 2 && args[0] == "label" && args[1] == "list" {
-				return `[{"name":"in-progress"},{"name":"needs-human"}]`, nil
+				return `[{"name":"in-progress"},{"name":"needs-human"},{"name":"confidence:high"},{"name":"confidence:medium"},{"name":"confidence:low"}]`, nil
 			}
 			return "", fmt.Errorf("not mocked: %s %v", name, args)
 		},
@@ -327,8 +327,8 @@ func TestCheckLabels_CreateCallsUseDT001Metadata(t *testing.T) { //nolint:cyclop
 	if !result.Ok {
 		t.Fatalf("checkLabels() should return Ok=true, got: %s", result.Details)
 	}
-	if len(creates) != 2 {
-		t.Fatalf("expected 2 label create calls, got %d", len(creates))
+	if len(creates) != 5 {
+		t.Fatalf("expected 5 label create calls, got %d", len(creates))
 	}
 
 	byName := make(map[string]createArgs)
@@ -356,5 +356,15 @@ func TestCheckLabels_CreateCallsUseDT001Metadata(t *testing.T) { //nolint:cyclop
 	}
 	if !strings.Contains(nh.description, "human triage") {
 		t.Errorf("needs-human description = %q, expected to mention 'human triage'", nh.description)
+	}
+
+	for _, tier := range []string{"high", "medium", "low"} {
+		cl, ok := byName["confidence:"+tier]
+		if !ok {
+			t.Fatalf("confidence:%s label not created", tier)
+		}
+		if !strings.Contains(cl.description, "confidence") {
+			t.Errorf("confidence:%s description = %q, expected to mention 'confidence'", tier, cl.description)
+		}
 	}
 }
