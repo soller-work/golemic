@@ -407,14 +407,14 @@ func (r *Runner) Run() int {
 
 // writeAgentCompleted appends an agent_completed event to the event log and
 // emits a progress line. Errors are silently dropped per BR-P3.
-func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int) {
+func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int, activityPath, stderrPath string) {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
 		return
 	}
 	defer w.Close() //nolint:errcheck
 
-	payload, err := eventlog.MarshalAgentCompletedPayload(role, exitCode)
+	payload, err := eventlog.MarshalAgentCompletedPayload(role, exitCode, activityPath, stderrPath)
 	if err != nil {
 		return
 	}

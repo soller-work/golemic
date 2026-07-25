@@ -182,13 +182,15 @@ func MarshalAutomergeConflictRetryPayload(conflictedFiles []string, result strin
 
 // agentCompletedData is the payload shape for agent_completed events.
 type agentCompletedData struct {
-	Role     string `json:"role"`
-	ExitCode int    `json:"exitCode"`
+	Role         string `json:"role"`
+	ExitCode     int    `json:"exitCode"`
+	ActivityPath string `json:"activityPath"`
+	StderrPath   string `json:"stderrPath"`
 }
 
 // MarshalAgentCompletedPayload encodes an agent_completed payload.
-func MarshalAgentCompletedPayload(role string, exitCode int) (json.RawMessage, error) {
-	return json.Marshal(agentCompletedData{Role: role, ExitCode: exitCode})
+func MarshalAgentCompletedPayload(role string, exitCode int, activityPath, stderrPath string) (json.RawMessage, error) {
+	return json.Marshal(agentCompletedData{Role: role, ExitCode: exitCode, ActivityPath: activityPath, StderrPath: stderrPath})
 }
 
 // ---------------------------------------------------------------------------

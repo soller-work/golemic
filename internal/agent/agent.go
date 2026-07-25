@@ -168,7 +168,9 @@ type RoleConfig struct {
 	Timeout          time.Duration // maximum wall-clock time for the subprocess
 	IdleTimeout      time.Duration // idle window for stall detection; 0 means use env/default
 	ToolAllowlist    []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
-	RunsDir          string        // base directory for transcript files (<RunsDir>/<RunID>/<role>.*.log)
+	RunsDir          string        // base directory for transcript files (<RunsDir>/<RunID>/<role>-r<Round>-a<Attempt>.*)
+	Round            int           // dev-loop round index (0-based), used for scoped log filenames
+	Attempt          int           // gate-retry attempt index (0-based), used for scoped log filenames
 	TurnID           int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
 	Env              []string      // additional "KEY=VALUE" pairs merged into the subprocess environment
 	TerminalDone     chan struct{} // closed when gm_dev_done or accepted gm_review_submit reaches a terminal result
@@ -176,8 +178,8 @@ type RoleConfig struct {
 
 // TranscriptPaths holds the absolute paths of the captured output files.
 type TranscriptPaths struct {
-	Stdout string // path to <RunsDir>/<RunID>/<role>.activity.jsonl
-	Stderr string // path to <RunsDir>/<RunID>/<role>.stderr.log
+	Stdout string // path to <RunsDir>/<RunID>/<role>-r<Round>-a<Attempt>.activity.jsonl
+	Stderr string // path to <RunsDir>/<RunID>/<role>-r<Round>-a<Attempt>.stderr.log
 }
 
 // toolProgressState holds the incremental read position for tool-progress scanning.
@@ -260,8 +262,8 @@ func readToolProgress(path string, state *toolProgressState) (newlyCompleted int
 //   - Process group set (Setpgid) so the entire group can be killed on timeout
 //
 // stdout and stderr are captured to:
-//   - <RunsDir>/<RunID>/<role>.activity.jsonl
-//   - <RunsDir>/<RunID>/<role>.stderr.log
+//   - <RunsDir>/<RunID>/<role>-r<round>-a<attempt>.activity.jsonl
+//   - <RunsDir>/<RunID>/<role>-r<round>-a<attempt>.stderr.log
 //
 // If the process exceeds cfg.Timeout, the entire process group is killed
 // (SIGKILL to -pgid) and the returned error wraps ErrTimeout. Partial output
@@ -332,8 +334,9 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 
 	// ---- Prepare static values ----
 	sessionID := sanitizeSessionID(cfg.RunID + "-" + cfg.Role)
-	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".activity.jsonl")
-	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, cfg.Role+".stderr.log")
+	logBase := fmt.Sprintf("%s-r%d-a%d", cfg.Role, cfg.Round, cfg.Attempt)
+	stdoutPath := filepath.Join(cfg.RunsDir, cfg.RunID, logBase+".activity.jsonl")
+	stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID, logBase+".stderr.log")
 
 	if err := os.MkdirAll(filepath.Join(cfg.RunsDir, cfg.RunID), 0755); err != nil {
 		return 0, TranscriptPaths{}, fmt.Errorf("agent: failed to create transcript directory: %w", err)

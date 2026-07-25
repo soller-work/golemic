@@ -210,9 +210,9 @@ func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
 		t.Errorf("stderr transcript file should exist: %v", err)
 	}
 
-	// Verify transcript paths match expected pattern
-	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl")
-	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stderr.log")
+	// Verify transcript paths match expected pattern (role-rRound-aAttempt scheme)
+	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev-r0-a0.activity.jsonl")
+	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev-r0-a0.stderr.log")
 	if paths.Stdout != expectedStdout {
 		t.Errorf("stdout path: got %q, want %q", paths.Stdout, expectedStdout)
 	}
@@ -338,8 +338,8 @@ func TestRunRole_Timeout_AC002(t *testing.T) {
 	}
 
 	// ---- Verify transcript paths are correct ----
-	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl")
-	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stderr.log")
+	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev-r0-a0.activity.jsonl")
+	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev-r0-a0.stderr.log")
 	if paths.Stdout != expectedStdout {
 		t.Errorf("stdout path: got %q, want %q", paths.Stdout, expectedStdout)
 	}
@@ -375,8 +375,8 @@ exit 42`
 	}
 
 	// ---- Verify transcript files exist at correct paths ----
-	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl")
-	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev.stderr.log")
+	expectedStdout := filepath.Join(cfg.RunsDir, cfg.RunID, "dev-r0-a0.activity.jsonl")
+	expectedStderr := filepath.Join(cfg.RunsDir, cfg.RunID, "dev-r0-a0.stderr.log")
 
 	if paths.Stdout != expectedStdout {
 		t.Errorf("stdout path: got %q, want %q", paths.Stdout, expectedStdout)
@@ -1016,14 +1016,14 @@ func TestRunRole_ReviewerActivityJsonl_AC4(t *testing.T) {
 		t.Fatalf("exit code: got %d, want 0", exitCode)
 	}
 
-	// AC-4: Verify stdout (activity) transcript path ends in .activity.jsonl
-	if !strings.HasSuffix(paths.Stdout, "reviewer.activity.jsonl") {
-		t.Errorf("stdout path should end in 'reviewer.activity.jsonl', got: %q", paths.Stdout)
+	// AC-4: Verify stdout (activity) transcript path matches role-rRound-aAttempt scheme
+	if !strings.HasSuffix(paths.Stdout, "reviewer-r0-a0.activity.jsonl") {
+		t.Errorf("stdout path should end in 'reviewer-r0-a0.activity.jsonl', got: %q", paths.Stdout)
 	}
 
 	// AC-4: Verify stderr transcript path ends in .stderr.log
-	if !strings.HasSuffix(paths.Stderr, "reviewer.stderr.log") {
-		t.Errorf("stderr path should end in 'reviewer.stderr.log', got: %q", paths.Stderr)
+	if !strings.HasSuffix(paths.Stderr, "reviewer-r0-a0.stderr.log") {
+		t.Errorf("stderr path should end in 'reviewer-r0-a0.stderr.log', got: %q", paths.Stderr)
 	}
 
 	// AC-4: Verify files exist

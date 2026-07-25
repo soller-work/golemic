@@ -27,6 +27,8 @@ import (
 func makeProgressFakeAgent(t *testing.T, devActivityLines, reviewerActivityLines []string) func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 	t.Helper()
 	return func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		activityPath := filepath.Join(cfg.RunsDir, cfg.RunID,
+			fmt.Sprintf("%s-r%d-a%d.activity.jsonl", cfg.Role, cfg.Round, cfg.Attempt))
 		switch cfg.Role {
 		case "dev":
 			// Satisfy the §10 gate; runner writes pr_opened on the first call.
@@ -37,12 +39,12 @@ func makeProgressFakeAgent(t *testing.T, devActivityLines, reviewerActivityLines
 				t.Errorf("makeProgressFakeAgent: sendGMDevDone failed")
 			}
 			if len(devActivityLines) > 0 {
-				writeActivityLines(t, filepath.Join(cfg.RunsDir, cfg.RunID, "dev.activity.jsonl"), devActivityLines)
+				writeActivityLines(t, activityPath, devActivityLines)
 			}
 		case "reviewer":
 			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
 			if len(reviewerActivityLines) > 0 {
-				writeActivityLines(t, filepath.Join(cfg.RunsDir, cfg.RunID, "reviewer.activity.jsonl"), reviewerActivityLines)
+				writeActivityLines(t, activityPath, reviewerActivityLines)
 			}
 		}
 		return 0, agent.TranscriptPaths{Stderr: "/tmp/fake.stderr"}, nil
