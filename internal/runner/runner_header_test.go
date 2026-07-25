@@ -43,6 +43,7 @@ func TestWriteRunHeader_AllFieldsPresent(t *testing.T) {
 	r.writeRunHeader(&buf)
 	out := buf.String()
 
+	runsDir := filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID)
 	checks := []struct {
 		label string
 		want  string
@@ -55,20 +56,23 @@ func TestWriteRunHeader_AllFieldsPresent(t *testing.T) {
 		{"reviewer agent file", filepath.Join(r.repoRoot, ".golemic", "agents", "reviewer.md")},
 		{"branch", "golemic/issue-7"},
 		{"timeout", "45m0s"},
-		{"event log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "events.jsonl")},
-		{"dev activity log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "dev.activity.jsonl")},
-		{"dev stderr log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "dev.stderr.log")},
-		{"reviewer activity log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "reviewer.activity.jsonl")},
-		{"reviewer stderr log", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "reviewer.stderr.log")},
+		{"event log", filepath.Join(runsDir, "events.jsonl")},
+		{"logs dir", runsDir},
 		{"dev worktree", filepath.Join(homeDir, ".golemic", "hdr-project", "worktrees", "issue-7")},
 		{"reviewer worktree", filepath.Join(homeDir, ".golemic", "hdr-project", "worktrees", "issue-7-review")},
-		{"dev tail tip", fmt.Sprintf("tail -f %s", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "dev.activity.jsonl"))},
-		{"reviewer tail tip", fmt.Sprintf("tail -f %s", filepath.Join(homeDir, ".golemic", "hdr-project", "runs", r.runID, "reviewer.activity.jsonl"))},
+		{"event log tail tip", fmt.Sprintf("tail -f %s", filepath.Join(runsDir, "events.jsonl"))},
 	}
 
 	for _, c := range checks {
 		if !strings.Contains(out, c.want) {
 			t.Errorf("header missing %s (%q); full output:\n%s", c.label, c.want, out)
+		}
+	}
+
+	// Verify the header does not print fixed per-round log filenames (they are not known at header time).
+	for _, banned := range []string{"dev.activity.jsonl", "dev.stderr.log", "reviewer.activity.jsonl", "reviewer.stderr.log"} {
+		if strings.Contains(out, banned) {
+			t.Errorf("header must not contain fixed log filename %q; full output:\n%s", banned, out)
 		}
 	}
 }
@@ -199,7 +203,7 @@ func TestRun_HeaderNotOnStdout_AC002(t *testing.T) {
 	r.Run()
 
 	stdoutStr := stdout.String()
-	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Dev logs:", "Reviewer logs:", "Dev worktree:", "Rev worktree:"} {
+	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Logs:", "Dev worktree:", "Rev worktree:"} {
 		if strings.Contains(stdoutStr, label) {
 			t.Errorf("header label %q found in stdout; stdout: %q", label, stdoutStr)
 		}
@@ -234,7 +238,7 @@ func TestRun_NoHeaderOnFailureBeforeIssueLoad_AC004(t *testing.T) {
 	}
 
 	errOut := stderr.String()
-	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Dev logs:", "Reviewer logs:"} {
+	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Logs:"} {
 		if strings.Contains(errOut, label) {
 			t.Errorf("header label %q found in stderr before issue load; stderr: %q", label, errOut)
 		}
@@ -274,7 +278,7 @@ func TestRun_QuietSuppressesHeader_AC001(t *testing.T) {
 		t.Fatalf("expected exit 1 (collision), got %d", exitCode)
 	}
 	errOut := stderr.String()
-	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Dev logs:", "Reviewer logs:"} {
+	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Logs:"} {
 		if strings.Contains(errOut, label) {
 			t.Errorf("header label %q found in stderr under --quiet; stderr: %q", label, errOut)
 		}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -394,9 +393,7 @@ func (r *Runner) getRemoteBranchSHA() (string, error) {
 }
 
 // runDevCIRetryAgent runs the dev agent in the existing dev worktree to fix CI failures.
-func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, failedCheckInfo string) string {
-	golemicBinaryPath, _ := os.Executable()
-	_ = golemicBinaryPath
+func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, failedCheckInfo string, fixRound int) string {
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
 
@@ -439,22 +436,16 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
-	exitCode, paths, err := runFn(context.Background(), agent.RoleConfig{
-		Role:             "dev",
-		SystemPromptFile: systemPromptFile,
-		UserPrompt:       userPrompt,
-		WorktreeDir:      devWorktreePath,
-		RunID:            r.runID,
-		EventLogPath:     eventLogPath,
-		TurnID:           r.turnCounter,
-		Model:            model,
-		Timeout:          timeout,
-		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:    ciToolAllowlist,
-		RunsDir:          runsDir,
-		Env:              ciGMEnv,
-	})
+	cfg := r.buildCIRetryAgentConfig(systemPromptFile, userPrompt, devWorktreePath, eventLogPath, model, timeout, runsDir, fixRound, ciToolAllowlist, ciGMEnv)
+	exitCode, paths, err := runFn(context.Background(), cfg)
 
+	if outcome := r.handleCIRetryAgentResult(eventLogPath, exitCode, paths.Stdout, paths.Stderr, err); outcome != "" {
+		return outcome
+	}
+	return outcomeSuccess
+}
+
+func (r *Runner) handleCIRetryAgentResult(eventLogPath string, exitCode int, activityPath, stderrPath string, err error) string {
 	if err != nil {
 		if errors.Is(err, agent.ErrTimeout) {
 			fmt.Fprintf(r.stderr, "dev_failed: CI retry dev agent exceeded timeout\n") //nolint:errcheck
@@ -471,15 +462,32 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		fmt.Fprintf(r.stderr, "dev_failed: CI retry agent failed: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed
 	}
-
-	r.writeAgentCompleted(eventLogPath, "dev", exitCode)
-
+	r.writeAgentCompleted(eventLogPath, "dev", exitCode, activityPath, stderrPath)
 	if exitCode != 0 {
-		fmt.Fprintf(r.stderr, "dev_failed: CI retry dev agent exited with code %d; see %s\n", exitCode, paths.Stderr) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "dev_failed: CI retry dev agent exited with code %d; see %s\n", exitCode, stderrPath) //nolint:errcheck
 		return outcomeDevFailed
 	}
+	return ""
+}
 
-	return outcomeSuccess
+func (r *Runner) buildCIRetryAgentConfig(systemPromptFile, userPrompt, worktreeDir, eventLogPath, model string, timeout time.Duration, runsDir string, fixRound int, toolAllowlist, env []string) agent.RoleConfig {
+	return agent.RoleConfig{
+		Role:             "dev",
+		SystemPromptFile: systemPromptFile,
+		UserPrompt:       userPrompt,
+		WorktreeDir:      worktreeDir,
+		RunID:            r.runID,
+		EventLogPath:     eventLogPath,
+		TurnID:           r.turnCounter,
+		Model:            model,
+		Timeout:          timeout,
+		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
+		ToolAllowlist:    toolAllowlist,
+		RunsDir:          runsDir,
+		Round:            0,
+		Attempt:          fixRound,
+		Env:              env,
+	}
 }
 
 // onCICheckFailed handles the red/timeout branch in runCIGate.
@@ -503,7 +511,7 @@ func (r *Runner) onCICheckFailed(prNumber int, eventLogPath, golemicDir string, 
 		return outcomeDevFailed
 	}
 
-	if devOutcome := r.runDevCIRetryAgent(golemicDir, eventLogPath, agentTimeout, failedCheckInfo); devOutcome != outcomeSuccess {
+	if devOutcome := r.runDevCIRetryAgent(golemicDir, eventLogPath, agentTimeout, failedCheckInfo, fixRound); devOutcome != outcomeSuccess {
 		r.postCIEscalationComment(prNumber, "CI retry dev agent failed")
 		return outcomeDevFailed
 	}

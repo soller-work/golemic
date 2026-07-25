@@ -813,7 +813,7 @@ func TestRunDevCIRetryAgent_PromptContainsCheckInfo(t *testing.T) {
 	}
 
 	failedCheckInfo := "### test\n```\ngo test: failed\n```\n"
-	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, failedCheckInfo)
+	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, failedCheckInfo, 0)
 	if outcome != outcomeSuccess {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
 	}
@@ -869,7 +869,7 @@ func TestRunDevCIRetryAgent_ErrStalledMapsToStalledOutcome_P2_1b(t *testing.T) {
 	}
 
 	failedCheckInfo := "test failed: timeout\n"
-	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, failedCheckInfo)
+	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, failedCheckInfo, 0)
 
 	if outcome != outcomeStalled {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeStalled)
@@ -1058,7 +1058,7 @@ func TestRunDevCIRetryAgent_DoesNotInjectCredTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, "### test\n```\nfailed\n```\n")
+	r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, "### test\n```\nfailed\n```\n", 0)
 
 	joinedEnv := strings.Join(capturedCfg.Env, "\n")
 	for _, banned := range []string{"GH_TOKEN=", "GOLEMIC_DEV_TOKEN=", "GOLEMIC_REVIEWER_TOKEN="} {
@@ -1112,7 +1112,7 @@ func TestRunDevCIRetryAgent_ErrThinkingLoopMapsToAborted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, "test failed\n")
+	outcome := r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, "test failed\n", 0)
 
 	if outcome != outcomeAborted {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeAborted)

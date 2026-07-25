@@ -213,13 +213,13 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": model})
-	stopFollow := followActivity(r.progressRenderer, "reviewer", filepath.Join(runsDir, r.runID, "reviewer.activity.jsonl"))
+	stopFollow := followActivity(r.progressRenderer, "reviewer", filepath.Join(runsDir, r.runID, fmt.Sprintf("reviewer-r%d-a%d.activity.jsonl", round, attempt)))
 
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
-	cfg := r.buildReviewerRoleConfig(systemPromptFile, userPrompt, reviewerWorktreePath, golemicBinaryPath, model, eventLogPath, runsDir, timeout, brokerEnv)
+	cfg := r.buildReviewerRoleConfig(systemPromptFile, userPrompt, reviewerWorktreePath, golemicBinaryPath, model, eventLogPath, runsDir, timeout, round, attempt, brokerEnv)
 	exitCode, paths, runErr := runFn(context.Background(), cfg)
 	stopFollow()
 
@@ -253,11 +253,11 @@ func captureReviewerBrokerState(gmBroker *gmbroker.Broker) *reviewerInvocationSt
 // handleReviewerAgentResult translates the agent run result into an outcome string.
 func (r *Runner) handleReviewerAgentResult(err error, exitCode int, paths agent.TranscriptPaths, eventLogPath string, endSpan func(string, map[string]any)) string {
 	if err != nil {
-		return r.handleReviewerAgentError(err, exitCode, eventLogPath, endSpan)
+		return r.handleReviewerAgentError(err, exitCode, eventLogPath, endSpan, paths.Stdout, paths.Stderr)
 	}
 
 	// Record agent exit code in event log (BR-004)
-	r.writeAgentCompleted(eventLogPath, "reviewer", exitCode)
+	r.writeAgentCompleted(eventLogPath, "reviewer", exitCode, paths.Stdout, paths.Stderr)
 	r.emitAgentWrittenEvents(eventLogPath)
 
 	if exitCode != 0 {
@@ -271,7 +271,7 @@ func (r *Runner) handleReviewerAgentResult(err error, exitCode int, paths agent.
 }
 
 // handleReviewerAgentError translates a non-nil agent.RunRole error into an outcome.
-func (r *Runner) handleReviewerAgentError(err error, _ int, eventLogPath string, endSpan func(string, map[string]any)) string {
+func (r *Runner) handleReviewerAgentError(err error, _ int, eventLogPath string, endSpan func(string, map[string]any), activityPath, stderrPath string) string {
 	if errors.Is(err, agent.ErrTimeout) {
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "review_failed: reviewer agent exceeded timeout\n") //nolint:errcheck
@@ -289,7 +289,7 @@ func (r *Runner) handleReviewerAgentError(err error, _ int, eventLogPath string,
 	}
 	var chainErr *agent.ModelChainExhaustedError
 	if errors.As(err, &chainErr) {
-		r.writeAgentCompleted(eventLogPath, "reviewer", 1)
+		r.writeAgentCompleted(eventLogPath, "reviewer", 1, activityPath, stderrPath)
 		r.emitAgentWrittenEvents(eventLogPath)
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
@@ -597,7 +597,7 @@ func buildReviewerToolList(brokerEnv []string) []string {
 }
 
 // buildReviewerRoleConfig assembles the agent.RoleConfig for a reviewer invocation.
-func (r *Runner) buildReviewerRoleConfig(systemPromptFile, userPrompt, worktreePath, golemicBinaryPath, model, eventLogPath, runsDir string, timeout time.Duration, brokerEnv []string) agent.RoleConfig {
+func (r *Runner) buildReviewerRoleConfig(systemPromptFile, userPrompt, worktreePath, golemicBinaryPath, model, eventLogPath, runsDir string, timeout time.Duration, round, attempt int, brokerEnv []string) agent.RoleConfig {
 	_ = golemicBinaryPath
 	return agent.RoleConfig{
 		Role:             "reviewer",
@@ -612,6 +612,8 @@ func (r *Runner) buildReviewerRoleConfig(systemPromptFile, userPrompt, worktreeP
 		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:    buildReviewerToolList(brokerEnv),
 		RunsDir:          runsDir,
+		Round:            round,
+		Attempt:          attempt,
 		Env:              brokerEnv,
 	}
 }

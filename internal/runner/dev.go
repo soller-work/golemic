@@ -184,7 +184,7 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "attempt": attempt, "model": model})
 
 	r.writeDevStarted(eventLogPath)
-	activityPath := filepath.Join(runsDir, r.runID, "dev.activity.jsonl")
+	activityPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("dev-r%d-a%d.activity.jsonl", round, attempt))
 	stopFollow := followActivity(r.progressRenderer, "dev", activityPath)
 
 	runFn := r.runAgentFn
@@ -192,16 +192,16 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 		runFn = agent.RunRole
 	}
 
-	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, brokerEnv)
+	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, round, attempt, brokerEnv)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 	stopFollow()
 
 	if err != nil {
 		r.emitAgentWrittenEvents(eventLogPath)
-		return r.handleDevAgentErrorWithLog(eventLogPath, err, endSpan), ""
+		return r.handleDevAgentErrorWithLog(eventLogPath, err, endSpan, paths.Stdout, paths.Stderr), ""
 	}
 
-	r.writeAgentCompleted(eventLogPath, "dev", exitCode)
+	r.writeAgentCompleted(eventLogPath, "dev", exitCode, paths.Stdout, paths.Stderr)
 	r.emitAgentWrittenEvents(eventLogPath)
 
 	if exitCode != 0 {
@@ -378,7 +378,7 @@ func (r *Runner) startCBMForRole(wtPath, cbmCacheDir, sockPath, projectName stri
 	return b, []string{"CBM_SOCK=" + sockPath, "CBM_PROJECT=" + projectName}, true
 }
 
-func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, brokerEnv []string) agent.RoleConfig {
+func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath string, timeout time.Duration, runsDir string, round, attempt int, brokerEnv []string) agent.RoleConfig {
 	_ = golemicBinaryPath
 	toolAllowlist := []string{"read", "bash", "write", "edit"}
 	hasGMSock := false
@@ -410,6 +410,8 @@ func (r *Runner) buildDevAgentConfig(systemPromptFile, model, devWorktreePath, e
 		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:    toolAllowlist,
 		RunsDir:          runsDir,
+		Round:            round,
+		Attempt:          attempt,
 		Env:              brokerEnv,
 	}
 }
@@ -510,7 +512,7 @@ func (r *Runner) indexWorktree(wtPath, cbmCacheDir, projectName string) bool {
 // handleDevAgentErrorWithLog processes agent errors, writes agent_completed for chain
 // exhaustion, and returns the outcome. eventLogPath may be empty for cases where no
 // pr comment is needed.
-func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endSpan func(string, map[string]any)) string {
+func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endSpan func(string, map[string]any), activityPath, stderrPath string) string {
 	if errors.Is(err, agent.ErrTimeout) {
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n")
@@ -529,7 +531,7 @@ func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endS
 	var chainErr *agent.ModelChainExhaustedError
 	if errors.As(err, &chainErr) {
 		if eventLogPath != "" {
-			r.writeAgentCompleted(eventLogPath, "dev", 1)
+			r.writeAgentCompleted(eventLogPath, "dev", 1, activityPath, stderrPath)
 			if prNum, prErr := r.getPRNumber(eventLogPath); prErr == nil {
 				r.postModelChainExhaustedComment(prNum, chainErr)
 			}
