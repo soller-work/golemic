@@ -564,15 +564,15 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 		return outcomeDevFailed
 	}
 
-	// CI gate: wait for PR checks to pass before allowing the reviewer to start
+	// Pre-review sync gate: ensure the dev branch is up to date with origin/main
+	// and CI is green before allowing the reviewer to start.
 	prNumber, err := r.getPRNumber(eventLogPath)
 	if err != nil {
-		fmt.Fprintf(r.stderr, "dev_failed: failed to get PR number for CI gate: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(r.stderr, "dev_failed: failed to get PR number for pre-review sync gate: %v\n", err) //nolint:errcheck
 		return outcomeDevFailed
 	}
-	ciGateOutcome := r.runCIGate(prNumber, eventLogPath, timeoutDuration)
-	if ciGateOutcome != outcomeSuccess {
-		return ciGateOutcome
+	if o := r.runPreReviewSyncGate(writer, prNumber, eventLogPath, timeoutDuration); o != outcomeSuccess {
+		return o
 	}
 
 	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeoutDuration, runSpanID, false)
@@ -701,6 +701,18 @@ func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventL
 	next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, round)
 	if !next && outcome == outcomeSuccess {
 		return false, r.runMergePhase(writer, eventLogPath)
+	}
+	if next {
+		// Pre-review sync gate: ensure the dev branch is up to date with origin/main
+		// and CI is green before the next reviewer round.
+		prNumber, prErr := r.getPRNumber(eventLogPath)
+		if prErr != nil {
+			fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: get PR number: %v\n", prErr) //nolint:errcheck
+			return false, outcomeDevFailed
+		}
+		if o := r.runPreReviewSyncGate(writer, prNumber, eventLogPath, timeout); o != outcomeSuccess {
+			return false, o
+		}
 	}
 	return next, outcome
 }

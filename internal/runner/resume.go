@@ -507,6 +507,12 @@ func (r *Runner) resumeHandleChangesRequested(
 		return o
 	}
 
+	// Pre-review sync gate: ensure the dev branch is up to date with origin/main
+	// and CI is green before creating the reviewer worktree.
+	if o := r.runPreReviewSyncGate(writer, prNumber, eventLogPath, timeout); o != outcomeSuccess {
+		return o
+	}
+
 	return r.resumeStartReviewerTurn(writer, eventLogPath, golemicDir, prNumber, botLogin, timeout, runSpanID)
 }
 
