@@ -866,7 +866,7 @@ func TestRunRole_ModeJsonAndSessionID_AC1(t *testing.T) {
 	}
 
 	// AC-1: Verify --mode json and --session-id are present; TurnID must NOT appear in session ID.
-	expectedSessionID := sanitizeSessionID("test-run-123-dev")
+	expectedSessionID := sanitizeSessionID("test-run-123-dev-r0")
 	if !argContains(capturedArgs, "--mode", "json") {
 		t.Errorf("args missing '--mode json', got: %v", capturedArgs)
 	}
@@ -925,7 +925,7 @@ func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
 	}
 
 	// AC-3: Extract and verify all session-ids are identical; TurnID must NOT appear in session ID.
-	expectedSessionID := sanitizeSessionID("run-retry-test-dev")
+	expectedSessionID := sanitizeSessionID("run-retry-test-dev-r0")
 	for idx, invocation := range allInvocations {
 		var sessionID string
 		for i := 0; i < len(invocation)-1; i++ {
@@ -1542,6 +1542,63 @@ func TestRunRole_ReviewerSessionIDDiffersAcrossRounds_Issue212(t *testing.T) {
 	}
 	if sid1 == sid2 {
 		t.Errorf("reviewer session IDs must differ across rounds: Round=1 → %q, Round=2 → %q", sid1, sid2)
+	}
+}
+
+// TestRunRole_DevSessionIDDiffersAcrossRounds verifies that dev rounds use distinct
+// pi session IDs so round-2 cannot resume round-1's session (issue-219).
+func TestRunRole_DevSessionIDDiffersAcrossRounds_Issue219(t *testing.T) {
+	scriptPath := writeScript(t, captureEnvScript())
+
+	run := func(round int) string {
+		cfg := defaultRoleConfig(t, "dev")
+		cfg.RunID = "issue-219-test"
+		cfg.Round = round
+		var args []string
+		fakeCommandFactory(t, scriptPath, &args)
+		if _, _, err := RunRole(context.Background(), cfg); err != nil {
+			t.Fatalf("RunRole dev (Round=%d) failed: %v", round, err)
+		}
+		return extractSessionID(args)
+	}
+
+	sid1 := run(1)
+	sid2 := run(2)
+
+	if sid1 == "" {
+		t.Fatal("no --session-id found in Pi args for dev Round=1")
+	}
+	if sid1 == sid2 {
+		t.Errorf("dev session IDs must differ across rounds: Round=1 → %q, Round=2 → %q", sid1, sid2)
+	}
+}
+
+// TestRunRole_DevSessionIDStableAcrossAttempts verifies that gate-retry attempts within
+// a single round share the same session ID so the retry resumes the in-round context (issue-219).
+func TestRunRole_DevSessionIDStableAcrossAttempts_Issue219(t *testing.T) {
+	scriptPath := writeScript(t, captureEnvScript())
+
+	run := func(attempt int) string {
+		cfg := defaultRoleConfig(t, "dev")
+		cfg.RunID = "issue-219-test"
+		cfg.Round = 1
+		cfg.Attempt = attempt
+		var args []string
+		fakeCommandFactory(t, scriptPath, &args)
+		if _, _, err := RunRole(context.Background(), cfg); err != nil {
+			t.Fatalf("RunRole dev (Attempt=%d) failed: %v", attempt, err)
+		}
+		return extractSessionID(args)
+	}
+
+	sid0 := run(0)
+	sid1 := run(1)
+
+	if sid0 == "" {
+		t.Fatal("no --session-id found in Pi args for dev Attempt=0")
+	}
+	if sid0 != sid1 {
+		t.Errorf("dev gate-retry attempts within a round must share session ID: Attempt=0 → %q, Attempt=1 → %q", sid0, sid1)
 	}
 }
 
