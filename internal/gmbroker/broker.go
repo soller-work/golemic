@@ -631,6 +631,65 @@ func (b *Broker) DevDoneGateReason() string {
 	return b.devDoneGateMsg
 }
 
+// RecoveredDevDoneParams returns the validated DevDoneParams from the gate-rejected
+// terminal call, if any. Returns nil, false when the gate was not rejected or when
+// the params submitted were not valid.
+func (b *Broker) RecoveredDevDoneParams() (*DevDoneParams, bool) {
+	b.devDoneMu.Lock()
+	defer b.devDoneMu.Unlock()
+	if !b.devDoneGateRejected || b.devDoneTerminalRaw == nil {
+		return nil, false
+	}
+	var p DevDoneParams
+	if err := json.Unmarshal(b.devDoneTerminalRaw, &p); err != nil {
+		return nil, false
+	}
+	if p.Summary == "" || p.CommitMsg == "" || p.PrTitle == "" || p.PrBody == "" {
+		return nil, false
+	}
+	return &p, true
+}
+
+// IsTreeGreen reports whether the §10 criterion holds: the last gm_project_check
+// was OK and the current working-tree fingerprint matches that check's fingerprint.
+// Returns false when no check has run, the last check was red, or the fingerprint
+// cannot be computed.
+func (b *Broker) IsTreeGreen() bool {
+	b.lastCheckMu.Lock()
+	lastCheck := b.lastCheck
+	b.lastCheckMu.Unlock()
+	if lastCheck == nil || !lastCheck.OK {
+		return false
+	}
+	if b.projectCheck.WorktreePath == "" {
+		return false
+	}
+	currentFP, err := b.getComputeFingerprintFn()(b.projectCheck.WorktreePath)
+	if err != nil {
+		return false
+	}
+	return currentFP == lastCheck.WorkingTreeFingerprint
+}
+
+// LastCheckOutput returns the content of the last gm_project_check output file
+// when the last check was not OK. Returns empty string when no check has run,
+// the last check was green, the output file path is unset, or the file cannot
+// be read (falling back to the Summary field in that last case).
+func (b *Broker) LastCheckOutput() string {
+	b.lastCheckMu.Lock()
+	lastCheck := b.lastCheck
+	b.lastCheckMu.Unlock()
+	if lastCheck == nil || lastCheck.OK {
+		return ""
+	}
+	if lastCheck.OutputFile != "" {
+		if data, err := os.ReadFile(lastCheck.OutputFile); err == nil {
+			return string(data)
+		}
+	}
+	return lastCheck.Summary
+}
+
 // ReviewSubmitParams is the expected payload for gm_review_submit.
 type ReviewSubmitParams struct {
 	Verdict         string `json:"verdict"`
