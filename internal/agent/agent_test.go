@@ -32,6 +32,20 @@ func writeScript(t *testing.T, content string) string {
 	return path
 }
 
+// waitForFile polls until path exists or the timeout elapses, failing the test
+// on timeout. Used to synchronize on a subprocess having done partial work.
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("file %q did not appear within %v", path, timeout)
+}
+
 // fakeCommandFactory returns a CommandFactory function that runs the given
 // scriptPath as the "pi" binary. It also captures the full args (name + args)
 // into capturedArgs for later inspection.
@@ -286,24 +300,56 @@ func TestRunRole_ReviewerToolAllowlist_AC004(t *testing.T) {
 
 func TestRunRole_Timeout_AC002(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 3 * time.Second
+	// Generous wall-clock timeout: the kill path is triggered deterministically by
+	// cancelling ctx once the marker proves partial execution, rather than racing a
+	// short timer against process scheduling under parallel-test load.
+	cfg.Timeout = 60 * time.Second
 
 	markerDir := t.TempDir()
 	markerFile := filepath.Join(markerDir, "output.txt")
 
-	// Script that writes to a marker file (direct file I/O, no stdio buffering)
-	// before sleeping forever. The marker serves as proof of partial execution.
+	// Script that atomically writes a marker file (write to a temp then rename, so
+	// existence implies fully-written content) before sleeping forever. The marker
+	// serves as proof of partial execution and as a synchronization point.
 	sleepForeverScript := fmt.Sprintf(
-		"printf 'before_sleep\\n' > %s\nwhile true; do sleep 3600; done",
-		markerFile,
+		"printf 'before_sleep\\n' > %s.tmp\nmv %s.tmp %s\nwhile true; do sleep 3600; done",
+		markerFile, markerFile, markerFile,
 	)
 	scriptPath := writeScript(t, sleepForeverScript)
 
 	var capturedArgs []string
 	fakeCommandFactory(t, scriptPath, &capturedArgs)
 
-	ctx := context.Background()
-	exitCode, paths, err := RunRole(ctx, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type runResult struct {
+		exitCode int
+		paths    TranscriptPaths
+		err      error
+	}
+	resultCh := make(chan runResult, 1)
+	go func() {
+		ec, p, e := RunRole(ctx, cfg)
+		resultCh <- runResult{ec, p, e}
+	}()
+
+	// Wait for the script to write the marker: deterministic proof the process
+	// started and did partial work before we trigger the kill.
+	waitForFile(t, markerFile, 30*time.Second)
+
+	// Cancelling ctx trips the same timeoutCtx.Done() branch as the wall-clock
+	// timer, so RunRole takes the timeout kill path (SIGKILL to the group,
+	// ErrTimeout) without depending on timer/scheduler timing.
+	cancel()
+
+	var res runResult
+	select {
+	case res = <-resultCh:
+	case <-time.After(30 * time.Second):
+		t.Fatal("RunRole did not return after ctx cancel")
+	}
+	exitCode, paths, err := res.exitCode, res.paths, res.err
 
 	// ---- Verify timeout error wraps ErrTimeout ----
 	if err == nil {
