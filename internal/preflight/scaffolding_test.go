@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"golemic/internal/agentfile"
 )
 
 func TestCheckScaffolding(t *testing.T) { //nolint:cyclop,gocognit // moved verbatim; cyclomatic 12 and cognitive 32 exceed thresholds on the pre-existing table body
@@ -57,44 +55,32 @@ func TestCheckScaffolding(t *testing.T) { //nolint:cyclop,gocognit // moved verb
 			devPath := filepath.Join(golemicDir, "guidelines", "dev.md")
 			revPath := filepath.Join(golemicDir, "guidelines", "reviewer.md")
 
-			if tt.wantCreated { //nolint:nestif // moved verbatim; complexity pre-dates split
+			if tt.wantCreated { //nolint:nestif // complexity from table-driven check body, pre-dates split
 				// Check config.json exists and is valid JSON
 				data, err := os.ReadFile(configPath)
 				if err != nil {
 					t.Fatalf("config.json should exist: %v", err)
 				}
-				// Verify it's valid JSON
 				var parsed map[string]interface{}
 				if err := json.Unmarshal(data, &parsed); err != nil {
 					t.Errorf("config.json is not valid JSON: %v\ncontent: %s", err, string(data))
 				}
-				// Verify project field exists
 				project, ok := parsed["project"]
 				if !ok || project == "" {
 					t.Errorf("config.json should contain project field, got: %s", string(data))
 				}
 
-				// Check guidelines exist
+				// Guidelines must be created; no persona files are seeded
 				if _, err := os.Stat(devPath); err != nil {
 					t.Errorf("guidelines/dev.md should exist: %v", err)
 				}
 				if _, err := os.Stat(revPath); err != nil {
 					t.Errorf("guidelines/reviewer.md should exist: %v", err)
 				}
-
-				// Check agents exist with model frontmatter and non-empty body
-				agentsDir := filepath.Join(golemicDir, "agents")
 				for _, role := range []string{"dev", "reviewer"} {
-					chain, body, readErr := agentfile.Read(filepath.Join(agentsDir, role+".md"))
-					if readErr != nil {
-						t.Errorf("agents/%s.md: %v", role, readErr)
-						continue
-					}
-					if len(chain) == 0 {
-						t.Errorf("agents/%s.md: model chain must not be empty", role)
-					}
-					if body == "" {
-						t.Errorf("agents/%s.md: body must not be empty", role)
+					agentPath := filepath.Join(golemicDir, "agents", role+".md")
+					if _, err := os.Stat(agentPath); err == nil {
+						t.Errorf("agents/%s.md must not be seeded by preflight", role)
 					}
 				}
 			}

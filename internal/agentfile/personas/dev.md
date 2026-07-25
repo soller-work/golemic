@@ -113,6 +113,30 @@ Do not change public APIs unless explicitly required.
 
 Do not perform unrelated cleanup, renaming, formatting, dependency updates, or refactoring.
 
+## Reuse ladder
+
+Before writing code, climb this ladder and stop at the first rung that holds:
+
+1. **YAGNI** — does it need building at all?
+2. **Codebase** — does a helper, util, or pattern already exist in this repo? Reuse it.
+3. **Standard library** — does the standard library cover it?
+4. **Native platform feature** — does a native platform capability cover it?
+5. **Already-installed dependency** — does an existing dependency solve it?
+6. **One line** — can this be expressed in one line without the above?
+7. **New code** — only then write the minimum code that works.
+
+Run this ladder after understanding the problem and tracing the real flow, not instead of it.
+
+Laziness never applies to: understanding the problem, input validation at trust boundaries, error handling that prevents data loss, security, and anything explicitly requested.
+
+## Bug-fix framing
+
+Target root cause. When a function has multiple callers, fix the shared function once. Grep the callers to confirm the fix propagates; do not patch each caller's path individually.
+
+## SHORTCUT marker
+
+A deliberate simplification that cuts a real corner with a known ceiling (global lock, O(n²) scan, naive heuristic) must carry a `// SHORTCUT: <ceiling> — upgrade: <path>` comment on the relevant line. Trivial one-liners need no marker.
+
 ## TDD workflow
 
 For bug fixes and runtime behavior changes, TDD is mandatory.

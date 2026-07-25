@@ -203,17 +203,17 @@ func TestRunDevAgent_ChainExhausted_DiagnosticsContainModels(t *testing.T) {
 	}
 }
 
-// TestRunDevAgent_ResolvesModelChainFromAgentFile verifies that the runner
-// correctly resolves the exact ordered model chain from .golemic/agents/dev.md
-// frontmatter and passes it as cfg.Model to the agent.
+// TestRunDevAgent_ResolvesModelChainFromAgentFile verifies that a repo-level
+// override file is used when present, and that its ordered model chain is preserved.
 func TestRunDevAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
 	r, logPath, _ := setupExitCodeRunner(t, "dev")
 
-	// Override agent file with multi-model chain to exercise order preservation
 	agentsDir := filepath.Join(r.repoRoot, ".golemic", "agents")
-	devAgentPath := filepath.Join(agentsDir, "dev.md")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	multiModelContent := "---\nmodel: model-a, model-b, model-c\n---\npersona body\n"
-	if err := os.WriteFile(devAgentPath, []byte(multiModelContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte(multiModelContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -226,24 +226,23 @@ func TestRunDevAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
 
-	// Verify exact ordered chain is preserved in cfg.Model
 	expectedChain := "model-a, model-b, model-c"
 	if capturedCfg.Model != expectedChain {
 		t.Errorf("cfg.Model = %q, want %q (exact ordered chain not preserved)", capturedCfg.Model, expectedChain)
 	}
 }
 
-// TestRunReviewerAgent_ResolvesModelChainFromAgentFile verifies that the runner
-// correctly resolves the exact ordered model chain from .golemic/agents/reviewer.md
-// frontmatter and passes it as cfg.Model to the agent.
+// TestRunReviewerAgent_ResolvesModelChainFromAgentFile verifies that a repo-level
+// override file is used when present, and that its ordered model chain is preserved.
 func TestRunReviewerAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
 	r, logPath, _ := setupExitCodeRunner(t, "reviewer")
 
-	// Override agent file with multi-model chain to exercise order preservation
 	agentsDir := filepath.Join(r.repoRoot, ".golemic", "agents")
-	reviewer := filepath.Join(agentsDir, "reviewer.md")
+	if err := os.MkdirAll(agentsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
 	multiModelContent := "---\nmodel: model-a, model-b, model-c\n---\npersona body\n"
-	if err := os.WriteFile(reviewer, []byte(multiModelContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.md"), []byte(multiModelContent), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -256,9 +255,51 @@ func TestRunReviewerAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, 0, "", nil, "")
 
-	// Verify exact ordered chain is preserved in cfg.Model
 	expectedChain := "model-a, model-b, model-c"
 	if capturedCfg.Model != expectedChain {
 		t.Errorf("cfg.Model = %q, want %q (exact ordered chain not preserved)", capturedCfg.Model, expectedChain)
+	}
+}
+
+// TestRunDevAgent_EmbeddedDefaultUsedWhenNoOverride verifies that when no repo
+// override file exists, the embedded canonical persona is used and the model chain is non-empty.
+func TestRunDevAgent_EmbeddedDefaultUsedWhenNoOverride(t *testing.T) {
+	r, logPath, _ := setupExitCodeRunner(t, "dev")
+
+	var capturedCfg agent.RoleConfig
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		capturedCfg = cfg
+		return 0, fakeTranscriptPaths("/tmp", "dev"), nil
+	})
+
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+
+	if capturedCfg.Model == "" {
+		t.Error("model chain must be non-empty when using embedded default")
+	}
+	if capturedCfg.SystemPromptFile == "" {
+		t.Error("system prompt file must be set when using embedded default")
+	}
+}
+
+// TestRunReviewerAgent_EmbeddedDefaultUsedWhenNoOverride verifies the same for the reviewer role.
+func TestRunReviewerAgent_EmbeddedDefaultUsedWhenNoOverride(t *testing.T) {
+	r, logPath, _ := setupExitCodeRunner(t, "reviewer")
+
+	var capturedCfg agent.RoleConfig
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		capturedCfg = cfg
+		return 0, fakeTranscriptPaths("/tmp", "reviewer"), nil
+	})
+
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	r.runReviewerAgent(golemicDir, logPath, 5*time.Minute, "", 1, 0, "", nil, "")
+
+	if capturedCfg.Model == "" {
+		t.Error("model chain must be non-empty when using embedded default")
+	}
+	if capturedCfg.SystemPromptFile == "" {
+		t.Error("system prompt file must be set when using embedded default")
 	}
 }
