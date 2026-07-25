@@ -376,6 +376,84 @@ func (r *Runner) rebaseAndResolve(writer worktree.EventWriter, devWT string, prN
 	return nil
 }
 
+// runPreReviewSyncGate ensures the dev branch is synchronized with origin/main and
+// that required CI is green before any reviewer worktree is created. It is called
+// after every successful dev turn and before every reviewer worktree creation, covering
+// the initial dev path, changes_requested retry, and resume paths.
+//
+// If the branch is already up to date, it delegates to runCIGate (preserving CI fix
+// retries). If the branch is stale or conflicting, it rebases via the dev role and
+// then calls preReviewPushAndCI.
+func (r *Runner) runPreReviewSyncGate(
+	writer worktree.EventWriter,
+	prNumber int,
+	eventLogPath string,
+	agentTimeout time.Duration,
+) string {
+	devWT := r.devWorktreePath()
+
+	if _, err := r.executor.RunInDir(devWT, "git", "fetch", "origin"); err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: fetch origin: %v\n", err)
+		return outcomeDevFailed
+	}
+
+	upToDate, err := r.isBranchUpToDate(devWT)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: freshness check: %v\n", err)
+		return outcomeDevFailed
+	}
+
+	if upToDate {
+		// Branch already contains origin/main; delegate to the full CI gate which
+		// can retry CI failures with the dev agent.
+		return r.runCIGate(prNumber, eventLogPath, agentTimeout)
+	}
+
+	// Branch is behind or conflicting: rebase and resolve through the dev role.
+	if err := r.rebaseAndResolve(writer, devWT, prNumber, eventLogPath); err != nil {
+		msg := fmt.Sprintf("pre-review sync: %v", err)
+		fmt.Fprintf(r.stderr, "dev_failed: %s\n", msg)
+		r.postCIEscalationComment(prNumber, msg)
+		return outcomeDevFailed
+	}
+	return r.preReviewPushAndCI(prNumber, devWT)
+}
+
+// preReviewPushAndCI force-pushes the dev branch and waits for green CI on the pushed
+// SHA. Called by runPreReviewSyncGate after a successful rebase.
+func (r *Runner) preReviewPushAndCI(prNumber int, devWT string) string {
+	if err := r.forcePushBranch(devWT); err != nil {
+		msg := fmt.Sprintf("pre-review sync: push failed: %v", err)
+		fmt.Fprintf(r.stderr, "dev_failed: %s\n", msg)
+		r.postCIEscalationComment(prNumber, msg)
+		return outcomeDevFailed
+	}
+	pushedSHA, err := r.getLocalHeadSHA(devWT)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: read pushed SHA: %v\n", err)
+		return outcomeDevFailed
+	}
+	nwo, err := r.getRepoNWO()
+	if err != nil {
+		fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: get repo NWO: %v\n", err)
+		return outcomeDevFailed
+	}
+	result, failedChecks, err := r.pollCheckRunsForSHA(pushedSHA, nwo, r.ciTimeout())
+	if err != nil {
+		msg := fmt.Sprintf("pre-review sync: CI check query failed: %v", err)
+		fmt.Fprintf(r.stderr, "dev_failed: %s\n", msg)
+		r.postCIEscalationComment(prNumber, msg)
+		return outcomeDevFailed
+	}
+	if result != "green" {
+		msg := fmt.Sprintf("pre-review sync: CI %s", r.ciFailReason(result, failedChecks))
+		fmt.Fprintf(r.stderr, "dev_failed: %s\n", msg)
+		r.postCIEscalationComment(prNumber, msg)
+		return outcomeDevFailed
+	}
+	return outcomeSuccess
+}
+
 // runMergePhase implements PS-001 through PS-006 (gate → fetch → freshness → CI gate / rebase → merge).
 // It is called by orchestrate() after the verdict is confirmed as "approved".
 // Returns outcomeSuccess (merged or skipped) or outcomeMergeFailed.
