@@ -587,7 +587,7 @@ gm_dev_done({ summary, commitMsg })
 Reviewer:
 
 ```text
-gm_review_submit({ verdict, mergeConfidence, body })
+gm_review_submit({ verdict, confidence, body })
   → Schema + Reviewer-Gate validieren
   → Agent stoppen
   → Pending Review submitten
@@ -646,7 +646,7 @@ Runner ──"reviewe PR N"────────────▶ Reviewer-Agen
                  read ───────────────┤ konkrete Dateien lesen
                  gm_review_submit_comment ◀ beliebig oft, schreibt Pending Review
                                       │
- {verdict, body, mergeConfidence} ◀ gm_review_submit ─┘ terminal
+ {verdict, body, confidence} ◀ gm_review_submit ─┘ terminal
           │
           ├─ Gate: approved nur bei grünem unverändertem Precheck
           ├─ Agent stoppen

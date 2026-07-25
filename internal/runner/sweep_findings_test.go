@@ -40,7 +40,7 @@ func writeReviewSubmittedEventWithID(t *testing.T, logPath, verdict, reviewID st
 	zero := 0
 	payload, _ := json.Marshal(map[string]interface{}{
 		"verdict":            verdict,
-		"mergeConfidence":    "high",
+		"confidence":         "high",
 		"reviewId":           reviewID,
 		"inlineCommentCount": &zero,
 	})
@@ -92,7 +92,7 @@ func TestLatestReviewID_EmptyIDReturnsError(t *testing.T) {
 	logPath := newLogPath(t)
 
 	// Write raw JSONL directly to bypass eventlog writer validation
-	line := fmt.Sprintf(`{"type":"review_submitted","ts":%q,"runId":"r1","payload":{"verdict":"approved","mergeConfidence":"high","reviewId":"","inlineCommentCount":0}}`,
+	line := fmt.Sprintf(`{"type":"review_submitted","ts":%q,"runId":"r1","payload":{"verdict":"approved","confidence":"high","reviewId":"","inlineCommentCount":0}}`,
 		time.Now().Format(time.RFC3339))
 	if err := os.WriteFile(logPath, []byte(line+"\n"), 0644); err != nil {
 		t.Fatalf("write log: %v", err)

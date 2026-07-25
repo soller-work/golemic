@@ -111,7 +111,7 @@ func TestEmbeddedPersona_ReviewerRetainsSafeguards(t *testing.T) {
 		"P2",
 		"CHANGES_REQUESTED",
 		"APPROVED",
-		"mergeConfidence",
+		"confidence",
 	} {
 		if !strings.Contains(body, safeguard) {
 			t.Errorf("reviewer persona body missing safeguard %q", safeguard)

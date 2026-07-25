@@ -146,17 +146,17 @@ func assertLatestReviewSubmittedEvent(t *testing.T, logPath, wantReviewID string
 func submitReviewerAttempt(t *testing.T, cfg agent.RoleConfig, attempt int) {
 	t.Helper()
 	verdict := "approved"
-	mergeConfidence := "high"
+	confidence := "high"
 	body := "Looks good now"
 	if attempt == 1 {
 		verdict = "changes_requested"
-		mergeConfidence = "low"
+		confidence = "low"
 		body = "Please fix"
 	}
 	result := callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", attempt), map[string]any{
-		"verdict":         verdict,
-		"mergeConfidence": mergeConfidence,
-		"body":            body,
+		"verdict":    verdict,
+		"confidence": confidence,
+		"body":       body,
 	})
 	if result == nil || result["ok"] != true {
 		t.Fatalf("expected accepted %s submit, got %v", verdict, result)
@@ -196,9 +196,9 @@ func makeReviewerInvalidApprovalAgent(t *testing.T) (func(context.Context, agent
 		case "reviewer":
 			reviewerCalls++
 			result := callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", reviewerCalls), map[string]any{
-				"verdict":         "approved",
-				"mergeConfidence": "high",
-				"body":            "Still approved",
+				"verdict":    "approved",
+				"confidence": "high",
+				"body":       "Still approved",
 			})
 			if result == nil || result["ok"] != false || result["code"] != "REVIEWER_GATE" {
 				t.Fatalf("expected gate rejection, got %v", result)
@@ -240,7 +240,7 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 
 	state.pendingReviewID = "PRR_approved"
 	if err := r.submitReviewAndWriteEvent(&reviewerInvocationState{
-		reviewSubmitParams: &gmbroker.ReviewSubmitParams{Verdict: "approved", MergeConfidence: "high", Body: "LGTM"},
+		reviewSubmitParams: &gmbroker.ReviewSubmitParams{Verdict: "approved", Confidence: "high", Body: "LGTM"},
 		pendingReviewID:    state.pendingReviewID,
 	}, logPath, 1, "sha-review-test"); err != nil {
 		t.Fatalf("submitReviewAndWriteEvent: %v", err)
@@ -287,7 +287,7 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 		Verdict            string `json:"verdict"`
 		Body               string `json:"body"`
 		PRNumber           int    `json:"prNumber"`
-		MergeConfidence    string `json:"mergeConfidence"`
+		Confidence         string `json:"confidence"`
 		ReviewID           string `json:"reviewId"`
 		InlineCommentCount int    `json:"inlineCommentCount"`
 		HeadSHA            string `json:"headSha"`
@@ -296,13 +296,13 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 	if err := json.Unmarshal(reviewEvent.Payload, &payload); err != nil {
 		t.Fatalf("unmarshal review payload: %v", err)
 	}
-	if payload.Verdict != "approved" || payload.Body != "LGTM" || payload.PRNumber != 99 || payload.MergeConfidence != "high" || payload.ReviewID != "9001" || payload.InlineCommentCount != 1 {
+	if payload.Verdict != "approved" || payload.Body != "LGTM" || payload.PRNumber != 99 || payload.Confidence != "high" || payload.ReviewID != "9001" || payload.InlineCommentCount != 1 {
 		t.Fatalf("unexpected review_submitted payload: %+v", payload)
 	}
 	if payload.HeadSHA != "sha-review-test" || payload.ReviewRound != 1 {
 		t.Fatalf("expected headSha=sha-review-test and reviewRound=1, got headSha=%q reviewRound=%d", payload.HeadSHA, payload.ReviewRound)
 	}
-	const wantReviewPayload = `{"body":"LGTM","headSha":"sha-review-test","inlineCommentCount":1,"mergeConfidence":"high","prNumber":99,"reviewId":"9001","reviewRound":1,"verdict":"approved"}`
+	const wantReviewPayload = `{"body":"LGTM","confidence":"high","headSha":"sha-review-test","inlineCommentCount":1,"prNumber":99,"reviewId":"9001","reviewRound":1,"verdict":"approved"}`
 	if string(reviewEvent.Payload) != wantReviewPayload {
 		t.Fatalf("review_submitted payload mismatch:\n got: %s\nwant: %s", string(reviewEvent.Payload), wantReviewPayload)
 	}
@@ -315,7 +315,7 @@ func TestSubmitReviewAndWriteEvent_ChangesRequestedBuildsFindingsJSON(t *testing
 
 	state.pendingReviewID = "PRR_changes"
 	if err := r.submitReviewAndWriteEvent(&reviewerInvocationState{
-		reviewSubmitParams: &gmbroker.ReviewSubmitParams{Verdict: "changes_requested", MergeConfidence: "low", Body: "Please fix"},
+		reviewSubmitParams: &gmbroker.ReviewSubmitParams{Verdict: "changes_requested", Confidence: "low", Body: "Please fix"},
 		pendingReviewID:    state.pendingReviewID,
 	}, logPath, 1, "sha-review-test"); err != nil {
 		t.Fatalf("submitReviewAndWriteEvent: %v", err)
@@ -430,18 +430,18 @@ func TestOrchestrate_ReviewerInvalidApproval_RestartsWithGatePromptAndPreservesP
 					t.Fatalf("gm_review_submit_comment: got %v", result)
 				}
 				result = callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", "c2", map[string]any{
-					"verdict":         "approved",
-					"mergeConfidence": "high",
-					"body":            "Looks good",
+					"verdict":    "approved",
+					"confidence": "high",
+					"body":       "Looks good",
 				})
 				if result == nil || result["ok"] != false || result["code"] != "REVIEWER_GATE" {
 					t.Fatalf("expected REVIEWER_GATE rejection, got %v", result)
 				}
 			} else {
 				result := callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", "c3", map[string]any{
-					"verdict":         "approved",
-					"mergeConfidence": "high",
-					"body":            "Approved after re-review",
+					"verdict":    "approved",
+					"confidence": "high",
+					"body":       "Approved after re-review",
 				})
 				if result == nil || result["ok"] != true {
 					t.Fatalf("expected approved submit on retry, got %v", result)
@@ -526,5 +526,75 @@ func TestOrchestrate_ReviewerInvalidApproval_BoundedToThreeAttempts(t *testing.T
 	}
 	if *reviewerCalls != 3 {
 		t.Errorf("expected exactly 3 reviewer attempts, got %d", *reviewerCalls)
+	}
+}
+
+// TestSetConfidenceLabel_AddsAndRemovesOtherTiers verifies that setConfidenceLabel
+// issues --add-label for the given tier and --remove-label for the other two tiers.
+func TestSetConfidenceLabel_AddsAndRemovesOtherTiers(t *testing.T) {
+	for _, tier := range []string{"high", "medium", "low"} {
+		tier := tier
+		t.Run(tier, func(t *testing.T) {
+			var capturedArgs []string
+			exec := &fakeExecutor{
+				runWithEnvFunc: func(env map[string]string, name string, args ...string) (string, error) {
+					capturedArgs = args
+					return "", nil
+				},
+			}
+			r := &Runner{executor: exec, repoRoot: "/repo", creds: mustLoadCreds(t)}
+			if err := r.setConfidenceLabel(tier, 42); err != nil {
+				t.Fatalf("setConfidenceLabel(%q): unexpected error: %v", tier, err)
+			}
+
+			joined := strings.Join(capturedArgs, " ")
+			if !strings.Contains(joined, "--add-label confidence:"+tier) {
+				t.Errorf("expected --add-label confidence:%s, got: %s", tier, joined)
+			}
+			for _, other := range []string{"high", "medium", "low"} {
+				if other == tier {
+					continue
+				}
+				if !strings.Contains(joined, "--remove-label confidence:"+other) {
+					t.Errorf("expected --remove-label confidence:%s, got: %s", other, joined)
+				}
+			}
+		})
+	}
+}
+
+// TestSubmitReviewAndWriteEvent_SetsConfidenceLabel verifies that submitting
+// a review with confidence=high issues --add-label confidence:high on the PR
+// and does not write a warning to stderr.
+func TestSubmitReviewAndWriteEvent_SetsConfidenceLabel(t *testing.T) {
+	exec, state := newReviewerGraphQLExecutor(`[]`)
+	var labelArgs []string
+	baseInner := exec.runWithEnvFunc
+	exec.runWithEnvFunc = func(env map[string]string, name string, args ...string) (string, error) {
+		if name == "gh" && len(args) >= 3 && args[0] == "pr" && args[1] == "edit" {
+			labelArgs = args
+			return "", nil
+		}
+		return baseInner(env, name, args...)
+	}
+
+	r, logPath, _ := newReviewerSubmitRunner(t, exec)
+	var stderrBuf strings.Builder
+	r.stderr = &stderrBuf
+	writePROpenedEvent(t, logPath, 99)
+
+	state.pendingReviewID = "PRR_label"
+	if err := r.submitReviewAndWriteEvent(&reviewerInvocationState{
+		reviewSubmitParams: &gmbroker.ReviewSubmitParams{Verdict: "approved", Confidence: "high", Body: "LGTM"},
+		pendingReviewID:    state.pendingReviewID,
+	}, logPath, 1, "sha-label-test"); err != nil {
+		t.Fatalf("submitReviewAndWriteEvent: %v", err)
+	}
+
+	if !strings.Contains(strings.Join(labelArgs, " "), "--add-label confidence:high") {
+		t.Errorf("expected --add-label confidence:high in gh pr edit args, got: %v", labelArgs)
+	}
+	if strings.Contains(stderrBuf.String(), "Warning") {
+		t.Errorf("unexpected warning in stderr: %s", stderrBuf.String())
 	}
 }

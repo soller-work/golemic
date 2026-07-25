@@ -73,7 +73,7 @@ func TestFormatLifecycleLine_PROpened(t *testing.T) {
 func TestFormatLifecycleLine_ReviewSubmitted(t *testing.T) {
 	zero := 0
 	payload, _ := json.Marshal(map[string]interface{}{
-		"verdict": "approved", "mergeConfidence": "high",
+		"verdict": "approved", "confidence": "high",
 		"reviewId": "rev1", "inlineCommentCount": &zero,
 	})
 	line := FormatLifecycleLine(eventlog.Event{Type: eventlog.EventReviewSubmitted, Payload: payload})

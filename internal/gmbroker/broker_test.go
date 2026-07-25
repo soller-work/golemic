@@ -555,9 +555,9 @@ func TestReviewSubmit_ApprovedNoPrecheck(t *testing.T) {
 	b, sockPath := startTestBroker(t, nil)
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "LGTM",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "LGTM",
 	})
 
 	if result["ok"] != false {
@@ -588,9 +588,9 @@ func TestReviewSubmit_ApprovedWithValidPrecheck(t *testing.T) {
 	})
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "LGTM — all checks pass.",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "LGTM — all checks pass.",
 	})
 
 	if result["ok"] != true {
@@ -624,9 +624,9 @@ func TestReviewSubmit_ApprovedRedPrecheck(t *testing.T) {
 	})
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "looks good",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "looks good",
 	})
 
 	if result["ok"] != false {
@@ -653,9 +653,9 @@ func TestReviewSubmit_ApprovedMutatedTree(t *testing.T) {
 	})
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "looks good",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "looks good",
 	})
 
 	if result["ok"] != false {
@@ -685,9 +685,9 @@ func TestReviewSubmit_CurrentFingerprintMismatch(t *testing.T) {
 	})
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "looks ok",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "looks ok",
 	})
 
 	if result["ok"] != false {
@@ -705,16 +705,16 @@ func TestReviewSubmit_TerminalProtocol(t *testing.T) {
 
 	// First call (changes_requested — always accepted).
 	call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "changes_requested",
-		"mergeConfidence": "low",
-		"body":            "needs work",
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "needs work",
 	})
 
 	// Second call with different params — protocol error.
 	result := call(t, sockPath, "gm_review_submit", "c2", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "LGTM",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "LGTM",
 	})
 
 	if result["ok"] != false {
@@ -731,9 +731,9 @@ func TestReviewSubmit_InvalidVerdict(t *testing.T) {
 	_, sockPath := startTestBroker(t, nil)
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "maybe",
-		"mergeConfidence": "low",
-		"body":            "not sure",
+		"verdict":    "maybe",
+		"confidence": "low",
+		"body":       "not sure",
 	})
 
 	if result["ok"] != false {
@@ -744,8 +744,8 @@ func TestReviewSubmit_InvalidVerdict(t *testing.T) {
 	}
 }
 
-// TestReviewSubmit_InvalidMergeConfidence rejects invalid mergeConfidence values.
-func TestReviewSubmit_InvalidMergeConfidence(t *testing.T) {
+// TestReviewSubmit_InvalidConfidence rejects invalid confidence values.
+func TestReviewSubmit_InvalidConfidence(t *testing.T) {
 	b, sockPath := startTestBroker(t, nil)
 	called := false
 	b.SetReviewerConfig(ReviewerConfig{WorktreePath: "/fake"})
@@ -759,9 +759,9 @@ func TestReviewSubmit_InvalidMergeConfidence(t *testing.T) {
 	})
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "urgent",
-		"body":            "looks good",
+		"verdict":    "approved",
+		"confidence": "urgent",
+		"body":       "looks good",
 	})
 
 	if result["ok"] != false {
@@ -771,10 +771,41 @@ func TestReviewSubmit_InvalidMergeConfidence(t *testing.T) {
 		t.Errorf("code: got %v, want SCHEMA_INVALID", result["code"])
 	}
 	if called {
-		t.Error("mergeConfidence validation should fail before gate fingerprint lookup")
+		t.Error("confidence validation should fail before gate fingerprint lookup")
 	}
 	if _, ok := b.ReviewSubmitResult(); ok {
 		t.Fatal("ReviewSubmitResult() must remain unset after schema rejection")
+	}
+}
+
+// TestReviewSubmit_SchemaInvalidAllowsRetry verifies that a schema-invalid
+// gm_review_submit does not consume the one-shot terminal slot: the reviewer
+// can correct the payload and submit a valid review within the same invocation.
+func TestReviewSubmit_SchemaInvalidAllowsRetry(t *testing.T) {
+	b, sockPath := startTestBroker(t, nil)
+
+	// First call is schema-invalid (bad confidence tier).
+	bad := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
+		"verdict":    "changes_requested",
+		"confidence": "urgent",
+		"body":       "needs work",
+	})
+	if bad["code"] != "SCHEMA_INVALID" {
+		t.Fatalf("first call: code: got %v, want SCHEMA_INVALID", bad["code"])
+	}
+
+	// Corrected retry with different params must be accepted, not rejected as
+	// "terminal already called".
+	ok := call(t, sockPath, "gm_review_submit", "c2", map[string]any{
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "needs work",
+	})
+	if ok["ok"] != true {
+		t.Fatalf("retry after schema error: ok: got %v, want true (result=%v)", ok["ok"], ok)
+	}
+	if _, got := b.ReviewSubmitResult(); !got {
+		t.Fatal("ReviewSubmitResult() should be set after successful retry")
 	}
 }
 
@@ -783,9 +814,9 @@ func TestReviewSubmit_ChangesRequested(t *testing.T) {
 	_, sockPath := startTestBroker(t, nil)
 
 	result := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "changes_requested",
-		"mergeConfidence": "low",
-		"body":            "Please fix the lint errors.",
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "Please fix the lint errors.",
 	})
 
 	if result["ok"] != true {
@@ -800,9 +831,9 @@ func TestReviewSubmit_NoSideEffect(t *testing.T) {
 
 	_, sockPath := startTestBroker(t, nil)
 	call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "LGTM",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "LGTM",
 	})
 
 	after, _ := os.ReadDir(dir)
@@ -943,9 +974,9 @@ func TestReviewSubmitComment_AfterAcceptedSubmitRejects(t *testing.T) {
 	})
 
 	result := call(t, sockPath, "gm_review_submit", "submit-1", map[string]any{
-		"verdict":         "approved",
-		"mergeConfidence": "high",
-		"body":            "LGTM",
+		"verdict":    "approved",
+		"confidence": "high",
+		"body":       "LGTM",
 	})
 	if result["ok"] != true {
 		t.Fatalf("submit ok: got %v, want true", result["ok"])
@@ -1351,9 +1382,9 @@ func TestCrossTerminal_ReviewSubmitAfterDevDone(t *testing.T) {
 
 	// Attempt gm_review_submit in the same invocation — protocol error.
 	result := call(t, sockPath, "gm_review_submit", "c2", map[string]any{
-		"verdict":         "changes_requested",
-		"mergeConfidence": "low",
-		"body":            "needs work",
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "needs work",
 	})
 
 	if result["code"] != "PROTOCOL_ERROR" {
@@ -1370,9 +1401,9 @@ func TestCrossTerminal_DevDoneAfterReviewSubmit(t *testing.T) {
 
 	// Accept gm_review_submit.
 	first := call(t, sockPath, "gm_review_submit", "c1", map[string]any{
-		"verdict":         "changes_requested",
-		"mergeConfidence": "low",
-		"body":            "needs work",
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "needs work",
 	})
 	if first["ok"] != true || first["accepted"] != true {
 		t.Fatalf("gm_review_submit: got %v, want accepted", first)
@@ -1405,9 +1436,9 @@ func TestNewInvocationID_FreshTerminalState(t *testing.T) {
 	b1.SetInvocationIdentity(runID, invID1)
 	b1.SetAllowedTools([]string{"gm_review_submit"})
 	res1 := callWithIdentity(t, sockPath1, runID, invID1, "reviewer", "gm_review_submit", "c1", map[string]any{
-		"verdict":         "changes_requested",
-		"mergeConfidence": "low",
-		"body":            "first",
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "first",
 	})
 	if res1["ok"] != true {
 		t.Fatalf("first invocation terminal call: got %v, want ok=true", res1)
@@ -1423,9 +1454,9 @@ func TestNewInvocationID_FreshTerminalState(t *testing.T) {
 	b2.SetInvocationIdentity(runID, invID2)
 	b2.SetAllowedTools([]string{"gm_review_submit"})
 	res2 := callWithIdentity(t, sockPath2, runID, invID2, "reviewer", "gm_review_submit", "c1", map[string]any{
-		"verdict":         "changes_requested",
-		"mergeConfidence": "low",
-		"body":            "second",
+		"verdict":    "changes_requested",
+		"confidence": "low",
+		"body":       "second",
 	})
 
 	if res2["ok"] != true || res2["accepted"] != true {

@@ -110,8 +110,8 @@ func (r *Runner) hasPROpenedEvent(eventLogPath string) bool {
 	return false
 }
 
-// latestMergeConfidence reads the mergeConfidence field from the most recent review_submitted event.
-func (r *Runner) latestMergeConfidence(eventLogPath string) (string, error) {
+// latestConfidence reads the confidence field from the most recent review_submitted event.
+func (r *Runner) latestConfidence(eventLogPath string) (string, error) {
 	reader := eventlog.Reader{}
 	events, err := reader.Read(eventLogPath)
 	if err != nil {
@@ -120,12 +120,12 @@ func (r *Runner) latestMergeConfidence(eventLogPath string) (string, error) {
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Type == eventlog.EventReviewSubmitted {
 			var d struct {
-				MergeConfidence string `json:"mergeConfidence"`
+				Confidence string `json:"confidence"`
 			}
 			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
 				return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
 			}
-			return d.MergeConfidence, nil
+			return d.Confidence, nil
 		}
 	}
 	return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")

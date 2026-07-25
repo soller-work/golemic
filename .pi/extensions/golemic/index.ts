@@ -204,8 +204,8 @@ export default function (pi: { registerTool: (def: object) => void; on: (event: 
     description:
       "Submit the reviewer's verdict. " +
       'Required fields: verdict ("approved" | "changes_requested"), ' +
-      "mergeConfidence (string), body (string). " +
-      "Returns { ok: true, echo: { verdict, mergeConfidence, body } } or a schema error.",
+      "confidence (string), body (string). " +
+      "Returns { ok: true, echo: { verdict, confidence, body } } or a schema error.",
     parameters: {
       type: "object",
       properties: {
@@ -214,13 +214,13 @@ export default function (pi: { registerTool: (def: object) => void; on: (event: 
           enum: ["approved", "changes_requested"],
           description: "Review outcome.",
         },
-        mergeConfidence: {
+        confidence: {
           type: "string",
           description: "Confidence level: high | medium | low.",
         },
         body: { type: "string", description: "Review body text." },
       },
-      required: ["verdict", "mergeConfidence", "body"],
+      required: ["verdict", "confidence", "body"],
       additionalProperties: false,
     },
     async execute(callId: string, params: unknown): Promise<unknown> {

@@ -692,9 +692,9 @@ func (b *Broker) LastCheckOutput() string {
 
 // ReviewSubmitParams is the expected payload for gm_review_submit.
 type ReviewSubmitParams struct {
-	Verdict         string `json:"verdict"`
-	MergeConfidence string `json:"mergeConfidence"`
-	Body            string `json:"body"`
+	Verdict    string `json:"verdict"`
+	Confidence string `json:"confidence"`
+	Body       string `json:"body"`
 }
 
 // ReviewSubmitCommentParams is the expected payload for gm_review_submit_comment.
@@ -723,7 +723,11 @@ func (b *Broker) handleReviewSubmit(callID string, raw json.RawMessage) json.Raw
 
 	p, res := b.validateReviewSubmitParams(rawCopy)
 	if res != nil {
-		b.finalizeReviewSubmitTerminal(callID, rawCopy, res)
+		// A schema-invalid payload is not a terminal outcome: release the
+		// one-shot slot so the reviewer can correct params and retry in the
+		// same invocation (unlike gate rejection, which the runner routes to a
+		// gate-retry round).
+		b.releaseReviewSubmitTerminal()
 		return res
 	}
 
@@ -774,6 +778,14 @@ func (b *Broker) reserveReviewSubmitTerminal(callID string, raw json.RawMessage)
 	return nil
 }
 
+func (b *Broker) releaseReviewSubmitTerminal() {
+	b.reviewerMu.Lock()
+	b.reviewSubmitTerminalPending = false
+	b.reviewSubmitTerminalCallID = ""
+	b.reviewSubmitTerminalRaw = nil
+	b.reviewerMu.Unlock()
+}
+
 func (b *Broker) finalizeReviewSubmitTerminal(callID string, raw, result json.RawMessage) {
 	b.reviewerMu.Lock()
 	b.reviewSubmitTerminalPending = false
@@ -791,8 +803,8 @@ func (b *Broker) validateReviewSubmitParams(raw json.RawMessage) (*ReviewSubmitP
 	if p.Verdict != "approved" && p.Verdict != "changes_requested" {
 		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: verdict must be "approved" or "changes_requested"`)
 	}
-	if p.MergeConfidence != "high" && p.MergeConfidence != "medium" && p.MergeConfidence != "low" {
-		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: mergeConfidence must be "high", "medium", or "low"`)
+	if p.Confidence != "high" && p.Confidence != "medium" && p.Confidence != "low" {
+		return nil, errResult("SCHEMA_INVALID", `gm_review_submit: confidence must be "high", "medium", or "low"`)
 	}
 	if p.Body == "" {
 		return nil, errResult("SCHEMA_INVALID", "gm_review_submit: body is required")

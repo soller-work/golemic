@@ -639,7 +639,7 @@ func (r *Runner) writePrecheckReviewSubmittedEvent(eventLogPath string, round in
 	zero := 0
 	payload, _ := json.Marshal(map[string]any{
 		"verdict":            "changes_requested",
-		"mergeConfidence":    "low",
+		"confidence":         "low",
 		"reviewId":           fmt.Sprintf("precheck-r%d", round),
 		"inlineCommentCount": &zero,
 		"reviewRound":        round,
@@ -805,13 +805,12 @@ func (r *Runner) submitReviewAndWriteEvent(state *reviewerInvocationState, event
 		return fmt.Errorf("submitReviewAndWriteEvent: %w", err)
 	}
 
-	if err := r.writeReviewSubmittedEventFromRunner(eventLogPath, submittedID, params.Verdict, params.Body, params.MergeConfidence, inlineCount, prNumber, round, headSHA); err != nil {
+	if err := r.writeReviewSubmittedEventFromRunner(eventLogPath, submittedID, params.Verdict, params.Body, params.Confidence, inlineCount, prNumber, round, headSHA); err != nil {
 		return fmt.Errorf("submitReviewAndWriteEvent: write event: %w", err)
 	}
 
-	// set merge-confidence label
-	if err := r.setMergeConfidenceLabel(params.MergeConfidence, prNumber); err != nil {
-		fmt.Fprintf(r.stderr, "Warning: failed to set merge confidence label: %v\n", err) //nolint:errcheck
+	if err := r.setConfidenceLabel(params.Confidence, prNumber); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to set confidence label: %v\n", err) //nolint:errcheck
 	}
 
 	return nil
@@ -961,7 +960,7 @@ func (r *Runner) submitPendingReview(reviewID, verdict, body string) (submittedR
 }
 
 // writeReviewSubmittedEventFromRunner writes a review_submitted event (BR-10).
-func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, mergeConfidence string, inlineCommentCount, prNumber, reviewRound int, headSHA string) error {
+func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, confidence string, inlineCommentCount, prNumber, reviewRound int, headSHA string) error {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
 		return err
@@ -973,7 +972,7 @@ func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, ver
 		"verdict":            verdict,
 		"body":               body,
 		"prNumber":           prNumber,
-		"mergeConfidence":    mergeConfidence,
+		"confidence":         confidence,
 		"inlineCommentCount": inlineCommentCount,
 		"headSha":            headSHA,
 		"reviewRound":        reviewRound,
@@ -990,15 +989,19 @@ func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, ver
 	})
 }
 
-// setMergeConfidenceLabel sets the merge-confidence label on the PR.
+// setConfidenceLabel adds confidence:<tier> to the PR and removes the other tiers.
 // Non-fatal: caller logs a warning on failure.
-func (r *Runner) setMergeConfidenceLabel(mergeConfidence string, prNumber int) error {
-	labelName := "merge-confidence:" + mergeConfidence
+func (r *Runner) setConfidenceLabel(confidence string, prNumber int) error {
+	args := []string{"pr", "edit", fmt.Sprintf("%d", prNumber), "--add-label", "confidence:" + confidence}
+	for _, tier := range []string{"high", "medium", "low"} {
+		if tier != confidence {
+			args = append(args, "--remove-label", "confidence:"+tier)
+		}
+	}
 	_, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
 		r.repoRoot,
-		"gh", "pr", "edit", fmt.Sprintf("%d", prNumber),
-		"--add-label", labelName,
+		"gh", args...,
 	)
 	return err
 }

@@ -56,7 +56,7 @@ func TestMergePhase(t *testing.T) {
 			wantDevWTRemoved: true,
 		},
 		{
-			// AC-003: mergeConfidence=low → gate skips auto-merge.
+			// AC-003: confidence=low → gate skips auto-merge.
 			// Run succeeds (exit 0); automerge_skipped event present; no pr_merged.
 			name:         "skip_risk_high",
 			mergeMode:    "skip_risk_high",
@@ -298,7 +298,7 @@ exec "$REAL_GIT" "$@"
 //
 // MERGE_MODE controls shim behaviour. The issue label returned by `gh issue view`
 // is always plain (no risk label) because the gate no longer considers risk labels.
-// The skip_risk_high scenario injects mergeConfidence=low via the pi shim instead.
+// The skip_risk_high scenario injects confidence=low via the pi shim instead.
 //
 // All other gh calls (pr list, pr checks, pr review, pr merge, pr comment)
 // are handled with minimal success responses.
@@ -339,7 +339,7 @@ if [ "$1" = "pr" ] && [ "$2" = "comment" ]; then
   exit 0
 fi
 if [ "$1" = "label" ] && [ "$2" = "list" ]; then
-  printf '[{"name":"in-progress"},{"name":"needs-human"}]'
+  printf '[{"name":"in-progress"},{"name":"needs-human"},{"name":"confidence:high"},{"name":"confidence:medium"},{"name":"confidence:low"}]'
   exit 0
 fi
 printf "gh shim: unhandled command: %s\n" "$*" >&2
@@ -351,7 +351,7 @@ exit 1
 // mpWritePiShim writes a pi agent shim that:
 //   - Dev role: commits a file, pushes the branch, writes pr_opened event.
 //   - Reviewer role: writes a review_submitted event with verdict=approved and
-//     mergeConfidence=high, then calls golemic submit-review so the runner records it.
+//     confidence=high, then calls golemic submit-review so the runner records it.
 //
 // The shim distinguishes dev from reviewer by checking whether the CWD ends in "-review".
 func mpWritePiShim(t *testing.T, binDir, bareRepo string) {
@@ -369,7 +369,7 @@ case "$PWD" in
     if [ "${MERGE_MODE}" = "skip_risk_high" ]; then
       CONFIDENCE="low"
     fi
-    printf '{"type":"review_submitted","ts":"2024-01-01T00:00:00Z","runId":"%s","payload":{"verdict":"approved","mergeConfidence":"%s","body":"LGTM"}}\n' \
+    printf '{"type":"review_submitted","ts":"2024-01-01T00:00:00Z","runId":"%s","payload":{"verdict":"approved","confidence":"%s","body":"LGTM"}}\n' \
       "${GOLEMIC_RUN_ID}" "${CONFIDENCE}" >> "${GOLEMIC_EVENT_LOG}"
     exit 0
     ;;
