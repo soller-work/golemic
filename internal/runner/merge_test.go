@@ -2046,8 +2046,8 @@ func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nol
 		if !strings.Contains(cfg.UserPrompt, "foo.go") {
 			t.Errorf("prompt missing conflicted file 'foo.go'; prompt:\n%s", cfg.UserPrompt)
 		}
-		if !strings.Contains(cfg.UserPrompt, "golemic open-pr") {
-			t.Errorf("prompt should mention open-pr prohibition")
+		if strings.Contains(cfg.UserPrompt, "golemic open-pr") {
+			t.Errorf("prompt must not mention legacy open-pr command")
 		}
 		return 0, agent.TranscriptPaths{}, nil
 	})

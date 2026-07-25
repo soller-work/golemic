@@ -86,8 +86,8 @@ func isGhProhibitionLine(line string) bool {
 // "Do not run `gh pr create`" is not flagged as an executable instruction.
 func TestGrepGuard_AgentFacing_AllowsProhibitions(t *testing.T) {
 	allowed := []string{
-		"> **Important:** Do not run `gh pr create` — use golemic open-pr instead.",
-		"Do not use `gh pr view` — use golemic pr-view instead.",
+		"> **Important:** Do not run `gh pr create` — use the typed review tools instead.",
+		"Do not use `gh pr view` — use the typed PR context tools instead.",
 		"Must not run `gh api` calls directly.",
 	}
 	for _, line := range allowed {

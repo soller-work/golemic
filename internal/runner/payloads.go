@@ -18,7 +18,7 @@ type issueLabel struct {
 
 // issueData holds issue metadata used by the runner (title + labels + state).
 // The body is not stored here because the agents fetch it on demand via
-// `golemic slice --issue N`.
+// `gm_slice_get`.
 type issueData struct {
 	Number int          `json:"number"`
 	Title  string       `json:"title"`

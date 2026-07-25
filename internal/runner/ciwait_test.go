@@ -1012,10 +1012,9 @@ func TestPollCIChecks_RequireCIChecksTrue_AlwaysNoChecksTimesOut_AC005(t *testin
 	}
 }
 
-// TestRunDevCIRetryAgent_CredTokensInjected verifies that DevToken and ReviewerToken
-// are set in the RoleConfig passed to the CI-retry dev agent, so nested golemic
-// subcommands (e.g. golemic slice) can call credentials.Load without sourcing rc files.
-func TestRunDevCIRetryAgent_CredTokensInjected(t *testing.T) {
+// TestRunDevCIRetryAgent_DoesNotInjectCredTokens verifies that the CI-retry
+// dev agent RoleConfig does not carry GitHub credential env vars.
+func TestRunDevCIRetryAgent_DoesNotInjectCredTokens(t *testing.T) {
 	t.Setenv("GOLEMIC_DEV_TOKEN", "ghp_dev_pin_test")
 	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "ghp_rev_pin_test")
 
@@ -1061,11 +1060,11 @@ func TestRunDevCIRetryAgent_CredTokensInjected(t *testing.T) {
 
 	r.runDevCIRetryAgent(golemicDir, logPath, 5*time.Second, "### test\n```\nfailed\n```\n")
 
-	if capturedCfg.DevToken != "ghp_dev_pin_test" {
-		t.Errorf("CI-retry RoleConfig.DevToken = %q, want %q", capturedCfg.DevToken, "ghp_dev_pin_test")
-	}
-	if capturedCfg.ReviewerToken != "ghp_rev_pin_test" {
-		t.Errorf("CI-retry RoleConfig.ReviewerToken = %q, want %q", capturedCfg.ReviewerToken, "ghp_rev_pin_test")
+	joinedEnv := strings.Join(capturedCfg.Env, "\n")
+	for _, banned := range []string{"GH_TOKEN=", "GOLEMIC_DEV_TOKEN=", "GOLEMIC_REVIEWER_TOKEN="} {
+		if strings.Contains(joinedEnv, banned) {
+			t.Errorf("CI-retry agent env unexpectedly contains %q: %v", banned, capturedCfg.Env)
+		}
 	}
 }
 

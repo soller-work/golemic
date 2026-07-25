@@ -19,7 +19,7 @@ import (
 
 // Issue represents a GitHub issue reference passed into a prompt. The full
 // task specification is not embedded — agents fetch it at run time via
-// `golemic slice --issue N` to keep the initial prompt small.
+// `gm_slice_get` to keep the initial prompt small.
 type Issue struct {
 	Number int
 	Title  string
@@ -110,7 +110,7 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
    - ` + "`" + `prTitle` + "`" + `: a concise PR title
    - ` + "`" + `prBody` + "`" + `: the PR description — **must** include ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `
 
-> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, ` + "`" + `git push` + "`" + `, or ` + "`" + `golemic open-pr` + "`" + `. The runner performs all of those steps automatically after ` + "`" + `gm_dev_done` + "`" + ` is accepted.
+> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, or ` + "`" + `git push` + "`" + `. The runner performs all of those steps automatically after ` + "`" + `gm_dev_done` + "`" + ` is accepted.
 `
 
 const reviewerUserTemplate = `# Task: Review PR #{{.PRNumber}} for Issue #{{.Issue.Number}}
@@ -253,7 +253,7 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 3. Run ` + "`" + `gm_project_check` + "`" + ` iteratively until it returns ` + "`" + `ok: true` + "`" + `. Fix any failures before proceeding.
 4. Once ` + "`" + `gm_project_check` + "`" + ` returns ` + "`" + `ok: true` + "`" + `, call ` + "`" + `gm_dev_done` + "`" + ` with summary, commitMsg, prTitle, and prBody.
 
-> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, ` + "`" + `git push` + "`" + `, or ` + "`" + `golemic open-pr` + "`" + `. The runner handles those steps. Do **not** open a new PR — the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will be updated automatically.
+> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, or ` + "`" + `git push` + "`" + `. The runner handles those steps. Do **not** open a new PR — the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will be updated automatically.
 `
 
 // devGateRetryTemplateData holds the template variables for a gate-retry dev prompt.
@@ -286,7 +286,7 @@ Your previous ` + "`" + `gm_dev_done` + "`" + ` call was rejected by the accepta
 3. Call ` + "`" + `gm_dev_done` + "`" + ` with summary, commitMsg, prTitle, and prBody.
    - ` + "`" + `prBody` + "`" + ` must include ` + "`" + `Closes #{{.Issue.Number}}` + "`" + `.
 
-> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, ` + "`" + `git push` + "`" + `, or ` + "`" + `golemic open-pr` + "`" + `. The runner handles all of that.
+> **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, or ` + "`" + `git push` + "`" + `. The runner handles all of that.
 `
 
 // RenderDevGateRetry renders a gate-retry dev user prompt explaining the gate
@@ -524,7 +524,7 @@ const devRebaseConflictResolveUserTemplate = `# Rebase Conflict Resolution: PR #
 {{end}}
 ` + scaffoldFrame + `
 
-Resolve all rebase conflicts and complete the rebase. **Do NOT run ` + "`" + `golemic open-pr` + "`" + `, ` + "`" + `golemic submit-review` + "`" + `, or ` + "`" + `golemic emit` + "`" + ` during this turn.**
+Resolve all rebase conflicts and complete the rebase.
 
 1. For each conflicted file listed above, open the file and resolve all conflict markers (` + "`" + `<<<<<<<` + "`" + `, ` + "`" + `=======` + "`" + `, ` + "`" + `>>>>>>>` + "`" + `).
 2. Stage the resolved files: ` + "`" + `git add <file>` + "`" + ` for each resolved file.

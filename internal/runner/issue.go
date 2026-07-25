@@ -8,7 +8,7 @@ import (
 // loadIssue fetches issue metadata (title, labels, state) from GitHub via
 // `gh issue view` with the dev token. The issue body is intentionally not
 // loaded here: the dev/reviewer agents fetch the authoritative task spec at
-// run time via `golemic slice --issue N`, which keeps the initial prompt
+// run time via `gm_slice_get`, which keeps the initial prompt
 // small on large slices.
 func (r *Runner) loadIssue() (*issueData, error) {
 	out, err := r.executor.RunWithEnvInDir(

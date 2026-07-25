@@ -598,24 +598,21 @@ func buildReviewerToolList(brokerEnv []string) []string {
 
 // buildReviewerRoleConfig assembles the agent.RoleConfig for a reviewer invocation.
 func (r *Runner) buildReviewerRoleConfig(systemPromptFile, userPrompt, worktreePath, golemicBinaryPath, model, eventLogPath, runsDir string, timeout time.Duration, brokerEnv []string) agent.RoleConfig {
+	_ = golemicBinaryPath
 	return agent.RoleConfig{
-		Role:              "reviewer",
-		SystemPromptFile:  systemPromptFile,
-		UserPrompt:        userPrompt,
-		WorktreeDir:       worktreePath,
-		RunID:             r.runID,
-		EventLogPath:      eventLogPath,
-		TurnID:            r.turnCounter,
-		GHToken:           r.creds.ReviewerToken(),
-		DevToken:          r.creds.DevToken(),
-		ReviewerToken:     r.creds.ReviewerToken(),
-		GolemicBinaryPath: golemicBinaryPath,
-		Model:             model,
-		Timeout:           timeout,
-		IdleTimeout:       time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
-		ToolAllowlist:     buildReviewerToolList(brokerEnv),
-		RunsDir:           runsDir,
-		Env:               brokerEnv,
+		Role:             "reviewer",
+		SystemPromptFile: systemPromptFile,
+		UserPrompt:       userPrompt,
+		WorktreeDir:      worktreePath,
+		RunID:            r.runID,
+		EventLogPath:     eventLogPath,
+		TurnID:           r.turnCounter,
+		Model:            model,
+		Timeout:          timeout,
+		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
+		ToolAllowlist:    buildReviewerToolList(brokerEnv),
+		RunsDir:          runsDir,
+		Env:              brokerEnv,
 	}
 }
 
