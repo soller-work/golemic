@@ -372,6 +372,7 @@ type reviewerPrecheckResult struct {
 	Stderr            string `json:"stderr"`
 	BeforeFingerprint string `json:"beforeFingerprint"`
 	AfterFingerprint  string `json:"afterFingerprint"`
+	DurationMs        int64  `json:"durationMs"`
 }
 
 // runReviewerPrecheck runs the reviewer precheck before each reviewer attempt.
@@ -382,7 +383,7 @@ type reviewerPrecheckResult struct {
 // Returns ("", nil, error) when fingerprint computation fails; the caller should
 // surface review_failed in this case. A non-zero verify exit code is not an
 // error; it produces an ok:false precheck and the run continues.
-func (r *Runner) runReviewerPrecheck(reviewerWorktreePath, eventLogPath string) (string, *reviewerPrecheckResult, error) {
+func (r *Runner) runReviewerPrecheck(reviewerWorktreePath, eventLogPath, parentSpanID string) (string, *reviewerPrecheckResult, error) {
 	// Allow injection for tests.
 	if r.reviewerPrecheckFn != nil {
 		block, err := r.reviewerPrecheckFn(reviewerWorktreePath, eventLogPath)
@@ -393,7 +394,7 @@ func (r *Runner) runReviewerPrecheck(reviewerWorktreePath, eventLogPath string) 
 		result := r.readLastPrecheckResult(eventLogPath)
 		return block, result, nil
 	}
-	return runReviewerPrecheckImpl(r, reviewerWorktreePath, eventLogPath)
+	return runReviewerPrecheckImpl(r, reviewerWorktreePath, eventLogPath, parentSpanID)
 }
 
 // readLastPrecheckResult reads the last reviewer_precheck event from the log.
@@ -408,27 +409,40 @@ func (r *Runner) readLastPrecheckResult(eventLogPath string) *reviewerPrecheckRe
 		if events[i].Type == eventlog.EventReviewerPrecheck {
 			var d struct {
 				OK                bool   `json:"ok"`
+				ExitCode          int    `json:"exitCode"`
+				Command           string `json:"command"`
+				OutputTail        string `json:"outputTail"`
 				BeforeFingerprint string `json:"beforeFingerprint"`
 				AfterFingerprint  string `json:"afterFingerprint"`
+				DurationMs        int64  `json:"durationMs"`
 			}
 			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
 				return nil
 			}
 			return &reviewerPrecheckResult{
 				OK:                d.OK,
+				ExitCode:          d.ExitCode,
+				Command:           d.Command,
+				Stdout:            d.OutputTail,
 				BeforeFingerprint: d.BeforeFingerprint,
 				AfterFingerprint:  d.AfterFingerprint,
+				DurationMs:        d.DurationMs,
 			}
 		}
 	}
 	return nil
 }
 
-func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath string) (string, *reviewerPrecheckResult, error) {
+func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath, parentSpanID string) (string, *reviewerPrecheckResult, error) {
 	cmd := r.cfg.VerifyCommand
+
+	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanReviewerPrecheck,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum})
+	start := time.Now()
 
 	before, err := worktreefingerprint.Compute(worktreePath, r.executor)
 	if err != nil {
+		endSpan(telemetry.StatusError, nil)
 		return "", nil, fmt.Errorf("reviewer_precheck: compute beforeFingerprint: %w", err)
 	}
 
@@ -436,10 +450,13 @@ func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath string) (stri
 
 	after, err := worktreefingerprint.Compute(worktreePath, r.executor)
 	if err != nil {
+		endSpan(telemetry.StatusError, nil)
 		return "", nil, fmt.Errorf("reviewer_precheck: compute afterFingerprint: %w", err)
 	}
 
 	ok := exitCode == 0 && before == after
+	durationMs := time.Since(start).Milliseconds()
+	endSpan(telemetry.StatusOK, map[string]any{"ok": ok, "exitCode": exitCode, "durationMs": durationMs})
 
 	result := &reviewerPrecheckResult{
 		OK:                ok,
@@ -449,11 +466,12 @@ func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath string) (stri
 		Stderr:            stderr,
 		BeforeFingerprint: before,
 		AfterFingerprint:  after,
+		DurationMs:        durationMs,
 	}
 
 	writeReviewerPrecheckEvent(r, eventLogPath, result)
-	fmt.Fprintf(r.stderr, "reviewer_precheck: ok=%v exitCode=%d before=%s after=%s\n",
-		ok, exitCode, before, after)
+	fmt.Fprintf(r.stderr, "reviewer_precheck: ok=%v exitCode=%d before=%s after=%s durationMs=%d\n",
+		ok, exitCode, before, after, durationMs)
 
 	return buildReviewerPrecheckBlock(result), result, nil
 }
@@ -508,12 +526,24 @@ func writeReviewerPrecheckEvent(r *Runner, eventLogPath string, res *reviewerPre
 		}
 	}
 
+	combined := res.Stdout
+	if res.Stderr != "" {
+		if combined != "" {
+			combined += "\n"
+		}
+		combined += res.Stderr
+	}
+	outputTail, _ := tailBytes(combined, precheckTailBytes)
+
 	payload, _ := json.Marshal(map[string]any{
 		"exitCode":          res.ExitCode,
 		"ok":                res.OK,
 		"beforeFingerprint": res.BeforeFingerprint,
 		"afterFingerprint":  res.AfterFingerprint,
 		"summary":           summary,
+		"command":           res.Command,
+		"durationMs":        res.DurationMs,
+		"outputTail":        outputTail,
 	})
 
 	_ = w.Write(eventlog.Event{
@@ -562,6 +592,66 @@ func buildReviewerPrecheckBlock(res *reviewerPrecheckResult) string {
 	}
 	sb.WriteString(tail)
 	return sb.String()
+}
+
+// buildPrecheckFindings builds the dev-retry findings Markdown from a !ok precheck result.
+// It encodes the failure class (verify-red vs tree-mutated) and the verify output tail.
+func buildPrecheckFindings(res *reviewerPrecheckResult) string {
+	treeMutated := res.BeforeFingerprint != res.AfterFingerprint
+	var sb strings.Builder
+	sb.WriteString("## Reviewer Precheck Failed\n\n")
+	if res.ExitCode != 0 {
+		sb.WriteString(fmt.Sprintf("The verify command exited with a non-zero exit code (%d).\n\n", res.ExitCode))
+	} else if treeMutated {
+		sb.WriteString("The verify command passed but the worktree was mutated during the verify run.\n\n")
+	}
+	sb.WriteString(fmt.Sprintf("Command: `%s`\n", res.Command))
+
+	// res.Stdout holds the combined output tail read from the event (already ≤8KB).
+	combined := res.Stdout
+	if res.Stderr != "" {
+		if combined != "" {
+			combined += "\n"
+		}
+		combined += res.Stderr
+	}
+	if combined != "" {
+		sb.WriteString("\nOutput tail:\n")
+		tail, truncated := tailBytes(combined, precheckTailBytes)
+		if truncated {
+			omitted := len(combined) - len(tail)
+			sb.WriteString(fmt.Sprintf("... <%d bytes truncated> ...\n", omitted))
+		}
+		sb.WriteString(tail)
+	}
+	return sb.String()
+}
+
+// writePrecheckReviewSubmittedEvent writes a synthetic review_submitted(changes_requested)
+// event for a precheck-!ok round so countReviewSubmittedEvents and escalation stay consistent.
+func (r *Runner) writePrecheckReviewSubmittedEvent(eventLogPath string, round int) error {
+	w, err := eventlog.NewWriter(eventLogPath)
+	if err != nil {
+		return err
+	}
+	defer w.Close() //nolint:errcheck
+
+	zero := 0
+	payload, _ := json.Marshal(map[string]any{
+		"verdict":            "changes_requested",
+		"mergeConfidence":    "low",
+		"reviewId":           fmt.Sprintf("precheck-r%d", round),
+		"inlineCommentCount": &zero,
+		"reviewRound":        round,
+		"source":             "precheck",
+	})
+	return w.Write(eventlog.Event{
+		Type:    eventlog.EventReviewSubmitted,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   r.runID,
+		TurnID:  r.turnCounter,
+		Payload: payload,
+	})
 }
 
 // tailBytes returns the last n bytes of s and whether it was truncated.

@@ -613,7 +613,13 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 		// so finishReviewerRound can detect whether a fresh verdict was recorded.
 		countBefore := r.countReviewSubmittedEvents(eventLogPath)
 
-		finalState, outcome := r.runReviewerAttempts(golemicDir, reviewerWT, eventLogPath, timeout, runSpanID, round, prNumber)
+		finalState, outcome := r.runReviewerAttempts(golemicDir, reviewerWT, eventLogPath, timeout, runSpanID, round, prNumber, maxRounds)
+		// Precheck-!ok path: dev-retry already ran; advance to next reviewer round.
+		if outcome == outcomePrecheckDevRetryDone {
+			round++
+			cleanupReviewerBeforeNextRound = true
+			continue
+		}
 		if outcome != "" {
 			return outcome
 		}
@@ -643,7 +649,7 @@ func (r *Runner) prepareReviewerWorktree(golemicDir string, writer worktree.Even
 	return filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum)), ""
 }
 
-func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string, timeout time.Duration, runSpanID string, round, prNumber int) (*reviewerInvocationState, string) {
+func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string, timeout time.Duration, runSpanID string, round, prNumber, maxRounds int) (*reviewerInvocationState, string) {
 	// Inner reviewer-attempt loop: bounded to maxReviewerAttempts per round (BR-6).
 	// On an invalid approved verdict, the runner preserves the Pending Review and
 	// restarts the reviewer without sweeping (BR-8).
@@ -662,10 +668,15 @@ func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string
 		}
 
 		// §11: run reviewer precheck before each attempt.
-		precheckBlock, precheckResult, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath)
+		precheckBlock, precheckResult, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath, runSpanID)
 		if precheckErr != nil {
 			fmt.Fprintf(r.stderr, "review_failed: %v\n", precheckErr) //nolint:errcheck
 			return nil, outcomeReviewFailed
+		}
+
+		// BR-P1/BR-P2: precheck !ok → skip reviewer LLM; drive deterministic dev-retry.
+		if precheckNotOK(precheckResult) {
+			return r.handlePrecheckFailure(golemicDir, eventLogPath, timeout, runSpanID, round, maxRounds, precheckResult)
 		}
 
 		// Pass gate-retry reason if this is a retry after a rejected approval.
@@ -677,7 +688,7 @@ func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string
 		outcome, state := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, attempt, precheckBlock, precheckResult, gateRetryReason)
 		finalState = state
 
-		if state != nil && state.reviewSubmitGateRejected {
+		if reviewGateRejected(state) {
 			prevGateRejected = true
 			prevGateMsg = state.reviewSubmitGateMsg
 			if attempt == maxReviewerAttempts-1 {
@@ -694,6 +705,37 @@ func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string
 	}
 
 	return finalState, ""
+}
+
+// precheckNotOK reports whether the precheck result indicates a !ok precheck.
+func precheckNotOK(r *reviewerPrecheckResult) bool { return r != nil && !r.OK }
+
+// reviewGateRejected reports whether the reviewer invocation was gate-rejected.
+func reviewGateRejected(s *reviewerInvocationState) bool {
+	return s != nil && s.reviewSubmitGateRejected
+}
+
+// handlePrecheckFailure is the BR-P1/P2/P3/P4 handler for a precheck !ok result.
+// It writes a synthetic review_submitted event, escalates if MaxReviewRounds is
+// exhausted, or drives one deterministic dev-retry round.
+func (r *Runner) handlePrecheckFailure(golemicDir, eventLogPath string, timeout time.Duration, runSpanID string, round, maxRounds int, res *reviewerPrecheckResult) (*reviewerInvocationState, string) {
+	if err := r.writePrecheckReviewSubmittedEvent(eventLogPath, round); err != nil {
+		fmt.Fprintf(r.stderr, "review_failed: write precheck review_submitted: %v\n", err) //nolint:errcheck
+		return nil, outcomeReviewFailed
+	}
+	// BR-P3: count against MaxReviewRounds; escalate if exhausted.
+	roundCount := r.countReviewSubmittedEvents(eventLogPath)
+	if roundCount >= maxRounds {
+		r.postEscalationCommentWithSpan(eventLogPath, runSpanID, roundCount)
+		return nil, outcomeEscalated
+	}
+	// BR-P4: synthesize findings encoding failure class + output tail.
+	findings := buildPrecheckFindings(res)
+	r.turnCounter++
+	if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, "", runSpanID, round+1); o != outcomeSuccess {
+		return nil, o
+	}
+	return nil, outcomePrecheckDevRetryDone
 }
 
 // checkAndSubmitReview enforces the REVIEWER_REVIEW_REQUIRED exit predicate and, when

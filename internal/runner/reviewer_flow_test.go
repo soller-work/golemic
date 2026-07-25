@@ -396,12 +396,14 @@ func TestOrchestrate_ReviewerInvalidApproval_RestartsWithGatePromptAndPreservesP
 		return b, nil
 	}
 
-	var precheckCalls int
+	var precheckAttempts int
 	r.reviewerPrecheckFn = func(_, evLogPath string) (string, error) {
-		precheckCalls++
-		if precheckCalls == 1 {
-			return writeReviewerPrecheck(t, r, evLogPath, false, "pp-test-fp", "pp-test-fp"), nil
+		precheckAttempts++
+		if precheckAttempts == 1 {
+			// First attempt: write no precheck event → broker.Precheck=nil → gate rejects.
+			return "", nil
 		}
+		// Gate-retry attempt: write ok=true precheck → gate passes.
 		return writeReviewerPrecheck(t, r, evLogPath, true, "pp-test-fp", "pp-test-fp"), nil
 	}
 
@@ -513,10 +515,7 @@ func TestOrchestrate_ReviewerChangesRequested_SubmitsStringReviewIDAndRetriesDev
 func TestOrchestrate_ReviewerInvalidApproval_BoundedToThreeAttempts(t *testing.T) {
 	exec, _ := newReviewerGraphQLExecutor(`[]`)
 	r, logPath, stderr := setupPingPongRunner(t, exec)
-
-	r.reviewerPrecheckFn = func(_, evLogPath string) (string, error) {
-		return writeReviewerPrecheck(t, r, evLogPath, false, "pp-test-fp", "pp-test-fp"), nil
-	}
+	// No precheck override: default returns nil result → broker.Precheck=nil → gate always rejects.
 
 	agentFn, reviewerCalls := makeReviewerInvalidApprovalAgent(t)
 	r.SetRunAgentFn(agentFn)
