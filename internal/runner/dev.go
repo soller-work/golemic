@@ -263,10 +263,15 @@ func (r *Runner) finishDevAgentWithBroker(gmb *gmbroker.Broker, eventLogPath, de
 		if output := gmb.LastCheckOutput(); output != "" {
 			reason = reason + "\n\nFailing gm_project_check output:\n" + output
 		}
+		gateState := classifyDevGate(gmb.IsTreeGreen())
+		fmt.Fprintf(r.stderr, "%v\n", &StateError{State: gateState, Predicate: "gm_dev_done", Message: reason}) //nolint:errcheck
 		return outcome, reason
 	}
 	endSpan(telemetry.StatusError, nil)
-	return outcomeDevGateRejected, "the invocation ended without a successful gm_dev_done call; run gm_project_check until green, then call gm_dev_done with summary, commitMsg, prTitle, and prBody"
+	reason := "the invocation ended without a successful gm_dev_done call; run gm_project_check until green, then call gm_dev_done with summary, commitMsg, prTitle, and prBody"
+	gateState := classifyDevGate(gmb.IsTreeGreen())
+	fmt.Fprintf(r.stderr, "%v\n", &StateError{State: gateState, Predicate: "gm_dev_done", Message: reason}) //nolint:errcheck
+	return outcomeDevGateRejected, reason
 }
 
 func (r *Runner) finishDevAgentWithoutAcceptedDevDone(gmb *gmbroker.Broker, endSpan func(string, map[string]any)) (string, string, bool) {

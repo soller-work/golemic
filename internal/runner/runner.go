@@ -597,12 +597,16 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 		}
 		cleanupReviewerBeforeNextRound = true
 
+		// Freshness anchor: count review_submitted events before the reviewer runs
+		// so finishReviewerRound can detect whether a fresh verdict was recorded.
+		countBefore := r.countReviewSubmittedEvents(eventLogPath)
+
 		finalState, outcome := r.runReviewerAttempts(golemicDir, reviewerWT, eventLogPath, timeout, runSpanID, round, prNumber)
 		if outcome != "" {
 			return outcome
 		}
 
-		next, outcome := r.finishReviewerRound(finalState, eventLogPath, golemicDir, writer, timeout, runSpanID, maxRounds, &round)
+		next, outcome := r.finishReviewerRound(finalState, eventLogPath, golemicDir, writer, timeout, runSpanID, maxRounds, &round, countBefore)
 		if !next {
 			return outcome
 		}
@@ -680,11 +684,31 @@ func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string
 	return finalState, ""
 }
 
-func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventLogPath, golemicDir string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, maxRounds int, round *int) (bool, string) {
-	// Submit the review and write review_submitted event (BR-7, BR-10).
+// checkAndSubmitReview enforces the REVIEWER_REVIEW_REQUIRED exit predicate and, when
+// satisfied, submits the review via GitHub and writes the review_submitted event.
+// Returns a non-empty outcome string on failure, or empty string on success.
+func (r *Runner) checkAndSubmitReview(finalState *reviewerInvocationState, eventLogPath string, countBefore int) string {
+	hasBrokerSubmit := finalState != nil && finalState.reviewSubmitParams != nil
+	countAfter := r.countReviewSubmittedEvents(eventLogPath)
+	if !reviewerFreshnessMet(hasBrokerSubmit || countAfter > countBefore) {
+		stateErr := &StateError{
+			State:     StateReviewerRequired,
+			Predicate: "gm_review_submit",
+			Message:   "no fresh gm_review_submit recorded in this round",
+		}
+		fmt.Fprintf(r.stderr, "review_failed: %v\n", stateErr) //nolint:errcheck
+		return outcomeReviewFailed
+	}
 	if err := r.submitReviewAndWriteEvent(finalState, eventLogPath); err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
-		return false, outcomeReviewFailed
+		return outcomeReviewFailed
+	}
+	return ""
+}
+
+func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventLogPath, golemicDir string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, maxRounds int, round *int, countBefore int) (bool, string) {
+	if outcome := r.checkAndSubmitReview(finalState, eventLogPath, countBefore); outcome != "" {
+		return false, outcome
 	}
 
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
