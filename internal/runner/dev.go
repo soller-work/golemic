@@ -245,7 +245,24 @@ func (r *Runner) finishDevAgentWithBroker(gmb *gmbroker.Broker, eventLogPath, de
 		endSpan(telemetry.StatusOK, nil)
 		return outcomeSuccess, ""
 	}
+
+	// Deterministic finalize: the §10 gate rejected the call but the tree is now
+	// green (last check OK + current fingerprint matches) and valid params were
+	// already supplied. Finalize without launching another LLM turn.
+	if recoveredParams, hasParams := gmb.RecoveredDevDoneParams(); hasParams && gmb.IsTreeGreen() {
+		if sideEffectErr := r.commitDevDone(devWorktreePath, eventLogPath, *recoveredParams); sideEffectErr != nil {
+			endSpan(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "dev_failed: %v\n", sideEffectErr)
+			return outcomeDevFailed, ""
+		}
+		endSpan(telemetry.StatusOK, nil)
+		return outcomeSuccess, ""
+	}
+
 	if outcome, reason, handled := r.finishDevAgentWithoutAcceptedDevDone(gmb, endSpan); handled {
+		if output := gmb.LastCheckOutput(); output != "" {
+			reason = reason + "\n\nFailing gm_project_check output:\n" + output
+		}
 		return outcome, reason
 	}
 	endSpan(telemetry.StatusError, nil)

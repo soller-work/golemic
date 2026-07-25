@@ -508,3 +508,177 @@ func TestRunDevRetryAgent_ExistingPROpened_CommitsPushesNoSecondPR_AC006(t *test
 		t.Fatalf("expected one pr_opened event, got %d", got)
 	}
 }
+
+// injectGMBrokerWithTransientFP injects a broker where the first computeFingerprint
+// call returns "fp-changed" (triggering gate rejection) and subsequent calls return
+// "fp-ok" (allowing IsTreeGreen to pass for deterministic finalize).
+func injectGMBrokerWithTransientFP(t *testing.T) {
+	t.Helper()
+	orig := startGMBrokerFn
+	t.Cleanup(func() { startGMBrokerFn = orig })
+	startGMBrokerFn = func(sockPath string, _ int, _ string) (*gmbroker.Broker, error) {
+		b, err := gmbroker.StartWithFetcherAndProjectCheck(
+			sockPath,
+			func(_ context.Context) (string, error) { return "fake spec", nil },
+			gmbroker.ProjectCheckConfig{},
+			[]string{"gm_slice_get", "gm_project_check", "gm_dev_done"},
+		)
+		if err != nil {
+			return nil, err
+		}
+		b.SetProjectCheckFn(func(_ gmbroker.ProjectCheckConfig, _ string) (*gmbroker.ProjectCheckResult, error) {
+			return &gmbroker.ProjectCheckResult{OK: true, WorkingTreeFingerprint: "fp-ok"}, nil
+		})
+		var fpCallCount int
+		b.SetComputeFingerprintFn(func(_ string) (string, error) {
+			fpCallCount++
+			if fpCallCount == 1 {
+				return "fp-changed", nil
+			}
+			return "fp-ok", nil
+		})
+		return b, nil
+	}
+}
+
+// injectGMBrokerWithRedCheck injects a broker whose project check always fails,
+// writing knownOutput into a temp output file.
+func injectGMBrokerWithRedCheck(t *testing.T, knownOutput string) {
+	t.Helper()
+	orig := startGMBrokerFn
+	t.Cleanup(func() { startGMBrokerFn = orig })
+	startGMBrokerFn = func(sockPath string, _ int, _ string) (*gmbroker.Broker, error) {
+		b, err := gmbroker.StartWithFetcherAndProjectCheck(
+			sockPath,
+			func(_ context.Context) (string, error) { return "fake spec", nil },
+			gmbroker.ProjectCheckConfig{},
+			[]string{"gm_slice_get", "gm_project_check", "gm_dev_done"},
+		)
+		if err != nil {
+			return nil, err
+		}
+		b.SetProjectCheckFn(func(_ gmbroker.ProjectCheckConfig, _ string) (*gmbroker.ProjectCheckResult, error) {
+			f, ferr := os.CreateTemp("", "fail-check-*.log")
+			if ferr != nil {
+				return nil, ferr
+			}
+			_, _ = f.WriteString(knownOutput)
+			_ = f.Close()
+			t.Cleanup(func() { os.Remove(f.Name()) }) //nolint:errcheck
+			return &gmbroker.ProjectCheckResult{
+				OK:                     false,
+				Summary:                "verify failed (exit 1)",
+				OutputFile:             f.Name(),
+				WorkingTreeFingerprint: "fp-red",
+			}, nil
+		})
+		b.SetComputeFingerprintFn(func(_ string) (string, error) { return "fp-ok", nil })
+		return b, nil
+	}
+}
+
+func TestRunDevAgent_GateRejected_GreenTree_ValidParams_DeterministicFinalize_ACnew1(t *testing.T) {
+	// Gate rejected (transient FP mismatch) but tree is green at runner-check time
+	// → deterministic finalize, exactly 1 LLM turn, success with commit/push/PR.
+	exec := pingPongExecutor(false, nil)
+	r, _ := setupGMRunner(t)
+	r.executor = exec
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	logPath := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID, "events.jsonl")
+	injectGMBrokerWithTransientFP(t)
+	var agentCallCount int
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		if cfg.Role != "dev" {
+			t.Fatalf("unexpected role %q", cfg.Role)
+		}
+		agentCallCount++
+		if !sendGMProjectCheck(cfg.Env) {
+			t.Fatal("gm_project_check was rejected")
+		}
+		sendGMDevDone(cfg.Env) // gate rejects: computeFP "fp-changed" != "fp-ok"
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	if outcome != outcomeSuccess {
+		t.Fatalf("expected success (deterministic finalize), got %q", outcome)
+	}
+	if agentCallCount != 1 {
+		t.Fatalf("expected exactly 1 LLM invocation (no retry), got %d", agentCallCount)
+	}
+	calls := gateTestExecCalls(exec)
+	for _, want := range []string{
+		"git add -A",
+		"git commit -m feat(test): implement feature (42)",
+		"git push --set-upstream origin golemic/issue-42",
+		"gh pr create",
+	} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("missing expected command %q in calls:\n%s", want, calls)
+		}
+	}
+	if got := gateTestReadPROpenedCount(t, logPath); got != 1 {
+		t.Fatalf("expected 1 pr_opened event, got %d", got)
+	}
+}
+
+func TestRunDevAgent_GateRejected_GreenTree_ValidParams_NeverDevFailed_ACnew2(t *testing.T) {
+	// Green-tree deterministic finalize path must never produce dev_failed.
+	exec := pingPongExecutor(false, nil)
+	r, _ := setupGMRunner(t)
+	r.executor = exec
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	logPath := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID, "events.jsonl")
+	injectGMBrokerWithTransientFP(t)
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		if cfg.Role != "dev" {
+			t.Fatalf("unexpected role %q", cfg.Role)
+		}
+		sendGMProjectCheck(cfg.Env)
+		sendGMDevDone(cfg.Env)
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	if outcome == outcomeDevFailed {
+		t.Fatalf("green tree with recovered params must not result in dev_failed")
+	}
+	if outcome != outcomeSuccess {
+		t.Fatalf("expected success, got %q", outcome)
+	}
+}
+
+func TestRunDevAgent_GateRejected_RedTree_LLMRetryWithFailingOutput_ACnew3(t *testing.T) {
+	// Gate rejected (last check red) → bounded LLM retry whose prompt includes
+	// the failing check output.
+	exec := pingPongExecutor(false, nil)
+	r, _ := setupGMRunner(t)
+	r.executor = exec
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	logPath := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID, "events.jsonl")
+	const knownFailOutput = "FAIL: TestFoo: assertion failed\n"
+	injectGMBrokerWithRedCheck(t, knownFailOutput)
+	var prompts []string
+	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		if cfg.Role != "dev" {
+			t.Fatalf("unexpected role %q", cfg.Role)
+		}
+		prompts = append(prompts, cfg.UserPrompt)
+		gateTestCallGMTool(cfg.Env, "gm_project_check", "test-check", map[string]any{})
+		gateTestCallGMTool(cfg.Env, "gm_dev_done", "test-done", gateTestDevDoneParams())
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	if outcome != outcomeDevFailed {
+		t.Fatalf("expected dev_failed after 3 retries on red tree, got %q", outcome)
+	}
+	if len(prompts) != 3 {
+		t.Fatalf("expected 3 LLM invocations, got %d", len(prompts))
+	}
+	for i := 1; i < len(prompts); i++ {
+		if !strings.Contains(prompts[i], knownFailOutput) {
+			t.Errorf("invocation %d retry prompt missing failing check output; got: %.300s", i+1, prompts[i])
+		}
+	}
+	if got := gateTestCountCall(exec, "git"); got != 0 {
+		t.Fatalf("expected no git side effects, got %d git calls", got)
+	}
+}
