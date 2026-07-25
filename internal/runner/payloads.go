@@ -8,7 +8,8 @@ type runStartedPayload struct {
 
 // runFinishedPayload is the payload for run_finished events.
 type runFinishedPayload struct {
-	Outcome string `json:"outcome"`
+	Outcome    string                           `json:"outcome"`
+	TokenUsage map[string]map[string]TokenUsage `json:"tokenUsage,omitempty"`
 }
 
 // issueLabel holds the name of a GitHub issue label.
