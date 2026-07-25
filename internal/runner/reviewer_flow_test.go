@@ -242,7 +242,7 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 	if err := r.submitReviewAndWriteEvent(&reviewerInvocationState{
 		reviewSubmitParams: &gmbroker.ReviewSubmitParams{Verdict: "approved", MergeConfidence: "high", Body: "LGTM"},
 		pendingReviewID:    state.pendingReviewID,
-	}, logPath); err != nil {
+	}, logPath, 1, "sha-review-test"); err != nil {
 		t.Fatalf("submitReviewAndWriteEvent: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 		t.Errorf("submit reviewId: got %q, want %q", state.submitReviewID, state.pendingReviewID)
 	}
 
-	verdict, err := r.latestReviewVerdict(logPath)
+	verdict, err := r.latestReviewVerdict(logPath, 1, "sha-review-test")
 	if err != nil {
 		t.Fatalf("latestReviewVerdict: %v", err)
 	}
@@ -290,6 +290,8 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 		MergeConfidence    string `json:"mergeConfidence"`
 		ReviewID           string `json:"reviewId"`
 		InlineCommentCount int    `json:"inlineCommentCount"`
+		HeadSHA            string `json:"headSha"`
+		ReviewRound        int    `json:"reviewRound"`
 	}
 	if err := json.Unmarshal(reviewEvent.Payload, &payload); err != nil {
 		t.Fatalf("unmarshal review payload: %v", err)
@@ -297,7 +299,10 @@ func TestSubmitReviewAndWriteEvent_ApprovedWritesReviewSubmitted(t *testing.T) {
 	if payload.Verdict != "approved" || payload.Body != "LGTM" || payload.PRNumber != 99 || payload.MergeConfidence != "high" || payload.ReviewID != "9001" || payload.InlineCommentCount != 1 {
 		t.Fatalf("unexpected review_submitted payload: %+v", payload)
 	}
-	const wantReviewPayload = `{"body":"LGTM","inlineCommentCount":1,"mergeConfidence":"high","prNumber":99,"reviewId":"9001","verdict":"approved"}`
+	if payload.HeadSHA != "sha-review-test" || payload.ReviewRound != 1 {
+		t.Fatalf("expected headSha=sha-review-test and reviewRound=1, got headSha=%q reviewRound=%d", payload.HeadSHA, payload.ReviewRound)
+	}
+	const wantReviewPayload = `{"body":"LGTM","headSha":"sha-review-test","inlineCommentCount":1,"mergeConfidence":"high","prNumber":99,"reviewId":"9001","reviewRound":1,"verdict":"approved"}`
 	if string(reviewEvent.Payload) != wantReviewPayload {
 		t.Fatalf("review_submitted payload mismatch:\n got: %s\nwant: %s", string(reviewEvent.Payload), wantReviewPayload)
 	}
@@ -312,7 +317,7 @@ func TestSubmitReviewAndWriteEvent_ChangesRequestedBuildsFindingsJSON(t *testing
 	if err := r.submitReviewAndWriteEvent(&reviewerInvocationState{
 		reviewSubmitParams: &gmbroker.ReviewSubmitParams{Verdict: "changes_requested", MergeConfidence: "low", Body: "Please fix"},
 		pendingReviewID:    state.pendingReviewID,
-	}, logPath); err != nil {
+	}, logPath, 1, "sha-review-test"); err != nil {
 		t.Fatalf("submitReviewAndWriteEvent: %v", err)
 	}
 

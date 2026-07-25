@@ -2,21 +2,36 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
 	"golemic/internal/agent"
 )
 
-// sessionIDFor mirrors the formula in agent.RunRole (sanitizeSessionID(RunID + "-" + Role))
-// so runner-level tests can assert session-ID stability without importing the unexported helper.
-func sessionIDFor(runID, role string) string {
+// sessionIDFor mirrors the formula in agent.RunRole so runner-level tests can
+// compute expected session IDs without importing the unexported helper.
+// For the reviewer role the round is included (issue-212 scoping);
+// pass round=0 for dev (dev session is round-independent).
+func sessionIDFor(runID, role string, round int) string {
+	raw := roleRaw(runID, role, round)
+	return sanitize(raw)
+}
+
+func roleRaw(runID, role string, round int) string {
+	if role == "reviewer" {
+		return fmt.Sprintf("%s-%s-r%d", runID, role, round)
+	}
+	return runID + "-" + role
+}
+
+func sanitize(s string) string {
 	return strings.Map(func(r rune) rune {
 		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
 			return r
 		}
 		return '-'
-	}, runID+"-"+role)
+	}, s)
 }
 
 // assertTurnIDsIncreasing asserts each consecutive pair is strictly increasing.
@@ -33,9 +48,9 @@ func assertTurnIDsIncreasing(t *testing.T, cfgs []agent.RoleConfig) {
 // assertSessionIDsEqual asserts all cfgs produce the same session ID as cfgs[0].
 func assertSessionIDsEqual(t *testing.T, cfgs []agent.RoleConfig) {
 	t.Helper()
-	want := sessionIDFor(cfgs[0].RunID, cfgs[0].Role)
+	want := sessionIDFor(cfgs[0].RunID, cfgs[0].Role, cfgs[0].Round)
 	for i, cfg := range cfgs[1:] {
-		got := sessionIDFor(cfg.RunID, cfg.Role)
+		got := sessionIDFor(cfg.RunID, cfg.Role, cfg.Round)
 		if got != want {
 			t.Errorf("session ID mismatch at index %d: got %q, want %q", i+1, got, want)
 		}
@@ -57,18 +72,24 @@ func TestRunnerSessionIDStableAcrossDevTurns_Issue147(t *testing.T) {
 	assertTurnIDsIncreasing(t, devCfgs)
 }
 
-// TestRunnerSessionIDStableAcrossReviewerTurns verifies that all reviewer turns
-// produce the same Pi session ID while TurnIDs remain distinct.
-func TestRunnerSessionIDStableAcrossReviewerTurns_Issue147(t *testing.T) {
+// TestRunnerReviewerSessionIDsDifferAcrossRounds verifies that reviewer rounds use
+// distinct pi session IDs so each new round starts a fresh session (issue-212).
+func TestRunnerReviewerSessionIDsDifferAcrossRounds_Issue212(t *testing.T) {
 	exec := pingPongExecutor(false, nil)
 	r, logPath, _ := setupPingPongRunner(t, exec)
 
 	_, reviewerCfgs := runPingPongWithCapture(t, r, logPath, "changes_requested")
 
 	if len(reviewerCfgs) < 2 {
-		t.Fatalf("expected >= 2 reviewer calls, got %d", len(reviewerCfgs))
+		t.Fatalf("expected >= 2 reviewer calls (round 1 + round 2), got %d", len(reviewerCfgs))
 	}
-	assertSessionIDsEqual(t, reviewerCfgs)
+	// Round 1 and round 2 must use different session IDs.
+	sid1 := sessionIDFor(reviewerCfgs[0].RunID, reviewerCfgs[0].Role, reviewerCfgs[0].Round)
+	sid2 := sessionIDFor(reviewerCfgs[1].RunID, reviewerCfgs[1].Role, reviewerCfgs[1].Round)
+	if sid1 == sid2 {
+		t.Errorf("reviewer round 1 and round 2 must have distinct session IDs, both got: %q", sid1)
+	}
+	// TurnIDs still increase across rounds.
 	assertTurnIDsIncreasing(t, reviewerCfgs)
 }
 
@@ -83,8 +104,8 @@ func TestRunnerDevAndReviewerSessionIDsDiffer_Issue147(t *testing.T) {
 	if len(devCfgs) == 0 || len(reviewerCfgs) == 0 {
 		t.Fatalf("missing dev or reviewer calls")
 	}
-	devSID := sessionIDFor(devCfgs[0].RunID, "dev")
-	reviewerSID := sessionIDFor(reviewerCfgs[0].RunID, "reviewer")
+	devSID := sessionIDFor(devCfgs[0].RunID, "dev", 0)
+	reviewerSID := sessionIDFor(reviewerCfgs[0].RunID, "reviewer", reviewerCfgs[0].Round)
 	if devSID == reviewerSID {
 		t.Errorf("dev and reviewer must have different session IDs, both got: %q", devSID)
 	}
@@ -110,9 +131,9 @@ func runPingPongWithCapture(t *testing.T, r *Runner, logPath, firstVerdict strin
 		case "reviewer":
 			reviewerCfgs = append(reviewerCfgs, cfg)
 			if reviewerCallCount == 0 && firstVerdict != "approved" {
-				writeReviewEvent(t, cfg.EventLogPath, firstVerdict, "needs work")
+				writeReviewEvent(t, cfg.EventLogPath, firstVerdict, "needs work", cfg.Round, ciTestHeadSHA)
 			} else {
-				writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+				writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 			}
 			reviewerCallCount++
 		}

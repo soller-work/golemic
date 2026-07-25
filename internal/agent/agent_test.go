@@ -1516,6 +1516,35 @@ func TestRunRole_SessionIDStableAcrossReviewerTurns_Issue147(t *testing.T) {
 	}
 }
 
+// TestRunRole_ReviewerSessionIDDiffersAcrossRounds verifies that reviewer rounds
+// use distinct pi session IDs so round-2 cannot resume round-1's session (issue-212).
+func TestRunRole_ReviewerSessionIDDiffersAcrossRounds_Issue212(t *testing.T) {
+	scriptPath := writeScript(t, captureEnvScript())
+
+	run := func(round int) string {
+		cfg := defaultRoleConfig(t, "reviewer")
+		cfg.RunID = "issue-42-test"
+		cfg.Round = round
+		cfg.ToolAllowlist = []string{"read", "bash"}
+		var args []string
+		fakeCommandFactory(t, scriptPath, &args)
+		if _, _, err := RunRole(context.Background(), cfg); err != nil {
+			t.Fatalf("RunRole reviewer (Round=%d) failed: %v", round, err)
+		}
+		return extractSessionID(args)
+	}
+
+	sid1 := run(1)
+	sid2 := run(2)
+
+	if sid1 == "" {
+		t.Fatal("no --session-id found in Pi args for reviewer Round=1")
+	}
+	if sid1 == sid2 {
+		t.Errorf("reviewer session IDs must differ across rounds: Round=1 → %q, Round=2 → %q", sid1, sid2)
+	}
+}
+
 // TestRunRole_DevAndReviewerSessionIDsDiffer verifies that dev and reviewer
 // maintain separate session IDs within the same run.
 func TestRunRole_DevAndReviewerSessionIDsDiffer_Issue147(t *testing.T) {

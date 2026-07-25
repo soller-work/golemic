@@ -603,6 +603,12 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 		}
 		cleanupReviewerBeforeNextRound = true
 
+		// Record the PR head SHA before the reviewer runs so we can bind the verdict to it.
+		roundHeadSHA, err := r.getPRHeadSHA(prNumber)
+		if err != nil {
+			fmt.Fprintf(r.stderr, "review_failed: failed to get PR head SHA for round %d: %v\n", round, err) //nolint:errcheck
+			return outcomeReviewFailed
+		}
 		// Freshness anchor: count review_submitted events before the reviewer runs
 		// so finishReviewerRound can detect whether a fresh verdict was recorded.
 		countBefore := r.countReviewSubmittedEvents(eventLogPath)
@@ -612,7 +618,7 @@ func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.E
 			return outcome
 		}
 
-		next, outcome := r.finishReviewerRound(finalState, eventLogPath, golemicDir, writer, timeout, runSpanID, maxRounds, &round, countBefore)
+		next, outcome := r.finishReviewerRound(finalState, eventLogPath, golemicDir, writer, timeout, runSpanID, maxRounds, &round, countBefore, roundHeadSHA)
 		if !next {
 			return outcome
 		}
@@ -693,7 +699,7 @@ func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string
 // checkAndSubmitReview enforces the REVIEWER_REVIEW_REQUIRED exit predicate and, when
 // satisfied, submits the review via GitHub and writes the review_submitted event.
 // Returns a non-empty outcome string on failure, or empty string on success.
-func (r *Runner) checkAndSubmitReview(finalState *reviewerInvocationState, eventLogPath string, countBefore int) string {
+func (r *Runner) checkAndSubmitReview(finalState *reviewerInvocationState, eventLogPath string, countBefore, round int, roundHeadSHA string) string {
 	hasBrokerSubmit := finalState != nil && finalState.reviewSubmitParams != nil
 	countAfter := r.countReviewSubmittedEvents(eventLogPath)
 	if !reviewerFreshnessMet(hasBrokerSubmit || countAfter > countBefore) {
@@ -705,15 +711,15 @@ func (r *Runner) checkAndSubmitReview(finalState *reviewerInvocationState, event
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", stateErr) //nolint:errcheck
 		return outcomeReviewFailed
 	}
-	if err := r.submitReviewAndWriteEvent(finalState, eventLogPath); err != nil {
+	if err := r.submitReviewAndWriteEvent(finalState, eventLogPath, round, roundHeadSHA); err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
 		return outcomeReviewFailed
 	}
 	return ""
 }
 
-func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventLogPath, golemicDir string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, maxRounds int, round *int, countBefore int) (bool, string) {
-	if outcome := r.checkAndSubmitReview(finalState, eventLogPath, countBefore); outcome != "" {
+func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventLogPath, golemicDir string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, maxRounds int, round *int, countBefore int, roundHeadSHA string) (bool, string) {
+	if outcome := r.checkAndSubmitReview(finalState, eventLogPath, countBefore, *round, roundHeadSHA); outcome != "" {
 		return false, outcome
 	}
 
@@ -728,7 +734,7 @@ func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventL
 		return false, outcomeReviewFailed
 	}
 
-	next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, round)
+	next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, round, roundHeadSHA)
 	if !next && outcome == outcomeSuccess {
 		return false, r.runMergePhase(writer, eventLogPath)
 	}
@@ -749,8 +755,8 @@ func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventL
 
 // handleVerdict processes the latest review verdict and returns (continueLoop, outcome).
 // When continueLoop is true, outcome is empty and the caller should loop again.
-func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeout time.Duration, maxRounds int, round *int) (continueLoop bool, outcome string) {
-	verdict, err := r.latestReviewVerdict(eventLogPath)
+func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeout time.Duration, maxRounds int, round *int, roundHeadSHA string) (continueLoop bool, outcome string) {
+	verdict, err := r.latestReviewVerdict(eventLogPath, *round, roundHeadSHA)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n") //nolint:errcheck
 		return false, outcomeReviewFailed

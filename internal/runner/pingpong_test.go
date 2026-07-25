@@ -42,8 +42,8 @@ func writePROpenedEvent(t *testing.T, logPath string, prNumber int) {
 	}
 }
 
-// writeReviewEvent appends a review_submitted event with verdict and body.
-func writeReviewEvent(t *testing.T, logPath, verdict, body string) {
+// writeReviewEvent appends a review_submitted event with verdict, body, round and headSHA.
+func writeReviewEvent(t *testing.T, logPath, verdict, body string, round int, headSHA string) {
 	t.Helper()
 	w, err := eventlog.NewWriter(logPath)
 	if err != nil {
@@ -52,7 +52,7 @@ func writeReviewEvent(t *testing.T, logPath, verdict, body string) {
 	defer w.Close() //nolint:errcheck
 
 	zero := 0
-	payload, _ := json.Marshal(map[string]interface{}{"verdict": verdict, "body": body, "mergeConfidence": "high", "reviewId": "PRR_test", "inlineCommentCount": &zero})
+	payload, _ := json.Marshal(map[string]interface{}{"verdict": verdict, "body": body, "mergeConfidence": "high", "reviewId": "PRR_test", "inlineCommentCount": &zero, "reviewRound": round, "headSha": headSHA})
 	if err := w.Write(eventlog.Event{
 		Type:    eventlog.EventReviewSubmitted,
 		Ts:      time.Now().Format(time.RFC3339),
@@ -273,7 +273,7 @@ func writeAgentEvents(t *testing.T, cfg agent.RoleConfig, round agentRoundConfig
 		}
 	case "reviewer":
 		if round.verdict != "" {
-			writeReviewEvent(t, cfg.EventLogPath, round.verdict, round.body)
+			writeReviewEvent(t, cfg.EventLogPath, round.verdict, round.body, cfg.Round, ciTestHeadSHA)
 		}
 	}
 }
@@ -768,8 +768,8 @@ func TestLatestReviewBody(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
 
-	writeReviewEvent(t, logPath, "changes_requested", "first finding")
-	writeReviewEvent(t, logPath, "changes_requested", "second finding")
+	writeReviewEvent(t, logPath, "changes_requested", "first finding", 0, "")
+	writeReviewEvent(t, logPath, "changes_requested", "second finding", 0, "")
 
 	body, err := r.latestReviewBody(logPath)
 	if err != nil {

@@ -465,7 +465,7 @@ func makeResumeFakeAgent(t *testing.T, rounds []agentRoundConfig, capture *promp
 			}
 		}
 		if cfg.Role == "reviewer" && round.verdict != "" {
-			writeReviewEvent(t, cfg.EventLogPath, round.verdict, round.body)
+			writeReviewEvent(t, cfg.EventLogPath, round.verdict, round.body, cfg.Round, ciTestHeadSHA)
 		}
 		return round.exitCode, agent.TranscriptPaths{Stderr: "/tmp/stderr"}, nil
 	}
@@ -737,7 +737,7 @@ func TestResume_NoReviews_StartsCI_ThenReviewer(t *testing.T) {
 	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		agentCalls = append(agentCalls, cfg.Role)
 		if cfg.Role == "reviewer" {
-			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 		}
 		return 0, agent.TranscriptPaths{Stderr: "/tmp/stderr"}, nil
 	})

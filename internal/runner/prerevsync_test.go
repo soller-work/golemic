@@ -431,7 +431,7 @@ func TestPreReviewSync_ResumePath_ChangesRequested_StaleBranch(t *testing.T) { /
 			}
 			return 0, agent.TranscriptPaths{Stderr: "/tmp/stderr"}, nil
 		case "reviewer":
-			writeReviewEvent(t, cfg.EventLogPath, "approved", "Looks good after sync")
+			writeReviewEvent(t, cfg.EventLogPath, "approved", "Looks good after sync", cfg.Round, ciTestHeadSHA)
 			return 0, agent.TranscriptPaths{Stderr: "/tmp/stderr"}, nil
 		default:
 			t.Errorf("unexpected role: %s", cfg.Role)

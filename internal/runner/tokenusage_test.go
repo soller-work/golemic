@@ -311,7 +311,7 @@ func satisfyBrokerGate(t *testing.T, cfg agent.RoleConfig) {
 			t.Error("sendGMDevDone failed")
 		}
 	case "reviewer":
-		writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM")
+		writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
 	}
 }
 

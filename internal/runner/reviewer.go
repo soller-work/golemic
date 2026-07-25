@@ -691,7 +691,7 @@ const graphqlCreatePendingReviewForSubmit = `mutation($prId:ID!){addPullRequestR
 
 // submitReviewAndWriteEvent submits the pending review via GitHub and writes the
 // review_submitted event. It is called after a valid gm_review_submit by the broker.
-func (r *Runner) submitReviewAndWriteEvent(state *reviewerInvocationState, eventLogPath string) error {
+func (r *Runner) submitReviewAndWriteEvent(state *reviewerInvocationState, eventLogPath string, round int, headSHA string) error {
 	if state == nil || state.reviewSubmitParams == nil {
 		return nil
 	}
@@ -715,7 +715,7 @@ func (r *Runner) submitReviewAndWriteEvent(state *reviewerInvocationState, event
 		return fmt.Errorf("submitReviewAndWriteEvent: %w", err)
 	}
 
-	if err := r.writeReviewSubmittedEventFromRunner(eventLogPath, submittedID, params.Verdict, params.Body, params.MergeConfidence, inlineCount, prNumber); err != nil {
+	if err := r.writeReviewSubmittedEventFromRunner(eventLogPath, submittedID, params.Verdict, params.Body, params.MergeConfidence, inlineCount, prNumber, round, headSHA); err != nil {
 		return fmt.Errorf("submitReviewAndWriteEvent: write event: %w", err)
 	}
 
@@ -871,7 +871,7 @@ func (r *Runner) submitPendingReview(reviewID, verdict, body string) (submittedR
 }
 
 // writeReviewSubmittedEventFromRunner writes a review_submitted event (BR-10).
-func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, mergeConfidence string, inlineCommentCount, prNumber int) error {
+func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, mergeConfidence string, inlineCommentCount, prNumber, reviewRound int, headSHA string) error {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
 		return err
@@ -885,6 +885,8 @@ func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, ver
 		"prNumber":           prNumber,
 		"mergeConfidence":    mergeConfidence,
 		"inlineCommentCount": inlineCommentCount,
+		"headSha":            headSHA,
+		"reviewRound":        reviewRound,
 	})
 	if err != nil {
 		return err
