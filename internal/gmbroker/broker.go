@@ -19,7 +19,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"golemic/internal/worktreefingerprint"
 )
@@ -78,8 +77,7 @@ type ProjectCheckResult struct {
 	OK                     bool   `json:"ok"`
 	Command                string `json:"command"`
 	ExitCode               int    `json:"exitCode"`
-	Stdout                 string `json:"stdout"`
-	Stderr                 string `json:"stderr"`
+	OutputFile             string `json:"outputFile"`
 	Summary                string `json:"summary"`
 	WorkingTreeFingerprint string `json:"workingTreeFingerprint"`
 }
@@ -143,8 +141,10 @@ type Broker struct {
 	reviewSubmitTerminalResult  json.RawMessage
 	reviewSubmitTerminalPending bool
 
+	projectCheckLogDir string // temp dir for per-invocation project-check log files
+
 	// Injectable functions — set to non-nil in tests for deterministic behavior.
-	projectCheckFn             func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)
+	projectCheckFn             func(cfg ProjectCheckConfig, logDir string) (*ProjectCheckResult, error)
 	computeFingerprintFn       func(worktreePath string) (string, error)
 	prViewFn                   func(cfg ReviewerConfig) (json.RawMessage, error)
 	getOrCreatePendingReviewFn func(cfg ReviewerConfig) (string, error)
@@ -206,12 +206,19 @@ func StartWithFetcherAndProjectCheck(sockPath string, fetcher IssueFetcher, proj
 		os.Remove(sockPath) //nolint:errcheck
 		return nil, fmt.Errorf("gmbroker: chmod socket: %w", err)
 	}
+	logDir, err := os.MkdirTemp("", "gm-project-check-*")
+	if err != nil {
+		ln.Close()          //nolint:errcheck
+		os.Remove(sockPath) //nolint:errcheck
+		return nil, fmt.Errorf("gmbroker: create project-check log dir: %w", err)
+	}
 	b := &Broker{
-		sockPath:     sockPath,
-		listener:     ln,
-		fetcher:      fetcher,
-		projectCheck: projectCheck,
-		allowedTools: toolSet(allowedTools),
+		sockPath:           sockPath,
+		listener:           ln,
+		fetcher:            fetcher,
+		projectCheck:       projectCheck,
+		allowedTools:       toolSet(allowedTools),
+		projectCheckLogDir: logDir,
 	}
 	go b.acceptLoop()
 	return b, nil
@@ -264,7 +271,7 @@ func (b *Broker) SetInvocationIdentity(runID, invocationID string) {
 
 // SetProjectCheckFn replaces the project-check function. Used in tests to return
 // a deterministic result without running real commands or accessing a git repo.
-func (b *Broker) SetProjectCheckFn(fn func(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error)) {
+func (b *Broker) SetProjectCheckFn(fn func(cfg ProjectCheckConfig, logDir string) (*ProjectCheckResult, error)) {
 	if b == nil {
 		return
 	}
@@ -310,6 +317,9 @@ func (b *Broker) Shutdown() {
 		b.listener.Close() //nolint:errcheck
 	}
 	os.Remove(b.sockPath) //nolint:errcheck
+	if b.projectCheckLogDir != "" {
+		os.RemoveAll(b.projectCheckLogDir) //nolint:errcheck
+	}
 }
 
 func (b *Broker) acceptLoop() {
@@ -893,28 +903,13 @@ func (b *Broker) addInlineComment(reviewID string, p *ReviewSubmitCommentParams)
 	return json.RawMessage(out)
 }
 
-// ProjectCheckParams is the optional payload for gm_project_check.
-type ProjectCheckParams struct {
-	Output *string `json:"output"`
-}
-
-func (b *Broker) handleProjectCheck(raw json.RawMessage) json.RawMessage {
-	var p ProjectCheckParams
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return errResult("SCHEMA_INVALID", "gm_project_check: "+err.Error())
-	}
-
-	mode, errRes := projectCheckMode(p.Output)
-	if errRes != nil {
-		return errRes
-	}
-
+func (b *Broker) handleProjectCheck(_ json.RawMessage) json.RawMessage {
 	checkFn, errRes := b.projectCheckFnOrError()
 	if errRes != nil {
 		return errRes
 	}
 
-	res, err := checkFn(b.projectCheck, mode)
+	res, err := checkFn(b.projectCheck, b.projectCheckLogDir)
 	if err != nil {
 		return errResult("PROJECT_CHECK_FAILED", err.Error())
 	}
@@ -925,17 +920,6 @@ func (b *Broker) handleProjectCheck(raw json.RawMessage) json.RawMessage {
 
 	out, _ := json.Marshal(res)
 	return json.RawMessage(out)
-}
-
-func projectCheckMode(output *string) (string, json.RawMessage) {
-	mode := "capped"
-	if output != nil && *output != "" {
-		mode = *output
-	}
-	if mode != "capped" && mode != "full" {
-		return "", errResult("SCHEMA_INVALID", `gm_project_check: output must be "capped" or "full"`)
-	}
-	return mode, nil
 }
 
 func (b *Broker) projectCheckFnOrError() (func(ProjectCheckConfig, string) (*ProjectCheckResult, error), json.RawMessage) {
@@ -1191,7 +1175,7 @@ func cbmReadResponse(conn net.Conn) ([]string, bool, error) {
 	return texts, resp.Result.IsError, nil
 }
 
-func runProjectCheck(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, error) {
+func runProjectCheck(cfg ProjectCheckConfig, logDir string) (*ProjectCheckResult, error) {
 	cmd := exec.Command("sh", "-c", cfg.VerifyCommand)
 	cmd.Dir = cfg.WorktreePath
 	cmd.Env = mergeEnv(os.Environ(), cfg.Env)
@@ -1219,24 +1203,37 @@ func runProjectCheck(cfg ProjectCheckConfig, mode string) (*ProjectCheckResult, 
 		}
 	}
 
-	stdoutr := fullStdout
-	stderrr := fullStderr
-	if mode == "capped" {
-		stdoutr = capStream(fullStdout)
-		stderrr = capStream(fullStderr)
+	outputFile, fileErr := writeProjectCheckLog(logDir, cfg.VerifyCommand, exitCode, fingerprint, fullStdout, fullStderr)
+	if fileErr != nil {
+		return nil, fmt.Errorf("write project-check log: %w", fileErr)
 	}
 
-	logProjectCheck(cfg.VerifyCommand, exitCode, fullStdout, fullStderr, fingerprint)
+	fmt.Fprintf(os.Stderr, "gm_project_check: command=%q exit=%d fingerprint=%s outputFile=%s\n", cfg.VerifyCommand, exitCode, fingerprint, outputFile)
 
 	return &ProjectCheckResult{
 		OK:                     exitCode == 0,
 		Command:                cfg.VerifyCommand,
 		ExitCode:               exitCode,
-		Stdout:                 stdoutr,
-		Stderr:                 stderrr,
+		OutputFile:             outputFile,
 		Summary:                summaryForExit(exitCode),
 		WorkingTreeFingerprint: fingerprint,
 	}, nil
+}
+
+func writeProjectCheckLog(logDir, command string, exitCode int, fingerprint, stdout, stderr string) (string, error) {
+	f, err := os.CreateTemp(logDir, "project-check-*.log")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close() //nolint:errcheck
+	_, err = fmt.Fprintf(f,
+		"command: %s\nexitCode: %d\nworkingTreeFingerprint: %s\n\n=== STDOUT ===\n%s\n=== STDERR ===\n%s\n",
+		command, exitCode, fingerprint, stdout, stderr,
+	)
+	if err != nil {
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 func fingerprintAfterVerify(worktreePath string) (string, error) {
@@ -1255,67 +1252,11 @@ func (gitExecutor) RunInDir(dir string, name string, args ...string) (string, er
 	return string(out), nil
 }
 
-func capStream(out string) string {
-	const maxLines = 200
-	const maxBytes = 32 * 1024
-	if out == "" {
-		return out
-	}
-	trimmed := strings.TrimSuffix(out, "\n")
-	lines := strings.Split(trimmed, "\n")
-	if len(lines) <= maxLines {
-		return capStreamBytes(out, maxBytes)
-	}
-
-	head := maxLines / 2
-	tail := maxLines - head
-	omitted := len(lines) - head - tail
-	var b strings.Builder
-	b.Grow(len(out))
-	b.WriteString(strings.Join(lines[:head], "\n"))
-	if head > 0 {
-		b.WriteByte('\n')
-	}
-	b.WriteString(fmt.Sprintf("... <%d lines truncated> ...", omitted))
-	if tail > 0 {
-		b.WriteByte('\n')
-		b.WriteString(strings.Join(lines[len(lines)-tail:], "\n"))
-	}
-	return capStreamBytes(b.String(), maxBytes)
-}
-
-func capStreamBytes(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	half := maxBytes / 2
-	headEnd := half
-	for headEnd > 0 && !utf8.RuneStart(s[headEnd]) {
-		headEnd--
-	}
-	tailStart := len(s) - half
-	for tailStart < len(s) && !utf8.RuneStart(s[tailStart]) {
-		tailStart++
-	}
-	omitted := tailStart - headEnd
-	return s[:headEnd] + fmt.Sprintf("\n... <%d bytes truncated> ...\n", omitted) + s[tailStart:]
-}
-
 func summaryForExit(exitCode int) string {
 	if exitCode == 0 {
 		return "verify passed"
 	}
 	return fmt.Sprintf("verify failed (exit %d)", exitCode)
-}
-
-func logProjectCheck(command string, exitCode int, stdout, stderr, fingerprint string) {
-	fmt.Fprintf(os.Stderr, "gm_project_check: command=%q exit=%d fingerprint=%s\n", command, exitCode, fingerprint)
-	if stdout != "" {
-		fmt.Fprintf(os.Stderr, "gm_project_check stdout:\n%s\n", stdout)
-	}
-	if stderr != "" {
-		fmt.Fprintf(os.Stderr, "gm_project_check stderr:\n%s\n", stderr)
-	}
 }
 
 func mergeEnv(base []string, extra map[string]string) []string {

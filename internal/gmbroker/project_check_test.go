@@ -101,6 +101,16 @@ func TestProjectCheck_PassesWithFingerprint(t *testing.T) {
 	if got := result["workingTreeFingerprint"]; got != fingerprintOf(t, dir) {
 		t.Fatalf("fingerprint: got %v, want current tree fingerprint", got)
 	}
+	if _, hasStdout := result["stdout"]; hasStdout {
+		t.Fatal("result must not include stdout field")
+	}
+	if _, hasStderr := result["stderr"]; hasStderr {
+		t.Fatal("result must not include stderr field")
+	}
+	outputFile, ok := result["outputFile"].(string)
+	if !ok || outputFile == "" {
+		t.Fatalf("outputFile: got %v, want non-empty path", result["outputFile"])
+	}
 }
 
 func TestProjectCheck_FailureReturnsExitCode(t *testing.T) {
@@ -119,6 +129,16 @@ func TestProjectCheck_FailureReturnsExitCode(t *testing.T) {
 	}
 	if !strings.HasPrefix(result["workingTreeFingerprint"].(string), "sha256:") {
 		t.Fatalf("fingerprint: got %v", result["workingTreeFingerprint"])
+	}
+	if _, hasStdout := result["stdout"]; hasStdout {
+		t.Fatal("result must not include stdout field")
+	}
+	if _, hasStderr := result["stderr"]; hasStderr {
+		t.Fatal("result must not include stderr field")
+	}
+	outputFile, ok := result["outputFile"].(string)
+	if !ok || outputFile == "" {
+		t.Fatalf("outputFile: got %v, want non-empty path", result["outputFile"])
 	}
 }
 
@@ -141,58 +161,73 @@ func TestProjectCheck_FingerprintCapturedAfterMutation(t *testing.T) {
 	}
 }
 
-func TestProjectCheck_OutputModes(t *testing.T) {
+func TestProjectCheck_OutputFile_ContainsFullOutput(t *testing.T) {
 	dir := initProjectCheckRepo(t)
 	verify := `i=1; while [ $i -le 250 ]; do echo "stdout-$i"; echo "stderr-$i" >&2; i=$((i+1)); done`
 	_, sockPath := startProjectCheckBroker(t, dir, verify, []string{"gm_slice_get", "gm_project_check", "gm_dev_done", "gm_review_submit"})
 
-	defaultResult := call(t, sockPath, "gm_project_check", "c1", map[string]any{})
-	fullResult := call(t, sockPath, "gm_project_check", "c2", map[string]any{"output": "full"})
+	result := call(t, sockPath, "gm_project_check", "c1", map[string]any{})
+	if result["ok"] != true {
+		t.Fatalf("ok: got %v, want true", result["ok"])
+	}
 
-	if defaultResult["ok"] != fullResult["ok"] || defaultResult["exitCode"] != fullResult["exitCode"] {
-		t.Fatalf("verdict changed across output modes: default=%v full=%v", defaultResult, fullResult)
+	outputFile, ok := result["outputFile"].(string)
+	if !ok || outputFile == "" {
+		t.Fatalf("outputFile missing or empty: %v", result["outputFile"])
 	}
-	if defaultResult["workingTreeFingerprint"] != fullResult["workingTreeFingerprint"] {
-		t.Fatalf("fingerprint changed across output modes: default=%v full=%v", defaultResult["workingTreeFingerprint"], fullResult["workingTreeFingerprint"])
+
+	content, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatalf("read outputFile: %v", err)
 	}
-	if !strings.Contains(defaultResult["stdout"].(string), "truncated") && !strings.Contains(defaultResult["stderr"].(string), "truncated") {
-		t.Fatalf("default output was not truncated: stdout=%q stderr=%q", defaultResult["stdout"], defaultResult["stderr"])
-	}
-	if !strings.Contains(fullResult["stdout"].(string), "stdout-250") || !strings.Contains(fullResult["stderr"].(string), "stderr-250") {
-		t.Fatalf("full output missing tail lines: %q / %q", fullResult["stdout"], fullResult["stderr"])
+	log := string(content)
+	fp := result["workingTreeFingerprint"].(string)
+	assertLogContains(t, log, fp)
+}
+
+func assertLogContains(t *testing.T, log, fingerprint string) {
+	t.Helper()
+	for _, want := range []string{"=== STDOUT ===", "=== STDERR ===", "stdout-250", "stderr-250", "exitCode: 0", fingerprint} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log missing %q; got:\n%s", want, log[:min(500, len(log))])
+		}
 	}
 }
 
-func TestProjectCheck_OutputModes_ByteCap(t *testing.T) {
+func TestProjectCheck_OutputFile_OutsideWorktree(t *testing.T) {
 	dir := initProjectCheckRepo(t)
-	// Single line of ~64KB to exceed the 32KB byte cap without hitting the line cap.
-	verify := `python3 -c "import sys; sys.stdout.write('X' * 65536 + '\n')"` + ` || ` +
-		`node -e "process.stdout.write('X'.repeat(65536) + '\n')"` + ` || ` +
-		`perl -e "print 'X' x 65536; print \"\\n\""`
-	_, sockPath := startProjectCheckBroker(t, dir, verify, []string{"gm_slice_get", "gm_project_check", "gm_dev_done", "gm_review_submit"})
+	_, sockPath := startProjectCheckBroker(t, dir, "echo ok", []string{"gm_slice_get", "gm_project_check", "gm_dev_done", "gm_review_submit"})
 
-	cappedResult := call(t, sockPath, "gm_project_check", "c1", map[string]any{})
-	fullResult := call(t, sockPath, "gm_project_check", "c2", map[string]any{"output": "full"})
+	result := call(t, sockPath, "gm_project_check", "c1", map[string]any{})
+	outputFile, ok := result["outputFile"].(string)
+	if !ok || outputFile == "" {
+		t.Fatalf("outputFile missing: %v", result["outputFile"])
+	}
+	if strings.HasPrefix(outputFile, dir) {
+		t.Fatalf("outputFile %q must not be inside worktree %q", outputFile, dir)
+	}
+}
 
-	if cappedResult["ok"] != fullResult["ok"] || cappedResult["exitCode"] != fullResult["exitCode"] {
-		t.Fatalf("verdict changed across output modes: capped=%v full=%v", cappedResult, fullResult)
-	}
-	if cappedResult["workingTreeFingerprint"] != fullResult["workingTreeFingerprint"] {
-		t.Fatalf("fingerprint changed: capped=%v full=%v", cappedResult["workingTreeFingerprint"], fullResult["workingTreeFingerprint"])
-	}
+func TestProjectCheck_OutputFile_CleanedUpOnShutdown(t *testing.T) {
+	dir := initProjectCheckRepo(t)
+	b, sockPath := startProjectCheckBroker(t, dir, "echo ok", []string{"gm_slice_get", "gm_project_check", "gm_dev_done", "gm_review_submit"})
 
-	cappedStdout := cappedResult["stdout"].(string)
-	const maxBytes = 32 * 1024
-	if len(cappedStdout) > maxBytes+200 {
-		t.Fatalf("capped stdout too long: %d bytes", len(cappedStdout))
-	}
-	if !strings.Contains(cappedStdout, "bytes truncated") {
-		t.Fatalf("byte-truncation marker missing in capped stdout: %q", cappedStdout[:min(200, len(cappedStdout))])
+	result := call(t, sockPath, "gm_project_check", "c1", map[string]any{})
+	outputFile, ok := result["outputFile"].(string)
+	if !ok || outputFile == "" {
+		t.Fatalf("outputFile missing: %v", result["outputFile"])
 	}
 
-	fullStdout := fullResult["stdout"].(string)
-	if len(fullStdout) < 65536 {
-		t.Fatalf("full stdout was truncated: %d bytes", len(fullStdout))
+	if _, err := os.Stat(outputFile); err != nil {
+		t.Fatalf("outputFile should exist before shutdown: %v", err)
+	}
+
+	b.Shutdown()
+	// prevent double-Shutdown from t.Cleanup
+	t.Cleanup(func() {})
+
+	if _, err := os.Stat(outputFile); !os.IsNotExist(err) {
+		t.Fatalf("outputFile should be removed after shutdown, got: %v", err)
 	}
 }
 
@@ -206,19 +241,6 @@ func TestProjectCheck_ReviewerAllowlistExcludesTool(t *testing.T) {
 	}
 	if result["code"] != "UNKNOWN_TOOL" {
 		t.Fatalf("code: got %v, want UNKNOWN_TOOL", result["code"])
-	}
-}
-
-func TestProjectCheck_ValidatesSchema(t *testing.T) {
-	dir := initProjectCheckRepo(t)
-	_, sockPath := startProjectCheckBroker(t, dir, "echo pass", []string{"gm_slice_get", "gm_project_check", "gm_dev_done", "gm_review_submit"})
-
-	result := call(t, sockPath, "gm_project_check", "c1", map[string]any{"output": "bogus"})
-	if result["ok"] != false {
-		t.Fatalf("ok: got %v, want false", result["ok"])
-	}
-	if result["code"] != "SCHEMA_INVALID" {
-		t.Fatalf("code: got %v, want SCHEMA_INVALID", result["code"])
 	}
 }
 

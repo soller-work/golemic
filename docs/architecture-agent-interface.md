@@ -323,12 +323,16 @@ strukturiertes Ergebnis zurück:
   "ok": true,
   "command": "make test",
   "exitCode": 0,
-  "stdout": "...",
-  "stderr": "...",
-  "summary": "all tests passed",
+  "outputFile": "/tmp/gm-project-check-1234/project-check-5678.log",
+  "summary": "verify passed",
   "workingTreeFingerprint": "sha256:..."
 }
 ```
+
+Der vollständige stdout und stderr des Verify-Commands wird in `outputFile` geschrieben
+(außerhalb des Worktrees, mit Owner-only-Permissions). Das File enthält Metadaten
+(command, exitCode, fingerprint) sowie separate `=== STDOUT ===` und `=== STDERR ===`
+Sektionen. Es wird beim Shutdown der Broker-Invocation gelöscht.
 
 Für Dev darf `gm_project_check` den Working Tree verändern. Das ist gewollt:
 Formatter, Codegen, Snapshot-Updates oder automatische Fixer sollen ihre Änderungen
