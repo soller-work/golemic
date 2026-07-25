@@ -23,6 +23,11 @@ const (
 	// returned when the §10 broker gate rejected gm_dev_done. The caller retries
 	// the dev agent with a gate-explaining prompt.
 	outcomeDevGateRejected = "dev_gate_rejected"
+
+	// outcomePrecheckDevRetryDone is an internal signal (never written to the event log)
+	// returned when a precheck-!ok round completes a deterministic dev-retry and the
+	// ping-pong loop should advance to the next reviewer round.
+	outcomePrecheckDevRetryDone = "precheck_dev_retry_done"
 )
 
 // countReviewSubmittedEvents counts the number of review_submitted events in the log.

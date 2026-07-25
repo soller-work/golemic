@@ -34,6 +34,7 @@ const (
 	SpanWorktreeCleanup   = "worktree.cleanup"
 	SpanAgentTurn         = "agent.turn"
 	SpanEscalationComment = "escalation.comment"
+	SpanReviewerPrecheck  = "reviewer.precheck"
 )
 
 // Record is a single span.start or span.end telemetry record.

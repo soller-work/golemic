@@ -35,7 +35,7 @@ func TestReviewerPrecheck_WritesEvent(t *testing.T) {
 		return buildReviewerPrecheckBlock(res), nil
 	}
 
-	block, _, err := r.runReviewerPrecheck(worktreePath, logPath)
+	block, _, err := r.runReviewerPrecheck(worktreePath, logPath, "")
 	if err != nil {
 		t.Fatalf("runReviewerPrecheck returned error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestReviewerPrecheck_OkFalseOnFailedVerify(t *testing.T) {
 		return buildReviewerPrecheckBlock(res), nil
 	}
 
-	block, _, err := r.runReviewerPrecheck(worktreePath, logPath)
+	block, _, err := r.runReviewerPrecheck(worktreePath, logPath, "")
 	if err != nil {
 		t.Fatalf("runReviewerPrecheck returned error: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestReviewerPrecheck_OkFalseOnTreeMutation(t *testing.T) {
 		return buildReviewerPrecheckBlock(res), nil
 	}
 
-	block, _, err := r.runReviewerPrecheck(worktreePath, logPath)
+	block, _, err := r.runReviewerPrecheck(worktreePath, logPath, "")
 	if err != nil {
 		t.Fatalf("runReviewerPrecheck returned error: %v", err)
 	}
