@@ -1,1 +1,0 @@
-../../.golemic/agents/reviewer.md

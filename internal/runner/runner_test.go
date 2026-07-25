@@ -1294,9 +1294,10 @@ func TestRunDevAgent_SystemPromptFromAgentsDir_AC001(t *testing.T) {
 	}
 }
 
-// TestRunDevAgent_MissingAgentFile_AC002 verifies fail-closed behaviour when
-// .golemic/agents/dev.md is absent: the runner returns outcomeDevFailed and
-// the error names the agent file path.
+// TestRunDevAgent_MissingAgentFile_AC002 verifies that when no .golemic/agents/dev.md
+// override exists, the runner uses the embedded canonical persona and does not
+// error on the missing file. Any failure must be due to another cause, not the
+// absent agent file.
 func TestRunDevAgent_MissingAgentFile_AC002(t *testing.T) {
 	homeDir, repoRoot, project := setupRunnerTest(t)
 
@@ -1318,14 +1319,12 @@ func TestRunDevAgent_MissingAgentFile_AC002(t *testing.T) {
 	var buf bytes.Buffer
 	runner.SetStderr(&buf)
 
-	outcome := runner.runDevAgent(filepath.Join(repoRoot, ".golemic"), "/tmp/events.jsonl", 5*time.Minute, "", 1)
+	runner.runDevAgent(filepath.Join(repoRoot, ".golemic"), "/tmp/events.jsonl", 5*time.Minute, "", 1)
 
-	if outcome != outcomeDevFailed {
-		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
-	}
-	expectedPath := filepath.Join(repoRoot, ".golemic", "agents", "dev.md")
-	if !strings.Contains(buf.String(), expectedPath) {
-		t.Errorf("stderr should contain agent file path %q, got: %s", expectedPath, buf.String())
+	// A missing override file must not produce an agent-file-not-found error.
+	agentFilePath := filepath.Join(repoRoot, ".golemic", "agents", "dev.md")
+	if strings.Contains(buf.String(), agentFilePath+": open") {
+		t.Errorf("missing override file must not cause agent-file error, got: %s", buf.String())
 	}
 	// Must not reference old prompts/ directory.
 	if strings.Contains(buf.String(), "prompts/") {

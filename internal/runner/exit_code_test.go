@@ -38,16 +38,6 @@ func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath str
 		}
 	}
 
-	agentsDir := filepath.Join(golemicDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{"dev.md", "reviewer.md"} {
-		if err := os.WriteFile(filepath.Join(agentsDir, f), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
 	loader := credentials.NewLoader(homeDir)
 	creds, err := loader.Load(project)
 	if err != nil {
