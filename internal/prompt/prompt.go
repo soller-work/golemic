@@ -58,6 +58,11 @@ const editOverWriteDirective = "## File Edits\n\nPrefer the `edit` tool over `wr
 // Nudges the dev agent to avoid re-reading unchanged files at full length to keep token usage low.
 const noReReadDirective = "## File Re-reads\n\nKeep track of files you have already read during this run. Do **not** re-read an unchanged file in full — re-reading re-emits the whole file into the run context and grows tokens over a long run. If you only need part of a file, use a targeted `read` range (offset/limit) or a code-intelligence tool lookup instead. A fresh full read is correct when the file has changed since you last read it (e.g. after an `edit`, `write`, or a command that rewrote it)."
 
+// targetedCheckDirective is injected into every dev prompt before ## Instructions.
+// Instructs the dev agent to use cheap, scope-limited bash checks during implementation
+// and to reserve gm_project_check for a single confirming run before gm_dev_done.
+const targetedCheckDirective = "## Targeted Verification\n\nDuring implementation, verify incrementally with `bash` commands scoped to the packages or files you changed (for a Go worktree, e.g. `go test ./internal/foo`). Do **not** re-run the full verification command after every edit — it is slow and wastes tokens. When you believe the change is complete, run `gm_project_check` once to confirm, and iterate only if it reports a failure. The full `gm_project_check` is the gate-qualifying step: `gm_dev_done` is not accepted unless the last `gm_project_check` was green with a matching working-tree fingerprint."
+
 // scaffoldFrame is the shared middle section of every renderer: Guidelines block,
 // optional Code Intelligence block, injected Directives, and the ## Instructions header.
 // Each renderer concatenates its unique header + scaffoldFrame + unique instruction steps.
@@ -103,8 +108,8 @@ const devUserTemplate = `# Task: Implement Issue #{{.Issue.Number}}
 1. **First, fetch the authoritative task specification:** run ` + "`" + `gm_slice_get` + "`" + ` for issue ` + "`" + `{{.Issue.Number}}` + "`" + `. The output is the source of truth — do not rely on any summary rendered in the issue's web UI.
 2. Understand the spec and the guidelines above.
 3. Implement the necessary changes on branch ` + "`" + `{{.Branch}}` + "`" + `.
-4. Run ` + "`" + `gm_project_check` + "`" + ` iteratively until it returns ` + "`" + `ok: true` + "`" + `. Fix any failures before proceeding.
-5. Once ` + "`" + `gm_project_check` + "`" + ` returns ` + "`" + `ok: true` + "`" + `, call ` + "`" + `gm_dev_done` + "`" + ` with:
+4. While implementing, run targeted ` + "`" + `bash` + "`" + ` checks scoped to what you changed (e.g. ` + "`" + `go test ./internal/foo` + "`" + `). Reserve ` + "`" + `gm_project_check` + "`" + ` for a single confirming run.
+5. When you believe the change is complete, run ` + "`" + `gm_project_check` + "`" + ` once. Fix any failures, then call ` + "`" + `gm_dev_done` + "`" + ` with:
    - ` + "`" + `summary` + "`" + `: a brief description of the changes made
    - ` + "`" + `commitMsg` + "`" + `: a Conventional Commit message, e.g. ` + "`" + `feat(scope): description ({{.Issue.Number}})` + "`" + `
    - ` + "`" + `prTitle` + "`" + `: a concise PR title
@@ -156,7 +161,7 @@ func RenderDev(issue Issue, branch string, verifyCommand string, guidelinesPath 
 		VerifyCommand:  verifyCommand,
 		Guidelines:     guidelines,
 		CodebaseMemory: cbmEnabled,
-		Directives:     workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
+		Directives:     workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective + "\n\n" + targetedCheckDirective,
 	}
 
 	tmpl, err := template.New("dev").Parse(devUserTemplate)
@@ -250,8 +255,7 @@ The following JSON array contains the reviewer's inline comments anchored to spe
 
 1. The reviewer findings above are the primary input for this retry. If you need the original task specification, run ` + "`" + `gm_slice_get` + "`" + ` for issue ` + "`" + `{{.Issue.Number}}` + "`" + ` — its output is the authoritative spec; do not rely on any summary rendered in the issue's web UI.
 2. Address the reviewer\u2019s findings above on branch ` + "`" + `{{.Branch}}` + "`" + `.
-3. Run ` + "`" + `gm_project_check` + "`" + ` iteratively until it returns ` + "`" + `ok: true` + "`" + `. Fix any failures before proceeding.
-4. Once ` + "`" + `gm_project_check` + "`" + ` returns ` + "`" + `ok: true` + "`" + `, call ` + "`" + `gm_dev_done` + "`" + ` with summary, commitMsg, prTitle, and prBody.
+3. While fixing, run targeted ` + "`" + `bash` + "`" + ` checks scoped to what you changed. When all findings are addressed, run ` + "`" + `gm_project_check` + "`" + ` once to confirm. Fix any failures, then call ` + "`" + `gm_dev_done` + "`" + ` with summary, commitMsg, prTitle, and prBody.
 
 > **Important:** Do **not** run ` + "`" + `git add` + "`" + `, ` + "`" + `git commit` + "`" + `, or ` + "`" + `git push` + "`" + `. The runner handles those steps. Do **not** open a new PR — the existing PR on branch ` + "`" + `{{.Branch}}` + "`" + ` will be updated automatically.
 `
@@ -305,7 +309,7 @@ func RenderDevGateRetry(gateReason string, issue Issue, branch, verifyCommand, g
 		VerifyCommand: verifyCommand,
 		GateReason:    gateReason,
 		Guidelines:    guidelines,
-		Directives:    workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
+		Directives:    workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective + "\n\n" + targetedCheckDirective,
 	}
 
 	tmpl, err := template.New("devGateRetry").Parse(devGateRetryUserTemplate)
@@ -409,7 +413,7 @@ func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, v
 		VerifyCommand:  verifyCommand,
 		Guidelines:     guidelines,
 		CodebaseMemory: cbmEnabled,
-		Directives:     workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
+		Directives:     workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective + "\n\n" + targetedCheckDirective,
 	}
 
 	tmpl, err := template.New("devRetry").Parse(devRetryUserTemplate)
@@ -482,7 +486,7 @@ func RenderDevCIRetry(failedCheckInfo string, issue Issue, branch string, verify
 		VerifyCommand:   verifyCommand,
 		Guidelines:      guidelines,
 		CodebaseMemory:  false,
-		Directives:      workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
+		Directives:      workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective + "\n\n" + targetedCheckDirective,
 	}
 
 	tmpl, err := template.New("devCIRetry").Parse(devCIRetryUserTemplate)
@@ -559,7 +563,7 @@ func RenderDevRebaseConflictResolve(prNumber int, branch, base string, conflicte
 		VerifyCommand:   verifyCommand,
 		Guidelines:      guidelines,
 		CodebaseMemory:  false,
-		Directives:      workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective,
+		Directives:      workingDirDirective + "\n\n" + editOverWriteDirective + "\n\n" + noReReadDirective + "\n\n" + targetedCheckDirective,
 	}
 
 	tmpl, err := template.New("devRebaseConflictResolve").Parse(devRebaseConflictResolveUserTemplate)
