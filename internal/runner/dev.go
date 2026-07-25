@@ -353,6 +353,12 @@ func (r *Runner) commitAndForcePush(devWT string, devDone gmbroker.DevDoneParams
 	if _, err := r.executor.RunInDir(devWT, "git", "add", "-A"); err != nil {
 		return fmt.Errorf("git add -A: %w", err)
 	}
+	// git diff --cached --quiet exits 0 when there is nothing staged, 1 when there are changes.
+	// A nil error means nothing is staged — the dev-retry produced no working-tree changes.
+	if _, err := r.executor.RunInDir(devWT, "git", "diff", "--cached", "--quiet"); err == nil {
+		fmt.Fprintf(r.stderr, "dev_retry: no working-tree changes; re-reviewing the same SHA\n")
+		return nil
+	}
 	if _, err := r.executor.RunInDir(devWT, "git", "commit", "-m", devDone.CommitMsg); err != nil {
 		return fmt.Errorf("git commit: %w", err)
 	}
