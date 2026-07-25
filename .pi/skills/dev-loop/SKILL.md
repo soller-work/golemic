@@ -40,11 +40,19 @@ commit messages, PR title/body, task briefings, review findings. See
 ## Agents
 
 The **single source of truth** for each agent's persona body and model chain is
-`.golemic/agents/{role}.md` (e.g. `.golemic/agents/dev.md`,
-`.golemic/agents/reviewer.md`). The `.pi/agents/` entries are symlinks into that
-directory — do not edit them directly, and do not treat them as authoritative.
-The model used for each subagent comes from the `model:` field in the agent's
-frontmatter in `.golemic/agents/{role}.md`; there is no separate model config.
+the binary-embedded file `internal/agentfile/personas/{role}.md` (e.g.
+`internal/agentfile/personas/dev.md`, `internal/agentfile/personas/reviewer.md`).
+These files are compiled into the golemic binary and used automatically in every
+repo that has not created a per-repo override.
+
+To override the embedded persona for a specific repository, create
+`.golemic/agents/{role}.md` with a valid `model:` frontmatter key and a persona
+body. When that file is present it takes full precedence over the embedded
+canonical; when absent the embedded canonical is used with no error.
+
+The model chain for each subagent comes from the `model:` field in whichever
+persona file is active (embedded canonical or repo override); there is no
+separate model config.
 
 Invoke with `agentScope: "both"` and `confirmProjectAgents: false`.
 
