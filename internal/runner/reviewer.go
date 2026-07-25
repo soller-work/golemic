@@ -184,7 +184,7 @@ type reviewerInvocationState struct {
 // precheckBlock is the pre-rendered precheck section for the prompt.
 // gateRetryReason is non-empty when this is a retry after a rejected approved verdict;
 // in that case a gate-retry prompt is rendered instead of the normal reviewer prompt.
-func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int, precheckBlock string, precheck *reviewerPrecheckResult, gateRetryReason string) (string, *reviewerInvocationState) {
+func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round, attempt int, precheckBlock string, precheck *reviewerPrecheckResult, gateRetryReason string) (string, *reviewerInvocationState) {
 	golemicBinaryPath, _ := os.Executable()
 	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
@@ -202,7 +202,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		return outcomeReviewFailed, nil
 	}
 
-	cbmEnabled, brokerEnv, gmBroker, cleanupBrokers := r.startReviewerBrokers(golemicDir, runsDir, reviewerWorktreePath, prNumber, precheck)
+	cbmEnabled, brokerEnv, gmBroker, cleanupBrokers := r.startReviewerBrokers(golemicDir, runsDir, reviewerWorktreePath, prNumber, round, attempt, precheck)
 	defer cleanupBrokers()
 
 	userPrompt, err := r.renderReviewerPrompt(prNumber, precheckBlock, gateRetryReason, cbmEnabled)
@@ -619,7 +619,7 @@ func (r *Runner) buildReviewerRoleConfig(systemPromptFile, userPrompt, worktreeP
 // startReviewerBrokers starts CBM and GM brokers for a reviewer invocation.
 // Returns cbmEnabled, the combined broker environment, the GM broker (may be nil),
 // and a cleanup function.
-func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, prNumber int, precheck *reviewerPrecheckResult) (cbmEnabled bool, brokerEnv []string, gmBroker *gmbroker.Broker, cleanup func()) {
+func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, prNumber, round, attempt int, precheck *reviewerPrecheckResult) (cbmEnabled bool, brokerEnv []string, gmBroker *gmbroker.Broker, cleanup func()) {
 	var cleanups []func()
 	var cbmCfg gmbroker.CBMConfig
 	if r.cfg.CodebaseMemory.Enabled {
@@ -633,8 +633,10 @@ func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, 
 			cbmCfg = gmbroker.CBMConfig{SockPath: sockPath, Project: projectName}
 		}
 	}
-	gmSockPath := filepath.Join(runsDir, r.runID, "gm-reviewer.sock")
+	gmSockPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("gm-reviewer-r%d-a%d.sock", round, attempt))
+	reviwerInvocationID := fmt.Sprintf("%s/reviewer/round-%d/attempt-%d", r.runID, round, attempt)
 	if gmb, gmEnv, ok := r.startGMForRole(gmSockPath, "reviewer", worktreePath); ok {
+		gmb.SetInvocationIdentity(r.runID, reviwerInvocationID)
 		var precheckState *gmbroker.PrecheckState
 		if precheck != nil {
 			precheckState = &gmbroker.PrecheckState{
@@ -656,6 +658,7 @@ func (r *Runner) startReviewerBrokers(golemicDir, runsDir, worktreePath string, 
 		}
 		cleanups = append(cleanups, gmb.Shutdown)
 		brokerEnv = append(brokerEnv, gmEnv...)
+		brokerEnv = append(brokerEnv, "GOLEMIC_RUN_ID="+r.runID, "GOLEMIC_INVOCATION_ID="+reviwerInvocationID, "GOLEMIC_ROLE=reviewer")
 		gmBroker = gmb
 	}
 	cleanup = func() {

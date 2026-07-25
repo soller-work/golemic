@@ -285,24 +285,34 @@ func injectFakeGMBrokerPP(t *testing.T) {
 	)
 }
 
-// gmSockFromEnv extracts the GOLEMIC_GM_SOCK path from the env slice.
-func gmSockFromEnv(env []string) string {
+// gmEnvVar extracts a KEY=VALUE pair from the env slice.
+func gmEnvVar(env []string, key string) string {
+	prefix := key + "="
 	for _, e := range env {
-		if strings.HasPrefix(e, "GOLEMIC_GM_SOCK=") {
-			return strings.TrimPrefix(e, "GOLEMIC_GM_SOCK=")
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
 		}
 	}
 	return ""
 }
 
+// gmSockFromEnv extracts the GOLEMIC_GM_SOCK path from the env slice.
+func gmSockFromEnv(env []string) string {
+	return gmEnvVar(env, "GOLEMIC_GM_SOCK")
+}
+
 // callGMTool sends a single gm_ tool call to the broker socket and returns the
-// parsed result map. Returns nil on any error.
-func callGMTool(sockPath, tool, callID string, params any) map[string]any {
+// parsed result map. It includes the §17 identity envelope extracted from env.
+// Returns nil on any error.
+func callGMTool(env []string, sockPath, tool, callID string, params any) map[string]any {
 	raw, _ := json.Marshal(params)
 	req, _ := json.Marshal(map[string]any{
-		"tool":   tool,
-		"callId": callID,
-		"params": json.RawMessage(raw),
+		"runId":        gmEnvVar(env, "GOLEMIC_RUN_ID"),
+		"invocationId": gmEnvVar(env, "GOLEMIC_INVOCATION_ID"),
+		"role":         gmEnvVar(env, "GOLEMIC_ROLE"),
+		"tool":         tool,
+		"callId":       callID,
+		"params":       json.RawMessage(raw),
 	})
 	req = append(req, '\n')
 	conn, err := net.Dial("unix", sockPath)
@@ -331,7 +341,7 @@ func sendGMProjectCheck(env []string) bool {
 	if sockPath == "" {
 		return false
 	}
-	result := callGMTool(sockPath, "gm_project_check", "test-check", map[string]any{})
+	result := callGMTool(env, sockPath, "gm_project_check", "test-check", map[string]any{})
 	if result == nil {
 		return false
 	}
@@ -346,7 +356,7 @@ func sendGMDevDone(env []string) bool {
 	if sockPath == "" {
 		return false
 	}
-	result := callGMTool(sockPath, "gm_dev_done", "test-done", map[string]string{
+	result := callGMTool(env, sockPath, "gm_dev_done", "test-done", map[string]string{
 		"summary":   "Implement the feature",
 		"commitMsg": "feat(test): implement feature (42)",
 		"prTitle":   "feat: implement feature",
@@ -480,7 +490,7 @@ func TestGMCodeTools_PresentInReviewerAllowlist(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, "", nil, "")
+	r.runReviewerAgent(golemicDir, eventLogPath, 30*time.Second, "", 1, 0, "", nil, "")
 
 	if len(captured) == 0 {
 		t.Fatal("reviewer agent was not called")

@@ -165,10 +165,13 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 	// GM broker: unique socket per attempt.
 	var gmb *gmbroker.Broker
 	gmSockPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("gm-dev-r%d-a%d.sock", round, attempt))
+	devInvocationID := fmt.Sprintf("%s/dev/round-%d/attempt-%d", r.runID, round, attempt)
 	if b, gmEnv, ok := r.startGMForRole(gmSockPath, "dev", devWorktreePath); ok {
 		gmb = b
+		gmb.SetInvocationIdentity(r.runID, devInvocationID)
 		defer gmb.Shutdown()
 		brokerEnv = append(brokerEnv, gmEnv...)
+		brokerEnv = append(brokerEnv, "GOLEMIC_RUN_ID="+r.runID, "GOLEMIC_INVOCATION_ID="+devInvocationID, "GOLEMIC_ROLE=dev")
 		if cbmCfg.SockPath != "" {
 			gmb.ConfigureCBM(cbmCfg)
 			gmb.SetAllowedTools(append(gmDevToolNames, gmCodeToolNames...))

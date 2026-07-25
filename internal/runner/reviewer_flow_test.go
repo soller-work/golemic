@@ -153,7 +153,7 @@ func submitReviewerAttempt(t *testing.T, cfg agent.RoleConfig, attempt int) {
 		mergeConfidence = "low"
 		body = "Please fix"
 	}
-	result := callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", attempt), map[string]any{
+	result := callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", attempt), map[string]any{
 		"verdict":         verdict,
 		"mergeConfidence": mergeConfidence,
 		"body":            body,
@@ -195,7 +195,7 @@ func makeReviewerInvalidApprovalAgent(t *testing.T) (func(context.Context, agent
 			}
 		case "reviewer":
 			reviewerCalls++
-			result := callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", reviewerCalls), map[string]any{
+			result := callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", fmt.Sprintf("c%d", reviewerCalls), map[string]any{
 				"verdict":         "approved",
 				"mergeConfidence": "high",
 				"body":            "Still approved",
@@ -413,7 +413,7 @@ func TestOrchestrate_ReviewerInvalidApproval_RestartsWithGatePromptAndPreservesP
 		case "reviewer":
 			reviewerPrompts = append(reviewerPrompts, cfg.UserPrompt)
 			if len(reviewerPrompts) == 1 {
-				result := callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit_comment", "c1", map[string]any{
+				result := callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit_comment", "c1", map[string]any{
 					"path":     "main.go",
 					"line":     10,
 					"body":     "Inline finding",
@@ -422,7 +422,7 @@ func TestOrchestrate_ReviewerInvalidApproval_RestartsWithGatePromptAndPreservesP
 				if result == nil || result["ok"] != true {
 					t.Fatalf("gm_review_submit_comment: got %v", result)
 				}
-				result = callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit", "c2", map[string]any{
+				result = callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", "c2", map[string]any{
 					"verdict":         "approved",
 					"mergeConfidence": "high",
 					"body":            "Looks good",
@@ -431,7 +431,7 @@ func TestOrchestrate_ReviewerInvalidApproval_RestartsWithGatePromptAndPreservesP
 					t.Fatalf("expected REVIEWER_GATE rejection, got %v", result)
 				}
 			} else {
-				result := callGMTool(gmSockFromEnv(cfg.Env), "gm_review_submit", "c3", map[string]any{
+				result := callGMTool(cfg.Env, gmSockFromEnv(cfg.Env), "gm_review_submit", "c3", map[string]any{
 					"verdict":         "approved",
 					"mergeConfidence": "high",
 					"body":            "Approved after re-review",
