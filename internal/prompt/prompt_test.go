@@ -442,6 +442,142 @@ func TestRenderNoReReadDirective(t *testing.T) {
 	})
 }
 
+func renderTargetedCheckDirectiveAssertions(t *testing.T, name string, render func() (string, error)) {
+	t.Helper()
+
+	out, err := render()
+	if err != nil {
+		t.Fatalf("%s: unexpected error: %v", name, err)
+	}
+	if count := strings.Count(out, targetedCheckDirective); count != 1 {
+		t.Fatalf("%s: expected targetedCheckDirective exactly once, got %d", name, count)
+	}
+	assertBefore(t, out, targetedCheckDirective, "## Instructions")
+}
+
+func TestRenderTargetedCheckDirective(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "guidelines.md", "# Guidelines")
+
+	devTests := []struct {
+		name   string
+		render func() (string, error)
+	}{
+		{
+			name: "RenderDev",
+			render: func() (string, error) {
+				return RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevRetry",
+			render: func() (string, error) {
+				return RenderDevRetry("Fix the null pointer", "", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+			},
+		},
+		{
+			name: "RenderDevGateRetry",
+			render: func() (string, error) {
+				return RenderDevGateRetry("fingerprint mismatch", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+			},
+		},
+		{
+			name: "RenderDevCIRetry",
+			render: func() (string, error) {
+				return RenderDevCIRetry("### verify\n```\ngo test failed\n```\n", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath)
+			},
+		},
+		{
+			name: "RenderDevRebaseConflictResolve",
+			render: func() (string, error) {
+				return RenderDevRebaseConflictResolve(42, "golemic/issue-42", "origin/main", []string{"foo.go"}, "go test ./...", guidelinesPath)
+			},
+		},
+	}
+
+	for _, tc := range devTests {
+		t.Run(tc.name, func(t *testing.T) {
+			renderTargetedCheckDirectiveAssertions(t, tc.name, tc.render)
+		})
+	}
+
+	// Reviewer must NOT contain the targeted-check directive.
+	t.Run("RenderReviewer_NoTargetedCheckDirective", func(t *testing.T) {
+		out, err := RenderReviewer(123, testIssue, "go test ./...", guidelinesPath, false, "")
+		if err != nil {
+			t.Fatalf("RenderReviewer: unexpected error: %v", err)
+		}
+		if strings.Contains(out, targetedCheckDirective) {
+			t.Error("reviewer prompt must not contain targetedCheckDirective")
+		}
+	})
+}
+
+// TestRenderDev_TargetedCheckGateExpectation asserts that the dev prompt still states
+// that a full green gm_project_check is required before gm_dev_done.
+func TestRenderDev_TargetedCheckGateExpectation(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	out, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mustContain(t, out, []string{
+		"gm_project_check",
+		"gm_dev_done",
+		"gate-qualifying",
+	})
+	assertBefore(t, out, "gm_project_check", "gm_dev_done")
+}
+
+// TestRenderDev_NoIterativelyUntilOkTrue asserts the dev prompt no longer instructs
+// running gm_project_check iteratively until ok:true.
+func TestRenderDev_NoIterativelyUntilOkTrue(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	out, err := RenderDev(testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(out, "iteratively until it returns") {
+		t.Error("dev prompt must not instruct running gm_project_check iteratively until ok:true")
+	}
+}
+
+// TestRenderDevRetry_NoIterativelyUntilOkTrue asserts the dev-retry prompt no longer
+// instructs running gm_project_check iteratively until ok:true.
+func TestRenderDevRetry_NoIterativelyUntilOkTrue(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "dev.md", "# Guidelines")
+
+	out, err := RenderDevRetry("Fix bug", "", testIssue, "golemic/issue-42", "go test ./...", guidelinesPath, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(out, "iteratively until it returns") {
+		t.Error("dev-retry prompt must not instruct running gm_project_check iteratively until ok:true")
+	}
+}
+
+// TestRenderReviewer_NoTargetedCheckAndNoRunVerify asserts that the reviewer prompt
+// contains neither the targeted-check directive nor any instruction to run the verify command.
+func TestRenderReviewer_NoTargetedCheckAndNoRunVerify(t *testing.T) {
+	guidelinesPath := writeTestGuidelines(t, t.TempDir(), "reviewer.md", "# Guidelines")
+
+	out, err := RenderReviewer(123, testIssue, "my-unique-verify-cmd-99999", guidelinesPath, false, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(out, targetedCheckDirective) {
+		t.Error("reviewer prompt must not contain targetedCheckDirective")
+	}
+	if strings.Contains(out, "my-unique-verify-cmd-99999") {
+		t.Error("reviewer prompt must not instruct agent to run verify command")
+	}
+}
+
 func TestRenderWorkingDirDirective_WithEmptyGuidelines(t *testing.T) {
 	dir := t.TempDir()
 	emptyGuidelinesPath := writeTestGuidelines(t, dir, "guidelines.md", "")
