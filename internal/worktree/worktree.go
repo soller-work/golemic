@@ -190,6 +190,135 @@ func CreateForReviewer(repoRoot, golemicDir, runID string, issueNumber int, bran
 	return nil
 }
 
+// EnsureForResume guarantees the dev worktree for a resumed run exists on branch
+// golemic/issue-<N>. It is idempotent: an already-registered worktree on that branch
+// is a no-op. A worktree registered on a different branch is a hard error (the caller
+// must resolve it manually). Otherwise it recreates the worktree from the remote PR
+// branch via createForResume.
+//
+// This is the single entry point for resume worktree handling so that all git
+// plumbing (worktree registration inspection and creation) lives in this package.
+func EnsureForResume(repoRoot, golemicDir, runID string, issueNumber int, botLogin string, executor preflight.Executor, eventWriter EventWriter, turnID int) error {
+	if issueNumber <= 0 {
+		return fmt.Errorf("INVALID_ISSUE_NUMBER: %d", issueNumber)
+	}
+	wtPath := worktreePath(golemicDir, issueNumber)
+	expectedRef := "refs/heads/" + branchName(issueNumber)
+
+	registered, curBranch, err := registeredWorktreeBranch(executor, repoRoot, wtPath)
+	if err != nil {
+		return fmt.Errorf("failed to inspect existing worktrees: %w", err)
+	}
+	if registered {
+		if curBranch == expectedRef {
+			return nil // idempotent no-op
+		}
+		return fmt.Errorf("dev worktree at %s is registered on branch %q, expected %q; resolve manually before resuming", wtPath, curBranch, expectedRef)
+	}
+	return createForResume(repoRoot, golemicDir, runID, issueNumber, botLogin, executor, eventWriter, turnID)
+}
+
+// registeredWorktreeBranch parses `git worktree list --porcelain` and reports whether
+// wtPath is a registered git worktree and, if so, its checked-out branch ref
+// (e.g. "refs/heads/golemic/issue-7"; empty for a detached HEAD).
+func registeredWorktreeBranch(executor preflight.Executor, repoRoot, wtPath string) (bool, string, error) {
+	out, err := executor.Run("git", "-C", repoRoot, "worktree", "list", "--porcelain")
+	if err != nil {
+		return false, "", err
+	}
+	var curPath, curBranch string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			curPath = strings.TrimPrefix(line, "worktree ")
+			curBranch = ""
+		case strings.HasPrefix(line, "branch "):
+			curBranch = strings.TrimPrefix(line, "branch ")
+		case line == "":
+			if curPath == wtPath {
+				return true, curBranch, nil
+			}
+			curPath, curBranch = "", ""
+		}
+	}
+	if curPath == wtPath {
+		return true, curBranch, nil
+	}
+	return false, "", nil
+}
+
+// createForResume sets up the dev worktree for a resumed run from the remote PR
+// branch. Unlike Create (which starts a fresh branch off origin/main and would
+// discard the PR's commits) and CreateForReviewer (which uses a detached HEAD with
+// the reviewer identity), createForResume checks out the existing remote branch
+// origin/golemic/issue-<N> as a tracking local branch golemic/issue-<N> at the dev
+// worktree path, with the dev bot identity, so the dev agent can commit and
+// force-push during the resumed run.
+//
+// It uses `worktree add --track -B` (force create/reset) so an existing stale local
+// branch left over from an interrupted run is reset to the remote head rather than
+// causing a "branch already exists" failure.
+//
+// Steps:
+//  1. git -C <repoRoot> fetch origin
+//  2. git -C <repoRoot> ls-remote --exit-code --heads origin golemic/issue-<N>
+//     (queries origin directly, avoiding a stale remote-tracking ref for a deleted
+//     branch; REMOTE_BRANCH_NOT_FOUND otherwise) and capture its head SHA as baseSha
+//  3. git -C <repoRoot> worktree add --track -B golemic/issue-<N> <path> origin/golemic/issue-<N>
+//  4. git config credential.helper, user.name, user.email in the worktree
+//  5. write worktree_created event with role: dev
+func createForResume(repoRoot, golemicDir, runID string, issueNumber int, botLogin string, executor preflight.Executor, eventWriter EventWriter, turnID int) error {
+	if _, err := executor.Run("git", "-C", repoRoot, "fetch", "origin"); err != nil {
+		return fmt.Errorf("GIT_FETCH_FAILED: %w", err)
+	}
+
+	branch := branchName(issueNumber)
+	lsOut, err := executor.Run("git", "-C", repoRoot, "ls-remote", "--exit-code", "--heads", "origin", branch)
+	if err != nil {
+		return fmt.Errorf("REMOTE_BRANCH_NOT_FOUND: Remote branch origin/%s not found; was the branch pushed?", branch)
+	}
+	fields := strings.Fields(lsOut)
+	if len(fields) == 0 {
+		return fmt.Errorf("REMOTE_BRANCH_NOT_FOUND: Remote branch origin/%s returned no ref", branch)
+	}
+	baseSha := fields[0]
+
+	remoteBranch := "origin/" + branch
+	wtPath := worktreePath(golemicDir, issueNumber)
+	if _, err := executor.Run("git", "-C", repoRoot, "worktree", "add", "--track", "-B", branch, wtPath, remoteBranch); err != nil {
+		return fmt.Errorf("GIT_WORKTREE_ADD_FAILED: %w", err)
+	}
+
+	if err := configureWorktreeGit(executor, wtPath, botLogin); err != nil {
+		return err
+	}
+
+	payload := map[string]string{
+		"path":    wtPath,
+		"branch":  branch,
+		"baseSha": baseSha,
+		"role":    "dev",
+	}
+	rawPayload, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("EVENT_MARSHAL_FAILED: %w", err)
+	}
+
+	event := eventlog.Event{
+		Type:    eventlog.EventWorktreeCreated,
+		Ts:      time.Now().Format(time.RFC3339),
+		RunID:   runID,
+		TurnID:  turnID,
+		Payload: rawPayload,
+	}
+	if err := eventWriter.Write(event); err != nil {
+		return fmt.Errorf("EVENT_WRITE_FAILED: %w", err)
+	}
+
+	return nil
+}
+
 // IsDirty checks if the worktree at worktreePath has uncommitted changes
 // by running git status --porcelain. Returns true if the output is non-empty
 // (dirty), false if empty (clean).

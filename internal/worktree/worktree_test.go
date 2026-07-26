@@ -1090,3 +1090,143 @@ func TestCreateForReviewer_EventWriteFails(t *testing.T) {
 		t.Errorf("expected EVENT_WRITE_FAILED in error, got: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// EnsureForResume: idempotent, wrong-branch guard, and recreation from remote
+// ---------------------------------------------------------------------------
+
+// notRegistered is the `git worktree list --porcelain` output for a repo whose only
+// worktree is the main checkout (the dev worktree is absent).
+const notRegistered = "worktree /tmp/test-repo\nHEAD aaaa\nbranch refs/heads/main\n\n"
+
+func TestEnsureForResume_GitCommandSequence(t *testing.T) {
+	lsRemote := testBaseSha + "\trefs/heads/golemic/issue-42\n"
+	mockExec := newMockExecutor(
+		execResponse{Stdout: notRegistered, Err: nil},        // git -C <repoRoot> worktree list --porcelain
+		execResponse{Stdout: "", Err: nil},                   // git -C <repoRoot> fetch origin
+		execResponse{Stdout: lsRemote, Err: nil},             // git -C <repoRoot> ls-remote --exit-code --heads origin golemic/issue-42
+		execResponse{Stdout: "Created worktree\n", Err: nil}, // git -C <repoRoot> worktree add --track -B ...
+		execResponse{Stdout: "", Err: nil},                   // config credential.helper
+		execResponse{Stdout: "", Err: nil},                   // config user.name
+		execResponse{Stdout: "", Err: nil},                   // config user.email
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+	dev := "golemic-dev"
+
+	if err := EnsureForResume(defaultRepoRoot, golemicDir, runID, issueNum, dev, mockExec, eventWriter, 0); err != nil {
+		t.Fatalf("EnsureForResume returned error: %v", err)
+	}
+
+	calls := mockExec.Calls()
+	if len(calls) != 7 {
+		t.Fatalf("expected 7 executor calls, got %d", len(calls))
+	}
+	wtPath := filepath.Join(golemicDir, "worktrees", "issue-42")
+
+	expectCall(t, calls[0], "", "git", "-C", defaultRepoRoot, "worktree", "list", "--porcelain")
+	expectCall(t, calls[1], "", "git", "-C", defaultRepoRoot, "fetch", "origin")
+	// Existence verified directly against origin (not a possibly-stale tracking ref).
+	expectCall(t, calls[2], "", "git", "-C", defaultRepoRoot, "ls-remote", "--exit-code", "--heads", "origin", "golemic/issue-42")
+	// Tracking local branch with -B (force create/reset) so a stale local branch is
+	// reset rather than causing "branch already exists".
+	expectCall(t, calls[3], "", "git", "-C", defaultRepoRoot, "worktree", "add", "--track", "-B", "golemic/issue-42", wtPath, "origin/golemic/issue-42")
+	credHelper := "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
+	expectCall(t, calls[4], "", "git", "-C", wtPath, "config", "credential.helper", credHelper)
+	expectCall(t, calls[5], "", "git", "-C", wtPath, "config", "user.name", dev)
+	expectCall(t, calls[6], "", "git", "-C", wtPath, "config", "user.email", dev)
+}
+
+func TestEnsureForResume_EventHasDevRole(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: notRegistered, Err: nil},                                   // worktree list
+		execResponse{Stdout: "", Err: nil},                                              // fetch origin
+		execResponse{Stdout: testBaseSha + "\trefs/heads/golemic/issue-42\n", Err: nil}, // ls-remote
+		execResponse{Stdout: "", Err: nil},                                              // worktree add
+		execResponse{Stdout: "", Err: nil},                                              // config credential.helper
+		execResponse{Stdout: "", Err: nil},                                              // config user.name
+		execResponse{Stdout: "", Err: nil},                                              // config user.email
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	if err := EnsureForResume(defaultRepoRoot, golemicDir, runID, issueNum, "golemic-dev", mockExec, eventWriter, 0); err != nil {
+		t.Fatalf("EnsureForResume returned error: %v", err)
+	}
+	events := eventWriter.Events()
+	if len(events) != 1 || events[0].Type != eventlog.EventWorktreeCreated {
+		t.Fatalf("expected one worktree_created event, got %+v", events)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(events[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload["role"] != "dev" {
+		t.Errorf("payload.role: got %q, want %q", payload["role"], "dev")
+	}
+	if payload["branch"] != "golemic/issue-42" {
+		t.Errorf("payload.branch: got %q, want %q", payload["branch"], "golemic/issue-42")
+	}
+}
+
+func TestEnsureForResume_IdempotentNoOp(t *testing.T) {
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+	wtPath := filepath.Join(golemicDir, "worktrees", "issue-42")
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "worktree " + wtPath + "\nHEAD bbbb\nbranch refs/heads/golemic/issue-42\n\n", Err: nil},
+	)
+	eventWriter := newMockEventWriter()
+
+	if err := EnsureForResume(defaultRepoRoot, golemicDir, runID, issueNum, "golemic-dev", mockExec, eventWriter, 0); err != nil {
+		t.Fatalf("EnsureForResume returned error: %v", err)
+	}
+	if len(mockExec.Calls()) != 1 {
+		t.Fatalf("expected only the worktree-list call (no recreation), got %d calls", len(mockExec.Calls()))
+	}
+	if len(eventWriter.Events()) != 0 {
+		t.Errorf("expected no event on idempotent no-op, got %d", len(eventWriter.Events()))
+	}
+}
+
+func TestEnsureForResume_WrongBranchErrors(t *testing.T) {
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+	wtPath := filepath.Join(golemicDir, "worktrees", "issue-42")
+	mockExec := newMockExecutor(
+		execResponse{Stdout: "worktree " + wtPath + "\nHEAD bbbb\nbranch refs/heads/golemic/issue-999\n\n", Err: nil},
+	)
+	eventWriter := newMockEventWriter()
+
+	err := EnsureForResume(defaultRepoRoot, golemicDir, runID, issueNum, "golemic-dev", mockExec, eventWriter, 0)
+	if err == nil || !strings.Contains(err.Error(), "registered on branch") {
+		t.Fatalf("expected wrong-branch error, got %v", err)
+	}
+	if len(eventWriter.Events()) != 0 {
+		t.Errorf("expected no event on wrong-branch abort, got %d", len(eventWriter.Events()))
+	}
+}
+
+func TestEnsureForResume_RemoteBranchNotFound(t *testing.T) {
+	mockExec := newMockExecutor(
+		execResponse{Stdout: notRegistered, Err: nil},       // worktree list
+		execResponse{Stdout: "", Err: nil},                  // fetch origin
+		execResponse{Stdout: "", Err: errors.New("exit 2")}, // ls-remote --exit-code fails
+	)
+	eventWriter := newMockEventWriter()
+	_, golemicDir, runID, issueNum, _ := testCreateArgs()
+
+	err := EnsureForResume(defaultRepoRoot, golemicDir, runID, issueNum, "golemic-dev", mockExec, eventWriter, 0)
+	if err == nil || !strings.Contains(err.Error(), "REMOTE_BRANCH_NOT_FOUND") {
+		t.Fatalf("expected REMOTE_BRANCH_NOT_FOUND error, got %v", err)
+	}
+	if len(eventWriter.Events()) != 0 {
+		t.Errorf("expected no worktree_created event on failure, got %d", len(eventWriter.Events()))
+	}
+}
+
+func TestEnsureForResume_InvalidIssueNumber(t *testing.T) {
+	mockExec := newMockExecutor()
+	err := EnsureForResume(defaultRepoRoot, "/g", "run", 0, "golemic-dev", mockExec, newMockEventWriter(), 0)
+	if err == nil || !strings.Contains(err.Error(), "INVALID_ISSUE_NUMBER") {
+		t.Fatalf("expected INVALID_ISSUE_NUMBER error, got %v", err)
+	}
+}
