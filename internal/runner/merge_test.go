@@ -824,37 +824,6 @@ func TestVerifyAndPush_NoCI_VerifyFails_MergeFailed_AC008(t *testing.T) { //noli
 }
 
 // ---------------------------------------------------------------------------
-// runVerifyCommand unit tests (P1-1)
-// ---------------------------------------------------------------------------
-
-// TestRunVerifyCommand_CompoundCommand_ExecutedViaShell verifies that compound
-// shell commands (using &&) are passed intact to sh -c, not split by strings.Fields.
-func TestRunVerifyCommand_CompoundCommand_ExecutedViaShell(t *testing.T) {
-	var gotName string
-	var gotArgs []string
-	exec := &fakeExecutor{
-		runFunc: func(name string, args ...string) (string, error) {
-			gotName = name
-			gotArgs = args
-			return "", nil
-		},
-	}
-	r := &Runner{
-		executor: exec,
-		cfg:      &config.Config{VerifyCommand: "echo a && echo b"},
-	}
-	if err := r.runVerifyCommand("/tmp"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if gotName != "sh" {
-		t.Errorf("executor called with %q, want %q", gotName, "sh")
-	}
-	if len(gotArgs) != 2 || gotArgs[0] != "-c" || gotArgs[1] != "echo a && echo b" {
-		t.Errorf("executor args: got %v, want [-c 'echo a && echo b']", gotArgs)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // isBranchUpToDate: non-exit-1 errors propagate (P2-2)
 // ---------------------------------------------------------------------------
 
@@ -1472,7 +1441,7 @@ func TestRunMergePhase_FetchFails_MergeFailed_AC001(t *testing.T) { //nolint:cyc
 }
 
 // AC-002: up-to-date branch + green CI → exactly one gh pr merge --squash, pr_merged event, outcomeSuccess;
-// rebaseBranch and runVerifyCommand must not be invoked.
+// rebaseBranch and the local verify_command (sh -c) must not be invoked.
 func TestRunMergePhase_UpToDate_GreenCI_Merges_AC002(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
 
@@ -1502,7 +1471,7 @@ func TestRunMergePhase_UpToDate_GreenCI_Merges_AC002(t *testing.T) { //nolint:cy
 				return "sha-ac002", nil
 			}
 			if name == "sh" {
-				t.Error("runVerifyCommand must not be called on up-to-date CI-green path (AC-002)")
+				t.Error("local verify_command (sh -c) must not be run on up-to-date CI-green path (AC-002)")
 				return "", nil
 			}
 			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
@@ -1651,7 +1620,7 @@ func TestRunMergePhase_UpToDate_RedCI_MergeFailed_AC004(t *testing.T) { //nolint
 }
 
 // AC-005: up-to-date branch + no CI checks → merge_failed with "required check not reported for PR head";
-// runVerifyCommand and forcePushBranch must not be called.
+// The local verify_command (sh -c) and forcePushBranch must not be called.
 func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
 
@@ -1664,7 +1633,7 @@ func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nol
 				return "", nil // up-to-date
 			}
 			if name == "sh" {
-				t.Error("runVerifyCommand must not be called on up-to-date no_checks path (AC-005)")
+				t.Error("local verify_command (sh -c) must not be run on up-to-date no_checks path (AC-005)")
 				return "", nil
 			}
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
@@ -1743,7 +1712,7 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 				return "sha-local\n", nil
 			}
 			if name == "sh" && args[0] == "-c" {
-				t.Error("runVerifyCommand must not be used as a no-CI fallback after issue #125")
+				t.Error("local verify_command (sh -c) must not be used as a no-CI fallback after issue #125")
 				return "", nil
 			}
 			return "", fmt.Errorf("unexpected Run: %s %v", name, args)
@@ -1913,7 +1882,6 @@ func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeEx
 	}
 	return &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
-			// runVerifyCommand uses RunInDir with "sh -c" (no env).
 			if name == "sh" {
 				if cfg.fallback != nil {
 					return cfg.fallback(name, args...)
