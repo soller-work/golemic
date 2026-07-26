@@ -169,7 +169,7 @@ func (r *Runner) queryCIChecks(prNumber int) (string, []ghCheckItem, error) {
 // the runner waits through the brief window after a force-push before GitHub creates
 // new check run objects for the new commit.
 func (r *Runner) pollCheckRunsForSHA(sha, nwo string, ciTimeout time.Duration) (string, []ghCheckItem, error) {
-	query := func() (string, []ghCheckItem, error) {
+	return r.pollUntilSettled(func() (string, []ghCheckItem, error) {
 		checks, err := r.queryCheckRunsForSHA(nwo, sha)
 		if err != nil {
 			return "", nil, err
@@ -178,8 +178,13 @@ func (r *Runner) pollCheckRunsForSHA(sha, nwo string, ciTimeout time.Duration) (
 			return "pending", nil, nil // CI hasn't started yet for this SHA
 		}
 		return classifyChecks(checks)
-	}
+	}, ciTimeout)
+}
 
+// pollUntilSettled calls query repeatedly until it yields a non-"pending" result
+// (e.g. "green"/"red") or ciTimeout elapses (returning "timeout"). The first query
+// runs synchronously with no initial tick delay.
+func (r *Runner) pollUntilSettled(query func() (string, []ghCheckItem, error), ciTimeout time.Duration) (string, []ghCheckItem, error) {
 	result, failed, err := query()
 	if err != nil {
 		return "", nil, err
@@ -304,33 +309,9 @@ func (r *Runner) ciTimeout() time.Duration {
 // pollCIChecks polls gh pr checks until all complete or ciTimeout expires.
 // Returns result ("green"|"red"|"timeout") and any failed items.
 func (r *Runner) pollCIChecks(prNumber int, ciTimeout time.Duration) (string, []ghCheckItem, error) {
-	result, failed, err := r.queryCIChecks(prNumber)
-	if err != nil {
-		return "", nil, err
-	}
-	if result == "green" || result == "red" {
-		return result, failed, nil
-	}
-
-	ticker := time.NewTicker(r.ciPollInterval())
-	defer ticker.Stop()
-	deadline := time.NewTimer(ciTimeout)
-	defer deadline.Stop()
-
-	for {
-		select {
-		case <-deadline.C:
-			return "timeout", nil, nil
-		case <-ticker.C:
-			result, failed, err = r.queryCIChecks(prNumber)
-			if err != nil {
-				return "", nil, err
-			}
-			if result == "green" || result == "red" {
-				return result, failed, nil
-			}
-		}
-	}
+	return r.pollUntilSettled(func() (string, []ghCheckItem, error) {
+		return r.queryCIChecks(prNumber)
+	}, ciTimeout)
 }
 
 // writeCIWaitFinished appends a ci_wait_finished event to the event log and
