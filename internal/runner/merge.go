@@ -262,18 +262,6 @@ func parseConflictedFiles(out string) []string {
 	return files
 }
 
-// runVerifyCommand runs the configured verify_command in the dev worktree via sh -c so
-// compound commands (&&, ;, pipes) work as expected.
-func (r *Runner) runVerifyCommand(devWT string) error {
-	if r.cfg.VerifyCommand == "" {
-		return fmt.Errorf("verify_command is empty")
-	}
-	if _, err := r.executor.RunInDir(devWT, "sh", "-c", r.cfg.VerifyCommand); err != nil {
-		return fmt.Errorf("verify_command failed: %w", err)
-	}
-	return nil
-}
-
 // forcePushBranch pushes the current branch with --force-with-lease using the dev token.
 func (r *Runner) forcePushBranch(devWT string) error {
 	_, err := r.executor.RunWithEnvInDir(

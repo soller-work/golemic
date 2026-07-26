@@ -50,48 +50,6 @@ func TestReviewerFreshnessMet_False_SM005(t *testing.T) {
 	}
 }
 
-func TestDevDonePredicateMet_True_SM006(t *testing.T) {
-	if !devDonePredicateMet(true) {
-		t.Error("devDonePredicateMet(true) should return true")
-	}
-}
-
-func TestDevDonePredicateMet_False_SM007(t *testing.T) {
-	if devDonePredicateMet(false) {
-		t.Error("devDonePredicateMet(false) should return false")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// terminalOutcome: all existing outcome strings preserved
-// ---------------------------------------------------------------------------
-
-func TestTerminalOutcome_PreservesAllExistingOutcomes_SM008(t *testing.T) {
-	cases := []struct {
-		state DevLoopState
-		want  string
-	}{
-		{StateMerge, outcomeSuccess},
-		{StateDevFailed, outcomeDevFailed},
-		{StateReviewFailed, outcomeReviewFailed},
-		{StateEscalated, outcomeEscalated},
-		{StateMergeFailed, outcomeMergeFailed},
-	}
-	for _, tc := range cases {
-		got := terminalOutcome(tc.state)
-		if got != tc.want {
-			t.Errorf("terminalOutcome(%q) = %q, want %q", tc.state, got, tc.want)
-		}
-	}
-}
-
-func TestTerminalOutcome_UnknownState_MapsToDevFailed_SM009(t *testing.T) {
-	got := terminalOutcome("UNKNOWN_STATE")
-	if got != outcomeDevFailed {
-		t.Errorf("terminalOutcome(unknown) = %q, want %q", got, outcomeDevFailed)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // StateError construction and formatting
 // ---------------------------------------------------------------------------
@@ -184,9 +142,9 @@ func TestOrchestrate_ReviewerNoFreshSubmit_Round2_StaleVerdictNotConsumed_SM013(
 	}
 }
 
-// TestOrchestrate_NormalRun_DevImplementToMerge_SM014 verifies the happy-path sequence:
-// DEV_IMPLEMENT accepted → RUNNER_VERIFY → PR_OPENED → CI_WAIT → REVIEWER_REVIEW_REQUIRED
-// → REVIEW_SUBMITTED → MERGE, returning success.
+// TestOrchestrate_NormalRun_DevImplementToMerge_SM014 verifies the happy path: dev
+// implements and calls gm_dev_done, the runner verifies, opens the PR, CI goes green,
+// the reviewer approves, and the PR auto-merges, returning success.
 func TestOrchestrate_NormalRun_DevImplementToMerge_SM014(t *testing.T) {
 	exec := pingPongExecutor(false, nil)
 	r, logPath, stderr := setupPingPongRunner(t, exec)

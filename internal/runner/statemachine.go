@@ -6,23 +6,9 @@ import "fmt"
 type DevLoopState string
 
 const (
-	// Ordered progression states.
-	StateDevImplement         DevLoopState = "DEV_IMPLEMENT"
-	StateDevDoneReceived      DevLoopState = "DEV_DONE_RECEIVED"
-	StateRunnerVerify         DevLoopState = "RUNNER_VERIFY"
-	StatePROpened             DevLoopState = "PR_OPENED"
-	StateCIWait               DevLoopState = "CI_WAIT"
-	StateReviewerPrecheck     DevLoopState = "REVIEWER_PRECHECK"
-	StateReviewerRequired     DevLoopState = "REVIEWER_REVIEW_REQUIRED"
-	StateReviewSubmitted      DevLoopState = "REVIEW_SUBMITTED"
-	StateDevRetryWithFindings DevLoopState = "DEV_RETRY_WITH_FINDINGS"
-	StateMerge                DevLoopState = "MERGE"
-
-	// Terminal failure states.
-	StateDevFailed    DevLoopState = "DEV_FAILED"
-	StateReviewFailed DevLoopState = "REVIEW_FAILED"
-	StateEscalated    DevLoopState = "ESCALATED"
-	StateMergeFailed  DevLoopState = "MERGE_FAILED"
+	// StateReviewerRequired is the reviewer gate whose exit predicate is
+	// reviewerFreshnessMet; a missing fresh gm_review_submit produces a StateError.
+	StateReviewerRequired DevLoopState = "REVIEWER_REVIEW_REQUIRED"
 
 	// Gate-rejected sub-states, classified by the §10 tree-green criterion.
 	// Both currently route to the bounded LLM gate-retry; #213 redirects
@@ -63,30 +49,4 @@ func classifyDevGate(isTreeGreen bool) DevLoopState {
 // the event log during this round.  A stale prior-round event never satisfies it.
 func reviewerFreshnessMet(hasFreshCurrentRound bool) bool {
 	return hasFreshCurrentRound
-}
-
-// devDonePredicateMet is the exit predicate for DEV_IMPLEMENT and
-// DEV_RETRY_WITH_FINDINGS.  It returns true when the broker captured an accepted
-// gm_dev_done in the current invocation.
-func devDonePredicateMet(hasDevDone bool) bool {
-	return hasDevDone
-}
-
-// terminalOutcome maps a terminal DevLoopState to the caller-visible outcome string,
-// preserving all existing external outcome constants.
-func terminalOutcome(s DevLoopState) string {
-	switch s {
-	case StateMerge:
-		return outcomeSuccess
-	case StateDevFailed:
-		return outcomeDevFailed
-	case StateReviewFailed:
-		return outcomeReviewFailed
-	case StateEscalated:
-		return outcomeEscalated
-	case StateMergeFailed:
-		return outcomeMergeFailed
-	default:
-		return outcomeDevFailed
-	}
 }
