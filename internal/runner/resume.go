@@ -335,6 +335,10 @@ func (r *Runner) resumeOrchestrate(writer worktree.EventWriter, eventLogPath str
 		return outcome
 	}
 
+	if o := r.ensureDevWorktreeForResume(writer); o != "" {
+		return o
+	}
+
 	if synthErr := r.synthesizePROpenedEvent(writer, pr.Number); synthErr != nil {
 		fmt.Fprintf(r.stderr, "resume: failed to write pr_opened event: %v\n", synthErr)
 		return outcomeAborted
@@ -402,6 +406,20 @@ func (r *Runner) resumeCheckPRState(pr *prInfo, writer worktree.EventWriter) (*p
 		fmt.Fprintf(r.stderr, "resume: PR #%d has unexpected state %q\n", pr.Number, pr.State)
 		return nil, outcomeAborted
 	}
+}
+
+// ensureDevWorktreeForResume guarantees a dev worktree on the PR branch exists
+// before the resume flow delegates to functions that operate on devWorktreePath()
+// (runDevRetryAgent, runPreReviewSyncGate, runMergePhase). All git plumbing lives in
+// the worktree package (worktree.EnsureForResume); this only maps failures to the
+// resume outcome. Returns "" on success or outcomeAborted on failure.
+func (r *Runner) ensureDevWorktreeForResume(writer worktree.EventWriter) string {
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	if err := worktree.EnsureForResume(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer, r.turnCounter); err != nil {
+		fmt.Fprintf(r.stderr, "resume: %v\n", err)
+		return outcomeAborted
+	}
+	return ""
 }
 
 // resumeValidate fetches and validates the PR for resume, checking state, remote branch, bot login,
