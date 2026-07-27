@@ -41,6 +41,16 @@ func TestRoundLogScope_ConfigCarriesRoundAndAttempt(t *testing.T) {
 			t.Errorf("reviewer round=%d attempt=%d: cfg.Attempt got %d", tc.round, tc.attempt, cfg.Attempt)
 		}
 	}
+
+	for _, tc := range []struct{ round, attempt int }{{0, 0}, {0, 2}} {
+		cfg := r.buildRebaseConflictAgentConfig("sys.md", "model", worktreeDir, logPath, "prompt", "binary", runsDir, tc.round, tc.attempt)
+		if cfg.Round != tc.round {
+			t.Errorf("rebase round=%d attempt=%d: cfg.Round got %d", tc.round, tc.attempt, cfg.Round)
+		}
+		if cfg.Attempt != tc.attempt {
+			t.Errorf("rebase round=%d attempt=%d: cfg.Attempt got %d", tc.round, tc.attempt, cfg.Attempt)
+		}
+	}
 }
 
 // TestRoundLogScope_TwoAttemptsProduceDistinctFiles verifies that attempt 0 and
