@@ -74,7 +74,6 @@ func (r *Runner) executeDevAgentCfg(gmb *gmbroker.Broker, devWorktreePath, event
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "attempt": attempt, "model": cfg.Model})
 
-	r.writeDevStarted(eventLogPath)
 	activityPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("dev-r%d-a%d.activity.jsonl", round, attempt))
 	stopFollow := followActivity(r.progressRenderer, "dev", activityPath)
 

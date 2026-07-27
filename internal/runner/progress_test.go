@@ -141,7 +141,28 @@ func runOrchestrateWithProgress(t *testing.T, r *Runner, logPath string) string 
 		DevMode:      DevModeInitial,
 	}
 	r.loopCtx = ctx
-	return r.runMachineFrom(loop.StepPrepare, ctx)
+
+	// Build machine with OnTransition that writes step_transition events through ew,
+	// mirroring the production path in Run().
+	var seq int
+	m := r.buildMachine(loop.StepPrepare, func(from loop.StepKey, event loop.EventKey, to loop.StepKey, guarded bool) {
+		seq++
+		if payload, err := eventlog.MarshalStepTransitionPayload(string(from), string(event), string(to), guarded, seq); err == nil {
+			_ = ew.Write(eventlog.Event{
+				Type:    eventlog.EventStepTransition,
+				Ts:      time.Now().Format(time.RFC3339),
+				RunID:   r.runID,
+				TurnID:  r.turnCounter,
+				Payload: payload,
+			})
+		}
+	})
+	final, err := m.Run(ctx)
+	if err != nil {
+		return outcomeDevFailed
+	}
+	outcome, _ := terminalOutcome(final)
+	return outcome
 }
 
 // ---------------------------------------------------------------------------
@@ -169,24 +190,41 @@ func TestProgress_HappyPath(t *testing.T) {
 	}
 
 	stderr := stderrBuf.String()
-	if strings.Contains(stderr, "step_transition") {
-		t.Errorf("step_transition must not be surfaced in stderr:\n%s", stderr)
-	}
 
-	// lifecycle lines appear in the expected relative order
+	// lifecycle lines appear in the expected relative order; the dev worktree is
+	// created during PREPARE, so its line precedes the PREPARE→RUN_DEV transition.
 	wantOrder := []string{
 		"▶ worktree ready (dev)",
-		"▶ dev started",
+		"▶ running dev agent",
 		"▶ dev completed (exit 0)",
+		"▶ waiting for CI",
 		"▶ CI green",
+		"▶ running reviewer",
 		"▶ worktree ready (reviewer)",
 		"▶ reviewer completed (exit 0)",
 		"▶ PR #99 opened",
 		"▶ review: approved",
+		"▶ merging PR",
 		"▶ PR #99 merged",
+		"✔ success",
 	}
 	if !containsInOrder(stderr, wantOrder) {
 		t.Errorf("lifecycle lines not in expected order\nstderr:\n%s\nwant order: %v", stderr, wantOrder)
+	}
+
+	// no fact renders twice — each structural line derived from the state machine
+	// appears exactly once (containsInOrder is a subsequence check and would
+	// tolerate duplicates on its own).
+	for _, line := range wantOrder {
+		if got := strings.Count(stderr, line); got != 1 {
+			t.Errorf("structural line %q must render exactly once, got %d\nstderr:\n%s", line, got, stderr)
+		}
+	}
+
+	// the retired writeDevStarted line must never reappear now that the RUN_DEV
+	// transition line covers it.
+	if strings.Contains(stderr, "dev started") {
+		t.Errorf("retired 'dev started' line must not render (superseded by the RUN_DEV transition line)\nstderr:\n%s", stderr)
 	}
 
 	// Tool call lines appear.

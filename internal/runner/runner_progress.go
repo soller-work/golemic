@@ -1,8 +1,6 @@
 package runner
 
 import (
-	"time"
-
 	"golemic/internal/eventlog"
 	"golemic/internal/progress"
 )
@@ -39,7 +37,7 @@ type eventWriter interface {
 
 func (w *progressEventWriter) Write(event eventlog.Event) error {
 	err := w.inner.Write(event)
-	if err == nil && event.Type != eventlog.EventStepTransition {
+	if err == nil {
 		w.renderer.EmitLifecycle(event)
 	}
 	return err
@@ -62,27 +60,4 @@ func (r *Runner) emitAgentWrittenEvents(eventLogPath string) {
 		}
 	}
 	r.progressScanIndex = len(events)
-}
-
-// writeDevStarted appends a dev_started event to events.jsonl and emits a
-// progress line. Errors are silently dropped (non-fatal).
-func (r *Runner) writeDevStarted(eventLogPath string) {
-	w, err := eventlog.NewWriter(eventLogPath)
-	if err != nil {
-		return
-	}
-	defer w.Close() //nolint:errcheck
-
-	ev := eventlog.Event{
-		Type:   eventlog.EventDevStarted,
-		Ts:     time.Now().Format(time.RFC3339),
-		RunID:  r.runID,
-		TurnID: r.turnCounter,
-	}
-	if writeErr := w.Write(ev); writeErr != nil {
-		return
-	}
-	if r.progressRenderer != nil {
-		r.progressRenderer.EmitLifecycle(ev)
-	}
 }

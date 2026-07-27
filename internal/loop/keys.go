@@ -37,3 +37,24 @@ const (
 	EventAgentStalled     EventKey = "AGENT_STALLED"
 	EventAgentAborted     EventKey = "AGENT_ABORTED"
 )
+
+// AllSteps returns every declared StepKey. A new step must be added here.
+func AllSteps() []StepKey {
+	return []StepKey{
+		StepPrepare, StepRunDev, StepSyncCI, StepRunReviewer, StepMergePR,
+		StepTerminalSuccess, StepTerminalDevFailed, StepTerminalReviewFailed,
+		StepTerminalEscalated, StepTerminalMergeFailed, StepTerminalTimeout,
+		StepTerminalStalled, StepTerminalAborted, StepTerminalSkipped,
+	}
+}
+
+// AllEvents returns every declared EventKey. A new event must be added here.
+func AllEvents() []EventKey {
+	return []EventKey{
+		EventReady, EventNotEligible, EventPrepareFailed, EventDevDone,
+		EventDevGateRejected, EventDevFailed, EventCIGreen, EventCIFailed,
+		EventReviewApproved, EventChangesRequested, EventPrecheckFailed,
+		EventReviewFailed, EventMerged, EventMergeFailed,
+		EventAgentTimedOut, EventAgentStalled, EventAgentAborted,
+	}
+}

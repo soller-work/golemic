@@ -6,18 +6,16 @@ import (
 	"testing"
 
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 )
 
 // TestFormatLifecycleLine_Coverage checks that every type in AllEventTypes()
-// produces a known, non-empty line per BR-P4.
+// produces a non-empty line per BR-P4.
 func TestFormatLifecycleLine_Coverage(t *testing.T) {
 	for _, evType := range eventlog.AllEventTypes() {
 		line := FormatLifecycleLine(eventlog.Event{Type: evType})
 		if line == "" {
 			t.Errorf("event type %q produced empty line", evType)
-		}
-		if !strings.HasPrefix(line, "▶ ") {
-			t.Errorf("event type %q line does not start with '▶ ': %q", evType, line)
 		}
 	}
 }
@@ -43,13 +41,6 @@ func TestFormatLifecycleLine_WorktreeCreated(t *testing.T) {
 	payload, _ := json.Marshal(map[string]string{"role": "dev"})
 	line := FormatLifecycleLine(eventlog.Event{Type: eventlog.EventWorktreeCreated, Payload: payload})
 	if line != "▶ worktree ready (dev)" {
-		t.Errorf("unexpected line: %q", line)
-	}
-}
-
-func TestFormatLifecycleLine_DevStarted(t *testing.T) {
-	line := FormatLifecycleLine(eventlog.Event{Type: eventlog.EventDevStarted})
-	if line != "▶ dev started" {
 		t.Errorf("unexpected line: %q", line)
 	}
 }
@@ -103,6 +94,59 @@ func TestFormatLifecycleLine_RunFinished(t *testing.T) {
 	line := FormatLifecycleLine(eventlog.Event{Type: eventlog.EventRunFinished, Payload: payload})
 	if line != "▶ run finished (success)" {
 		t.Errorf("unexpected line: %q", line)
+	}
+}
+
+func TestFormatStepTransitionLine_Normal(t *testing.T) {
+	line := FormatStepTransitionLine(string(loop.StepPrepare), string(loop.EventReady), string(loop.StepRunDev), false)
+	if line != "▶ running dev agent" {
+		t.Errorf("got %q, want %q", line, "▶ running dev agent")
+	}
+}
+
+func TestFormatStepTransitionLine_GuardedSelfLoop(t *testing.T) {
+	line := FormatStepTransitionLine(string(loop.StepRunDev), string(loop.EventDevGateRejected), string(loop.StepRunDev), true)
+	if line != "↻ running dev agent (gate rejected)" {
+		t.Errorf("got %q, want %q", line, "↻ running dev agent (gate rejected)")
+	}
+}
+
+func TestFormatStepTransitionLine_TerminalSuccess(t *testing.T) {
+	line := FormatStepTransitionLine(string(loop.StepMergePR), string(loop.EventMerged), string(loop.StepTerminalSuccess), false)
+	if line != "✔ success" {
+		t.Errorf("got %q, want %q", line, "✔ success")
+	}
+}
+
+func TestFormatStepTransitionLine_TerminalFailure(t *testing.T) {
+	line := FormatStepTransitionLine(string(loop.StepRunDev), string(loop.EventDevFailed), string(loop.StepTerminalDevFailed), false)
+	if line != "✖ dev failed" {
+		t.Errorf("got %q, want %q", line, "✖ dev failed")
+	}
+}
+
+func TestFormatStepTransitionLine_UnknownKeyFallback(t *testing.T) {
+	line := FormatStepTransitionLine("FROM", "EVENT", "FUTURE_STEP", false)
+	if line != "▶ FUTURE_STEP" {
+		t.Errorf("got %q, want %q", line, "▶ FUTURE_STEP")
+	}
+}
+
+func TestFormatLifecycleLine_StepTransitionWithPayload(t *testing.T) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"from": string(loop.StepPrepare), "event": string(loop.EventReady),
+		"to": string(loop.StepRunDev), "guarded": false, "seq": 1,
+	})
+	line := FormatLifecycleLine(eventlog.Event{Type: eventlog.EventStepTransition, Payload: payload})
+	if line != "▶ running dev agent" {
+		t.Errorf("got %q, want %q", line, "▶ running dev agent")
+	}
+}
+
+func TestFormatLifecycleLine_StepTransitionEmptyPayloadFallback(t *testing.T) {
+	line := FormatLifecycleLine(eventlog.Event{Type: eventlog.EventStepTransition})
+	if line != "▶ step_transition" {
+		t.Errorf("got %q, want %q", line, "▶ step_transition")
 	}
 }
 
