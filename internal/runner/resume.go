@@ -330,6 +330,14 @@ func (r *Runner) resumeOrchestrate(writer worktree.EventWriter, eventLogPath str
 		timeout = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 	}
 
+	r.loopCtx = &RunContext{
+		GolemicDir:   golemicDir,
+		EventLogPath: eventLogPath,
+		Timeout:      timeout,
+		ParentSpanID: runSpanID,
+		MaxRounds:    r.cfg.MaxReviewRounds,
+	}
+
 	pr, botLogin, outcome := r.resumeValidate(writer)
 	if outcome != "" {
 		return outcome
@@ -410,7 +418,7 @@ func (r *Runner) resumeCheckPRState(pr *prInfo, writer worktree.EventWriter) (*p
 
 // ensureDevWorktreeForResume guarantees a dev worktree on the PR branch exists
 // before the resume flow delegates to functions that operate on devWorktreePath()
-// (runDevRetryAgent, runPreReviewSyncGate, runMergePhase). All git plumbing lives in
+// (runDevTurn, runPreReviewSyncGate, runMergePhase). All git plumbing lives in
 // the worktree package (worktree.EnsureForResume); this only maps failures to the
 // resume outcome. Returns "" on success or outcomeAborted on failure.
 func (r *Runner) ensureDevWorktreeForResume(writer worktree.EventWriter) string {
@@ -518,7 +526,10 @@ func (r *Runner) resumeHandleChangesRequested(
 	}
 
 	r.turnCounter++
-	if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, findingsJSON, runSpanID, botRounds+1); o != outcomeSuccess {
+	r.loopCtx.Round = botRounds + 1
+	r.loopCtx.Findings = findings
+	r.loopCtx.FindingsJSON = findingsJSON
+	if o := r.runDevTurn(r.loopCtx, DevModeRetryWithFindings); o != outcomeSuccess {
 		return o
 	}
 

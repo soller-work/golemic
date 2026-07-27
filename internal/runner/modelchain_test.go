@@ -67,7 +67,7 @@ func TestRunDevAgent_ChainExhausted_NonZeroAgentCompleted(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	if outcome != outcomeDevFailed {
 		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
@@ -176,7 +176,7 @@ func TestRunDevAgent_ChainExhausted_NoPR_NoComment(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	if outcome != outcomeDevFailed {
 		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
@@ -195,7 +195,7 @@ func TestRunDevAgent_ChainExhausted_DiagnosticsContainModels(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	msg := stderr.String()
 	if !strings.Contains(msg, "model-a") || !strings.Contains(msg, "model-b") {
@@ -224,7 +224,7 @@ func TestRunDevAgent_ResolvesModelChainFromAgentFile(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	expectedChain := "model-a, model-b, model-c"
 	if capturedCfg.Model != expectedChain {
@@ -273,7 +273,7 @@ func TestRunDevAgent_EmbeddedDefaultUsedWhenNoOverride(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	if capturedCfg.Model == "" {
 		t.Error("model chain must be non-empty when using embedded default")

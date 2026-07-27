@@ -9,12 +9,6 @@ const (
 	// StateReviewerRequired is the reviewer gate whose exit predicate is
 	// reviewerFreshnessMet; a missing fresh gm_review_submit produces a StateError.
 	StateReviewerRequired DevLoopState = "REVIEWER_REVIEW_REQUIRED"
-
-	// Gate-rejected sub-states, classified by the §10 tree-green criterion.
-	// Both currently route to the bounded LLM gate-retry; #213 redirects
-	// StateGateRejectedGreen to deterministic finalize.
-	StateGateRejectedGreen DevLoopState = "GATE_REJECTED_GREEN"
-	StateGateRejectedRed   DevLoopState = "GATE_REJECTED_RED"
 )
 
 // StateError is produced when a required exit predicate is unmet at a state boundary.
@@ -28,19 +22,6 @@ type StateError struct {
 
 func (e *StateError) Error() string {
 	return fmt.Sprintf("state %s: predicate %q unmet: %s", e.State, e.Predicate, e.Message)
-}
-
-// classifyDevGate maps the §10 tree-green criterion to the gate-rejected transition.
-// isTreeGreen must equal gmbroker.Broker.IsTreeGreen(): last gm_project_check OK and
-// current working-tree fingerprint matches.
-//
-// Returns StateGateRejectedGreen when the tree is green (slot for #213 to redirect to
-// deterministic finalize) or StateGateRejectedRed otherwise.
-func classifyDevGate(isTreeGreen bool) DevLoopState {
-	if isTreeGreen {
-		return StateGateRejectedGreen
-	}
-	return StateGateRejectedRed
 }
 
 // reviewerFreshnessMet is the exit predicate for REVIEWER_REVIEW_REQUIRED.

@@ -73,14 +73,14 @@ func TestRoundLogScope_TwoAttemptsProduceDistinctFiles(t *testing.T) {
 		}
 
 		// Exit 0 without satisfying the broker gate → runner will classify this as
-		// outcomeDevGateRejected and retry with attempt+1.
+		// EventDevGateRejected and retry with attempt+1.
 		return 0, agent.TranscriptPaths{Stdout: activityPath, Stderr: stderrPath}, nil
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	// All attempts will produce outcomeDevGateRejected so runDevAgent returns outcomeDevFailed,
+	// All attempts will produce EventDevGateRejected so runDevTurn returns outcomeDevFailed,
 	// but no git operations are needed.
-	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	if callCount < 2 {
 		t.Fatalf("expected at least 2 agent invocations (attempt 0 and 1), got %d", callCount)
@@ -122,12 +122,12 @@ func TestRoundLogScope_AgentCompletedEventHasPaths(t *testing.T) {
 			fmt.Sprintf("%s-r%d-a%d.activity.jsonl", cfg.Role, cfg.Round, cfg.Attempt))
 		stderrPath := filepath.Join(cfg.RunsDir, cfg.RunID,
 			fmt.Sprintf("%s-r%d-a%d.stderr.log", cfg.Role, cfg.Round, cfg.Attempt))
-		// Exit 0 without broker gate → outcomeDevGateRejected; writeAgentCompleted still fires.
+		// Exit 0 without broker gate → EventDevGateRejected; writeAgentCompleted still fires.
 		return 0, agent.TranscriptPaths{Stdout: activityPath, Stderr: stderrPath}, nil
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	events := readAgentCompletedEvents(t, logPath)
 	if len(events) == 0 {

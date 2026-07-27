@@ -146,7 +146,7 @@ func TestRunDevAgent_NonZeroExit_ReturnsDevFailed_AC002(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	if outcome != outcomeDevFailed {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeDevFailed)
@@ -173,7 +173,7 @@ func TestRunDevAgent_NonZeroExit_ReviewerNotCalled_AC002(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
@@ -233,7 +233,7 @@ func TestRunDevAgent_ExitCodeRecordedInEventLog_AC003(t *testing.T) {
 			})
 
 			golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-			r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+			r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 			// Zero-exit agents that skip gm_dev_done are retried up to 3 times;
 			// non-zero exits abort immediately and write exactly 1 event.
@@ -328,7 +328,7 @@ func TestRunDevAgent_NonZeroExit_DiagnosticNoStderrContent_AC005(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runDevAgent(golemicDir, logPath, 5*time.Minute, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
 
 	msg := stderr.String()
 	if strings.Contains(msg, secret) {

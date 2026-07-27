@@ -19,11 +19,6 @@ const (
 	outcomeSkipped      = "skipped"
 	branchPrefix        = "golemic/issue-"
 
-	// outcomeDevGateRejected is an internal signal (never written to the event log)
-	// returned when the §10 broker gate rejected gm_dev_done. The caller retries
-	// the dev agent with a gate-explaining prompt.
-	outcomeDevGateRejected = "dev_gate_rejected"
-
 	// outcomePrecheckDevRetryDone is an internal signal (never written to the event log)
 	// returned when a precheck-!ok round completes a deterministic dev-retry and the
 	// ping-pong loop should advance to the next reviewer round.
