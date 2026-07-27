@@ -1011,14 +1011,6 @@ func (b *Broker) getComputeFingerprintFn() func(string) (string, error) {
 	return fingerprintAfterVerify
 }
 
-// SetCBMFetchSchemaFn replaces the schema-fetch function (injectable for tests).
-func (b *Broker) SetCBMFetchSchemaFn(fn func(sockPath string) (map[string]map[string]struct{}, error)) {
-	if b == nil {
-		return
-	}
-	b.cbmFetchSchemaFn = fn
-}
-
 // getCBMSchema returns the cached tools/list schema for the CBM broker.
 // Fetch failures degrade gracefully (BR-7): returns nil, err and callers skip validation.
 func (b *Broker) getCBMSchema(sockPath string) (map[string]map[string]struct{}, error) {
