@@ -336,6 +336,7 @@ func (r *Runner) resumeOrchestrate(writer worktree.EventWriter, eventLogPath str
 		Timeout:      timeout,
 		ParentSpanID: runSpanID,
 		MaxRounds:    r.cfg.MaxReviewRounds,
+		Writer:       writer,
 	}
 
 	pr, botLogin, outcome := r.resumeValidate(writer)

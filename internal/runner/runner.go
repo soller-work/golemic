@@ -26,6 +26,7 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 	"golemic/internal/preflight"
 	"golemic/internal/progress"
 	"golemic/internal/telemetry"
@@ -571,6 +572,7 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 		ParentSpanID: runSpanID,
 		Round:        1,
 		MaxRounds:    r.cfg.MaxReviewRounds,
+		Writer:       writer,
 	}
 	devOutcome := r.runDevTurn(r.loopCtx, DevModeInitial)
 	if devOutcome != outcomeSuccess {
@@ -596,49 +598,40 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeoutDuration, runSpanID, false)
 }
 
-// pingPongLoop runs the bounded reviewer ping-pong loop (up to maxRounds).
+// pingPongLoop is a thin adapter around stepRunReviewer; deleted in Slice 4.
 func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, cleanupBeforeFirstReviewerRound bool) string {
-	maxRounds := r.cfg.MaxReviewRounds
-
-	prNumber, err := r.getPRNumber(eventLogPath)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: failed to get PR number for sweep: %v\n", err) //nolint:errcheck
-		return outcomeReviewFailed
-	}
-
-	cleanupReviewerBeforeNextRound := cleanupBeforeFirstReviewerRound
-	round := 1
+	ctx := r.loopCtx
+	ctx.Writer = writer
+	ctx.ReviewerWorktreeExists = cleanupBeforeFirstReviewerRound
 	for {
-		reviewerWT, outcome := r.prepareReviewerWorktree(golemicDir, writer, runSpanID, cleanupReviewerBeforeNextRound)
-		if outcome != "" {
-			return outcome
-		}
-		cleanupReviewerBeforeNextRound = true
-
-		// Record the PR head SHA before the reviewer runs so we can bind the verdict to it.
-		roundHeadSHA, err := r.getPRHeadSHA(prNumber)
-		if err != nil {
-			fmt.Fprintf(r.stderr, "review_failed: failed to get PR head SHA for round %d: %v\n", round, err) //nolint:errcheck
+		switch ev := r.stepRunReviewer(ctx); ev {
+		case loop.EventReviewApproved:
+			return r.runMergePhase(writer, eventLogPath)
+		case loop.EventChangesRequested, loop.EventPrecheckFailed:
+			if ctx.Round >= ctx.MaxRounds {
+				return outcomeEscalated
+			}
+			ctx.Round++ // advance to next round before dev-retry
+			r.turnCounter++
+			if o := r.runDevTurn(ctx, DevModeRetryWithFindings); o != outcomeSuccess {
+				return o
+			}
+			prNumber, prErr := r.getPRNumber(ctx.EventLogPath)
+			if prErr != nil {
+				fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: get PR number: %v\n", prErr) //nolint:errcheck
+				return outcomeDevFailed
+			}
+			if o := r.runPreReviewSyncGate(writer, prNumber, ctx.EventLogPath, ctx.Timeout); o != outcomeSuccess {
+				return o
+			}
+		case loop.EventReviewFailed:
 			return outcomeReviewFailed
-		}
-		// Freshness anchor: count review_submitted events before the reviewer runs
-		// so finishReviewerRound can detect whether a fresh verdict was recorded.
-		countBefore := r.countReviewSubmittedEvents(eventLogPath)
-
-		finalState, outcome := r.runReviewerAttempts(golemicDir, reviewerWT, eventLogPath, timeout, runSpanID, round, prNumber, maxRounds)
-		// Precheck-!ok path: dev-retry already ran; advance to next reviewer round.
-		if outcome == outcomePrecheckDevRetryDone {
-			round++
-			cleanupReviewerBeforeNextRound = true
-			continue
-		}
-		if outcome != "" {
-			return outcome
-		}
-
-		next, outcome := r.finishReviewerRound(finalState, eventLogPath, golemicDir, writer, timeout, runSpanID, maxRounds, &round, countBefore, roundHeadSHA)
-		if !next {
-			return outcome
+		case loop.EventAgentTimedOut:
+			return outcomeTimeout
+		case loop.EventAgentStalled:
+			return outcomeStalled
+		case loop.EventAgentAborted:
+			return outcomeAborted
 		}
 	}
 }
@@ -661,196 +654,10 @@ func (r *Runner) prepareReviewerWorktree(golemicDir string, writer worktree.Even
 	return filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum)), ""
 }
 
-func (r *Runner) runReviewerAttempts(golemicDir, reviewerWT, eventLogPath string, timeout time.Duration, runSpanID string, round, prNumber, maxRounds int) (*reviewerInvocationState, string) {
-	// Inner reviewer-attempt loop: bounded to maxReviewerAttempts per round (BR-6).
-	// On an invalid approved verdict, the runner preserves the Pending Review and
-	// restarts the reviewer without sweeping (BR-8).
-	const maxReviewerAttempts = 3 // 1 initial + 2 retries
-	prevGateRejected := false
-	var prevGateMsg string
-	var finalState *reviewerInvocationState
-
-	for attempt := 0; attempt < maxReviewerAttempts; attempt++ {
-		if !prevGateRejected {
-			// BR-001: sweep orphaned pending reviews — not for gate-rejection retries (BR-8).
-			if err := r.sweepPendingReviews(prNumber); err != nil {
-				fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
-				return nil, outcomeReviewFailed
-			}
-		}
-
-		// §11: run reviewer precheck before each attempt.
-		precheckBlock, precheckResult, precheckErr := r.runReviewerPrecheck(reviewerWT, eventLogPath, runSpanID)
-		if precheckErr != nil {
-			fmt.Fprintf(r.stderr, "review_failed: %v\n", precheckErr) //nolint:errcheck
-			return nil, outcomeReviewFailed
-		}
-
-		// BR-P1/BR-P2: precheck !ok → skip reviewer LLM; drive deterministic dev-retry.
-		if precheckNotOK(precheckResult) {
-			return r.handlePrecheckFailure(golemicDir, eventLogPath, timeout, runSpanID, round, maxRounds, precheckResult)
-		}
-
-		// Pass gate-retry reason if this is a retry after a rejected approval.
-		var gateRetryReason string
-		if prevGateRejected {
-			gateRetryReason = prevGateMsg
-		}
-
-		outcome, state := r.runReviewerAgent(golemicDir, eventLogPath, timeout, runSpanID, round, attempt, precheckBlock, precheckResult, gateRetryReason)
-		finalState = state
-
-		if reviewGateRejected(state) {
-			prevGateRejected = true
-			prevGateMsg = state.reviewSubmitGateMsg
-			if attempt == maxReviewerAttempts-1 {
-				fmt.Fprintf(r.stderr, "review_failed: reviewer gate rejected all %d attempts for this round\n", maxReviewerAttempts) //nolint:errcheck
-				return nil, outcomeReviewFailed
-			}
-			continue // retry without sweeping the Pending Review (BR-8)
-		}
-
-		if outcome != outcomeSuccess {
-			return nil, outcome
-		}
-		break
-	}
-
-	return finalState, ""
-}
-
 // precheckNotOK reports whether the precheck result indicates a !ok precheck.
 func precheckNotOK(r *reviewerPrecheckResult) bool { return r != nil && !r.OK }
 
 // reviewGateRejected reports whether the reviewer invocation was gate-rejected.
 func reviewGateRejected(s *reviewerInvocationState) bool {
 	return s != nil && s.reviewSubmitGateRejected
-}
-
-// handlePrecheckFailure is the BR-P1/P2/P3/P4 handler for a precheck !ok result.
-// It writes a synthetic review_submitted event, escalates if MaxReviewRounds is
-// exhausted, or drives one deterministic dev-retry round.
-func (r *Runner) handlePrecheckFailure(golemicDir, eventLogPath string, timeout time.Duration, runSpanID string, round, maxRounds int, res *reviewerPrecheckResult) (*reviewerInvocationState, string) {
-	if err := r.writePrecheckReviewSubmittedEvent(eventLogPath, round); err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: write precheck review_submitted: %v\n", err) //nolint:errcheck
-		return nil, outcomeReviewFailed
-	}
-	// BR-P3: count against MaxReviewRounds; escalate if exhausted.
-	roundCount := r.countReviewSubmittedEvents(eventLogPath)
-	if roundCount >= maxRounds {
-		r.postEscalationCommentWithSpan(eventLogPath, runSpanID, roundCount)
-		return nil, outcomeEscalated
-	}
-	// BR-P4: synthesize findings encoding failure class + output tail.
-	findings := buildPrecheckFindings(res)
-	r.turnCounter++
-	r.loopCtx.Round = round + 1
-	r.loopCtx.Findings = findings
-	r.loopCtx.FindingsJSON = ""
-	if o := r.runDevTurn(r.loopCtx, DevModeRetryWithFindings); o != outcomeSuccess {
-		return nil, o
-	}
-	return nil, outcomePrecheckDevRetryDone
-}
-
-// checkAndSubmitReview enforces the REVIEWER_REVIEW_REQUIRED exit predicate and, when
-// satisfied, submits the review via GitHub and writes the review_submitted event.
-// Returns a non-empty outcome string on failure, or empty string on success.
-func (r *Runner) checkAndSubmitReview(finalState *reviewerInvocationState, eventLogPath string, countBefore, round int, roundHeadSHA string) string {
-	hasBrokerSubmit := finalState != nil && finalState.reviewSubmitParams != nil
-	countAfter := r.countReviewSubmittedEvents(eventLogPath)
-	if !reviewerFreshnessMet(hasBrokerSubmit || countAfter > countBefore) {
-		stateErr := &StateError{
-			State:     StateReviewerRequired,
-			Predicate: "gm_review_submit",
-			Message:   "no fresh gm_review_submit recorded in this round",
-		}
-		fmt.Fprintf(r.stderr, "review_failed: %v\n", stateErr) //nolint:errcheck
-		return outcomeReviewFailed
-	}
-	if err := r.submitReviewAndWriteEvent(finalState, eventLogPath, round, roundHeadSHA); err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: %v\n", err) //nolint:errcheck
-		return outcomeReviewFailed
-	}
-	return ""
-}
-
-func (r *Runner) finishReviewerRound(finalState *reviewerInvocationState, eventLogPath, golemicDir string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, maxRounds int, round *int, countBefore int, roundHeadSHA string) (bool, string) {
-	if outcome := r.checkAndSubmitReview(finalState, eventLogPath, countBefore, *round, roundHeadSHA); outcome != "" {
-		return false, outcome
-	}
-
-	reviewerWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d-review", r.issueNum))
-	isDirty, err := worktree.IsDirty(reviewerWorktreePath, r.executor)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: failed to check dirty status: %v\n", err) //nolint:errcheck
-		return false, outcomeReviewFailed
-	}
-	if isDirty {
-		fmt.Fprintf(r.stderr, "review_failed: reviewer worktree has uncommitted changes\n") //nolint:errcheck
-		return false, outcomeReviewFailed
-	}
-
-	next, outcome := r.handleVerdict(eventLogPath, golemicDir, runSpanID, timeout, maxRounds, round, roundHeadSHA)
-	if !next && outcome == outcomeSuccess {
-		return false, r.runMergePhase(writer, eventLogPath)
-	}
-	if next {
-		// Pre-review sync gate: ensure the dev branch is up to date with origin/main
-		// and CI is green before the next reviewer round.
-		prNumber, prErr := r.getPRNumber(eventLogPath)
-		if prErr != nil {
-			fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: get PR number: %v\n", prErr) //nolint:errcheck
-			return false, outcomeDevFailed
-		}
-		if o := r.runPreReviewSyncGate(writer, prNumber, eventLogPath, timeout); o != outcomeSuccess {
-			return false, o
-		}
-	}
-	return next, outcome
-}
-
-// handleVerdict processes the latest review verdict and returns (continueLoop, outcome).
-// When continueLoop is true, outcome is empty and the caller should loop again.
-func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeout time.Duration, maxRounds int, round *int, roundHeadSHA string) (continueLoop bool, outcome string) {
-	verdict, err := r.latestReviewVerdict(eventLogPath, *round, roundHeadSHA)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: review_submitted event missing or invalid\n") //nolint:errcheck
-		return false, outcomeReviewFailed
-	}
-
-	roundCount := r.countReviewSubmittedEvents(eventLogPath)
-
-	switch verdict {
-	case "approved":
-		return false, outcomeSuccess
-	case "changes_requested":
-		if roundCount >= maxRounds {
-			r.postEscalationCommentWithSpan(eventLogPath, runSpanID, roundCount)
-			return false, outcomeEscalated
-		}
-		findings, bodyErr := r.latestReviewBody(eventLogPath)
-		if bodyErr != nil || findings == "" {
-			fmt.Fprintf(r.stderr, "review_failed: EMPTY_FINDINGS: changes_requested review has an empty body\n") //nolint:errcheck
-			return false, outcomeReviewFailed
-		}
-		// BR-002: load inline comments and build FindingsJSON for dev-retry prompt
-		findingsJSON, findingsErr := r.buildFindingsJSON(eventLogPath)
-		if findingsErr != nil {
-			fmt.Fprintf(r.stderr, "review_failed: %v\n", findingsErr) //nolint:errcheck
-			return false, outcomeReviewFailed
-		}
-		*round++
-		r.turnCounter++ // each dev-retry round gets its own turn
-		r.loopCtx.Round = *round
-		r.loopCtx.Findings = findings
-		r.loopCtx.FindingsJSON = findingsJSON
-		if o := r.runDevTurn(r.loopCtx, DevModeRetryWithFindings); o != outcomeSuccess {
-			return false, o
-		}
-		return true, ""
-	default:
-		fmt.Fprintf(r.stderr, "review_failed: unknown verdict %q\n", verdict) //nolint:errcheck
-		return false, outcomeReviewFailed
-	}
 }

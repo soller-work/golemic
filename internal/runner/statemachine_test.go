@@ -14,35 +14,19 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Pure predicate unit tests
-// ---------------------------------------------------------------------------
-
-func TestReviewerFreshnessMet_True_SM004(t *testing.T) {
-	if !reviewerFreshnessMet(true) {
-		t.Error("reviewerFreshnessMet(true) should return true")
-	}
-}
-
-func TestReviewerFreshnessMet_False_SM005(t *testing.T) {
-	if reviewerFreshnessMet(false) {
-		t.Error("reviewerFreshnessMet(false) should return false")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // StateError construction and formatting
 // ---------------------------------------------------------------------------
 
-func TestStateError_Error_ContainsStatePredicateMessage_SM010(t *testing.T) {
-	e := &StateError{
-		State:     StateReviewerRequired,
-		Predicate: "gm_review_submit",
-		Message:   "no fresh submission",
+func TestStateError_ReviewerReviewRequired_SM010(t *testing.T) {
+	e := &loop.StateError{
+		Step:  loop.StepRunReviewer,
+		Event: loop.EventReviewFailed,
+		Msg:   "predicate \"gm_review_submit\" unmet: no fresh gm_review_submit recorded in this round",
 	}
 	got := e.Error()
-	for _, want := range []string{string(StateReviewerRequired), "gm_review_submit", "no fresh submission"} {
+	for _, want := range []string{string(loop.StepRunReviewer), "gm_review_submit", "no fresh"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("StateError.Error() missing %q: %q", want, got)
+			t.Errorf("loop.StateError.Error() missing %q: %q", want, got)
 		}
 	}
 }
@@ -85,8 +69,8 @@ func TestOrchestrate_ReviewerNoFreshSubmit_Round1_StateError_SM012(t *testing.T)
 	if !strings.Contains(stderrStr, "gm_review_submit") {
 		t.Errorf("expected StateError mentioning gm_review_submit in stderr, got: %s", stderrStr)
 	}
-	if !strings.Contains(stderrStr, string(StateReviewerRequired)) {
-		t.Errorf("expected %q in stderr, got: %s", StateReviewerRequired, stderrStr)
+	if !strings.Contains(stderrStr, string(loop.StepRunReviewer)) {
+		t.Errorf("expected %q in stderr, got: %s", loop.StepRunReviewer, stderrStr)
 	}
 }
 

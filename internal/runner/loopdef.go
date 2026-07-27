@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"golemic/internal/loop"
+	"golemic/internal/worktree"
 )
 
 // DevMode distinguishes the first dev run from a reviewer-directed retry.
@@ -49,6 +50,13 @@ type RunContext struct {
 	// Findings and FindingsJSON carry reviewer feedback into the dev-retry prompt.
 	Findings     string
 	FindingsJSON string
+
+	// Writer is the event writer used for worktree-creation events.
+	Writer worktree.EventWriter
+
+	// ReviewerWorktreeExists tracks whether a reviewer worktree was already
+	// created in this session so subsequent rounds clean it up first.
+	ReviewerWorktreeExists bool
 }
 
 // loopTerminals returns the set of terminal steps.
