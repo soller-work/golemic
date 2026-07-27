@@ -169,14 +169,14 @@ func Load(repoRoot string) (*Config, error) {
 			config.TimeoutSeconds, configPath)
 	}
 
-	// Extract telemetry.enabled (optional; default true per BR-003 / D-007)
+	// Extract telemetry.enabled (optional; default true)
 	if raw.Telemetry != nil && raw.Telemetry.Enabled != nil {
 		config.Telemetry.Enabled = *raw.Telemetry.Enabled
 	} else {
 		config.Telemetry.Enabled = true
 	}
 
-	// Extract codebase_memory.enabled (optional; default true per BR-C4)
+	// Extract codebase_memory.enabled (optional; default true)
 	if raw.CodebaseMemory != nil && raw.CodebaseMemory.Enabled != nil {
 		config.CodebaseMemory.Enabled = *raw.CodebaseMemory.Enabled
 	} else {

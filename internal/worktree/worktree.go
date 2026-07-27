@@ -63,7 +63,7 @@ func configureWorktreeGit(executor preflight.Executor, wtPath, login string) err
 //  6. write worktree_created event with role: dev
 //
 // If any step fails, the partial worktree is left in place for debugging
-// (no cleanup is called — see BR-005).
+// (no cleanup is called).
 func Create(repoRoot, golemicDir, runID string, issueNumber int, botLogin string, executor preflight.Executor, eventWriter EventWriter, turnID int) error {
 	if issueNumber <= 0 {
 		return fmt.Errorf("INVALID_ISSUE_NUMBER: %d", issueNumber)
@@ -342,8 +342,8 @@ func reviewerWorktreePath(golemicDir string, issueNumber int) string {
 
 // Cleanup removes the worktree and its local branch for the given issue.
 //
-// This is called only on success outcome (BR-004 / §2.11). On errors the
-// partial worktree is left in place for debugging (BR-005).
+// This is called only on success outcome. On errors the
+// partial worktree is left in place for debugging.
 func Cleanup(repoRoot, golemicDir string, issueNumber int, executor preflight.Executor) error {
 	wtPath := worktreePath(golemicDir, issueNumber)
 	branch := branchName(issueNumber)

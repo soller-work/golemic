@@ -55,7 +55,7 @@ type RunHealth struct {
 // Returns LivenessAlive, LivenessDead, or LivenessIndeterminate.
 type LivenessProbe func(pid int) string
 
-// OsLivenessProbe is the production liveness probe using signal 0 (BR-008, SE-001).
+// OsLivenessProbe is the production liveness probe using signal 0.
 func OsLivenessProbe(pid int) string {
 	p, err := os.FindProcess(pid)
 	if err != nil {
@@ -185,7 +185,7 @@ func (c *Classifier) classify(runID string, issue int, ev eventsData, tel *telem
 		pid = tel.RunSpanPID
 	}
 
-	// BR-001 / BR-002: terminal states from events.jsonl
+	// terminal states from events.jsonl
 	if ev.FinishedOutcome != "" {
 		status := StatusFailed
 		if ev.FinishedOutcome == "success" {
@@ -203,7 +203,7 @@ func (c *Classifier) classify(runID string, issue int, ev eventsData, tel *telem
 		}
 	}
 
-	// BR-007: no telemetry or no pid → indeterminate liveness, events-only fallback
+	// no telemetry or no pid → indeterminate liveness, events-only fallback
 	if tel == nil || pid == nil {
 		return RunHealth{
 			RunID: runID, Issue: issue,
@@ -213,7 +213,7 @@ func (c *Classifier) classify(runID string, issue int, ev eventsData, tel *telem
 		}
 	}
 
-	// BR-003 / BR-004 / BR-005: classify by liveness and open-span age
+	// classify by liveness and open-span age
 	liveness := c.probe()(*pid)
 	switch liveness {
 	case LivenessDead:
@@ -347,7 +347,7 @@ func readTelemetry(path string) *telemetryData {
 }
 
 // parseTelemetryRecords reads JSONL records from r, tolerating a partial/malformed
-// last line (BR-007, mid-write resilience). Returns nil on scanner error.
+// last line (mid-write resilience). Returns nil on scanner error.
 func parseTelemetryRecords(r io.Reader) []telemetry.Record {
 	var records []telemetry.Record
 	scanner := bufio.NewScanner(r)

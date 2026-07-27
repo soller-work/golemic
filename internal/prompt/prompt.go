@@ -394,7 +394,7 @@ func RenderReviewerGateRetry(gateReason string, prNumber int, issue Issue, verif
 // RenderDevRetry renders a dev retry user prompt injecting the verbatim reviewer findings
 // and optional structured FindingsJSON from inline review comments.
 //
-// Returns EMPTY_FINDINGS error if findings is empty (BR-002, IF-001).
+// Returns EMPTY_FINDINGS error if findings is empty.
 func RenderDevRetry(findings, findingsJSON string, issue Issue, branch string, verifyCommand string, guidelinesPath string, cbmEnabled bool) (userPrompt string, err error) {
 	if findings == "" {
 		return "", fmt.Errorf("EMPTY_FINDINGS: changes_requested review has an empty body")

@@ -21,7 +21,7 @@ type activityEntry struct {
 // emitting tool-call progress lines via r. role is used as the line prefix.
 //
 // The returned stop function must be called to release resources. It blocks
-// until the follower has drained all pending lines and exited (BR-P6 / BR-P3).
+// until the follower has drained all pending lines and exited.
 func FollowActivityJSONL(role, path string, r *Renderer) func() {
 	done := make(chan struct{})
 	finished := make(chan struct{})
@@ -49,7 +49,7 @@ func FollowActivityJSONL(role, path string, r *Renderer) func() {
 }
 
 // emitNewToolCalls reads activity.jsonl from startLine, emits tool_execution_start
-// entries, and returns the new total line count. Non-fatal on I/O errors (BR-P3).
+// entries, and returns the new total line count. Non-fatal on I/O errors.
 func emitNewToolCalls(role, path string, startLine int, r *Renderer) int {
 	f, err := os.Open(path)
 	if err != nil {
@@ -68,7 +68,7 @@ func emitNewToolCalls(role, path string, startLine int, r *Renderer) int {
 		}
 		var entry activityEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-			continue // skip malformed lines per BR-P3
+			continue // skip malformed lines
 		}
 		if entry.Type == "tool_execution_start" && entry.ToolName != "" {
 			r.EmitToolCall(role, entry.ToolName, entry.Args)

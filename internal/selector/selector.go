@@ -137,7 +137,7 @@ func isErrExit(err error, ee **preflight.ErrExit) bool {
 	return errors.As(err, ee)
 }
 
-// filter returns only takeable candidates per BR-001.
+// filter returns only takeable candidates.
 func filter(candidates []candidate) []candidate {
 	out := make([]candidate, 0, len(candidates))
 	for _, c := range candidates {
@@ -155,7 +155,7 @@ func filter(candidates []candidate) []candidate {
 	return out
 }
 
-// selectTop filters and sorts candidates, returning the single best Issue per BR-001/BR-002.
+// selectTop filters and sorts candidates, returning the single best Issue.
 // Returns nil when no takeable candidate exists.
 func selectTop(candidates []candidate) *Issue {
 	takeable := filter(candidates)

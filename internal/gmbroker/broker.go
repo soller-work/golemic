@@ -27,7 +27,7 @@ import (
 // Called at most once per Broker instance (lazy cache via sync.Once).
 type IssueFetcher func(ctx context.Context) (string, error)
 
-// cbmToolNameMap is the BR-1 fixed 1:1 map from gm_code_* tool name to upstream cbm sub.
+// cbmToolNameMap is the fixed 1:1 map from gm_code_* tool name to upstream cbm sub.
 // Two names do not match their trimmed form: gm_code_search→search_code, gm_code_get_snippet→get_code_snippet.
 var cbmToolNameMap = map[string]string{
 	"gm_code_search":           "search_code",
@@ -885,7 +885,7 @@ func (b *Broker) PendingReviewID() string {
 	return b.pendingReviewID
 }
 
-// handleReviewSubmitComment handles gm_review_submit_comment (non-terminal, BR-1).
+// handleReviewSubmitComment handles gm_review_submit_comment (non-terminal).
 // It creates/reuses a Pending Review for this invocation and adds an inline comment.
 func (b *Broker) handleReviewSubmitComment(raw json.RawMessage) json.RawMessage {
 	if res := b.rejectReviewSubmitCommentAfterTerminal(); res != nil {
@@ -1012,7 +1012,7 @@ func (b *Broker) getComputeFingerprintFn() func(string) (string, error) {
 }
 
 // getCBMSchema returns the cached tools/list schema for the CBM broker.
-// Fetch failures degrade gracefully (BR-7): returns nil, err and callers skip validation.
+// Fetch failures degrade gracefully: returns nil, err and callers skip validation.
 func (b *Broker) getCBMSchema(sockPath string) (map[string]map[string]struct{}, error) {
 	b.cbmSchemaOnce.Do(func() {
 		fn := b.cbmFetchSchemaFn
@@ -1082,7 +1082,7 @@ func fetchCBMSchemaFromSocket(sockPath string) (map[string]map[string]struct{}, 
 }
 
 // handleCodeTool proxies a resolved cbm sub to the configured CBM broker socket.
-// cbmSub is already resolved from the BR-1 fixed map (never a raw trimmed name).
+// cbmSub is already resolved from the fixed map (never a raw trimmed name).
 func (b *Broker) handleCodeTool(cbmSub string, params json.RawMessage) json.RawMessage {
 	cfg := b.cbmConfig
 	if cfg.SockPath == "" {
@@ -1107,8 +1107,8 @@ func (b *Broker) handleCodeTool(cbmSub string, params json.RawMessage) json.RawM
 	return json.RawMessage(out)
 }
 
-// parseAndValidateCodeArgs parses params, enforces BR-3 (no caller project) and BR-2
-// (args against live schema). Returns parsed args or a non-nil error result.
+// parseAndValidateCodeArgs parses params, enforces no caller project and validates
+// args against live schema. Returns parsed args or a non-nil error result.
 func (b *Broker) parseAndValidateCodeArgs(cbmSub, sockPath string, params json.RawMessage) (map[string]json.RawMessage, json.RawMessage) {
 	var rawArgs map[string]json.RawMessage
 	if len(params) > 0 && !bytes.Equal(params, json.RawMessage("null")) {
@@ -1128,12 +1128,12 @@ func (b *Broker) parseAndValidateCodeArgs(cbmSub, sockPath string, params json.R
 	return rawArgs, nil
 }
 
-// validateArgsAgainstSchema checks caller args against the live CBM tools/list schema (BR-2).
+// validateArgsAgainstSchema checks caller args against the live CBM tools/list schema.
 // Returns a non-nil error result on validation failure; nil on success or schema unavailability.
 func (b *Broker) validateArgsAgainstSchema(cbmSub, sockPath string, rawArgs map[string]json.RawMessage) json.RawMessage {
 	schema, err := b.getCBMSchema(sockPath)
 	if err != nil || schema == nil {
-		return nil // graceful degradation (BR-7)
+		return nil // graceful degradation
 	}
 	allowed, ok := schema[cbmSub]
 	if !ok {

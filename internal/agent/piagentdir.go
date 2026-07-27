@@ -37,7 +37,7 @@ func checkLocalPiDir(localPiAgentDir string) error {
 // returns the path to the golemic-owned agent dir. If gmExtensionSrcDir is
 // non-empty and exists, the gm_ pi extension is provisioned at
 // ~/.golemic/pi/extensions/golemic. Idempotent and safe under concurrent
-// calls. Fails closed if localPiAgentDir does not exist (BR-7).
+// calls. Fails closed if localPiAgentDir does not exist.
 func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error) {
 	if err := checkLocalPiDir(localPiAgentDir); err != nil {
 		return "", err
@@ -207,7 +207,7 @@ func verifySymlinkConverged(dst, target string, origErr error) error {
 
 // deriveSettings reads the local settings.json (empty object if absent),
 // forces compaction.enabled=true, and writes the result to golemicPiDir/settings.json.
-// All other settings keys are preserved (BR-2, BR-4).
+// All other settings keys are preserved.
 func deriveSettings(localPiAgentDir, golemicPiDir string) error {
 	settings := make(map[string]any)
 
