@@ -75,13 +75,14 @@ func (r *Runner) executeDevAgentCfg(gmb *gmbroker.Broker, devWorktreePath, event
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "attempt": attempt, "model": cfg.Model})
 
 	activityPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("dev-r%d-a%d.activity.jsonl", round, attempt))
-	stopFollow := followActivity(r.progressRenderer, "dev", activityPath)
+	stopFollow := followActivity(r.lifecycleProgressRenderer(), "dev", activityPath)
 
 	runFn := r.runAgentFn
 	if runFn == nil {
 		runFn = agent.RunRole
 	}
 
+	r.emitAgentContext(cfg)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 	stopFollow()
 

@@ -215,7 +215,8 @@ func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, dev
 		}
 
 		r.turnCounter++
-		cfg := r.buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir)
+		cfg := r.buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir, 0, attempt-1)
+		r.emitAgentContext(cfg)
 		exitCode, _, agentErr := runFn(context.Background(), cfg)
 
 		result, failReason := r.determineConflictResolutionResult(devWT, agentErr, exitCode)
@@ -654,7 +655,7 @@ func (r *Runner) collectConflictedFilesForRebase(devWT string) ([]string, error)
 }
 
 // buildRebaseConflictAgentConfig creates the agent.RoleConfig for rebase conflict resolution.
-func (r *Runner) buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath string, runsDir string) agent.RoleConfig {
+func (r *Runner) buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath string, runsDir string, round, attempt int) agent.RoleConfig {
 	_ = golemicBinaryPath
 	return agent.RoleConfig{
 		Role:             "dev",
@@ -669,6 +670,8 @@ func (r *Runner) buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, 
 		IdleTimeout:      time.Duration(r.cfg.AgentIdleTimeoutMinutes) * time.Minute,
 		ToolAllowlist:    []string{"read", "bash", "write", "edit"},
 		RunsDir:          runsDir,
+		Round:            round,
+		Attempt:          attempt,
 	}
 }
 

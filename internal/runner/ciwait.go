@@ -334,7 +334,7 @@ func (r *Runner) writeCIWaitFinished(eventLogPath, result string, round int) {
 		TurnID:  r.turnCounter,
 		Payload: payload,
 	}
-	if w.Write(ev) == nil && r.progressRenderer != nil {
+	if w.Write(ev) == nil && !r.quiet && r.progressRenderer != nil {
 		r.progressRenderer.EmitLifecycle(ev)
 	}
 }
@@ -418,6 +418,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		runFn = agent.RunRole
 	}
 	cfg := r.buildCIRetryAgentConfig(systemPromptFile, userPrompt, devWorktreePath, eventLogPath, model, timeout, runsDir, fixRound, ciToolAllowlist, ciGMEnv)
+	r.emitAgentContext(cfg)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 
 	if outcome := r.handleCIRetryAgentResult(eventLogPath, exitCode, paths.Stdout, paths.Stderr, err); outcome != "" {

@@ -20,6 +20,9 @@ import (
 
 const maxArgsPreview = 120
 
+// agentContextPreviewLines is the number of prompt lines shown in compact mode.
+const agentContextPreviewLines = 12
+
 // Renderer writes lifecycle and tool-call progress lines to an io.Writer.
 // All methods are safe for concurrent use.
 type Renderer struct {
@@ -46,6 +49,59 @@ func (r *Renderer) EmitToolCall(role, toolName string, args json.RawMessage) {
 	r.mu.Lock()
 	fmt.Fprintln(r.out, line) //nolint:errcheck
 	r.mu.Unlock()
+}
+
+// AgentContextParams holds the data needed to format an agent context block.
+type AgentContextParams struct {
+	Role       string
+	Model      string
+	Round      int
+	Attempt    int
+	UserPrompt string
+	PromptFile string // path to the persisted full-prompt file
+	Verbose    bool
+}
+
+// EmitAgentContext writes a framed agent context block to the renderer.
+func (r *Renderer) EmitAgentContext(p AgentContextParams) {
+	block := FormatAgentContext(p)
+	r.mu.Lock()
+	fmt.Fprintln(r.out, block) //nolint:errcheck
+	r.mu.Unlock()
+}
+
+// FormatAgentContext returns a framed multi-line string describing an agent invocation.
+func FormatAgentContext(p AgentContextParams) string {
+	header := fmt.Sprintf("┌─ %s · %s · r%d/a%d", p.Role, p.Model, p.Round, p.Attempt)
+
+	lines := strings.Split(p.UserPrompt, "\n")
+	// Remove trailing empty line from Split when prompt ends with newline.
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	var body []string
+	if p.Verbose || len(lines) <= agentContextPreviewLines {
+		for _, l := range lines {
+			body = append(body, "│ "+l)
+		}
+	} else {
+		for _, l := range lines[:agentContextPreviewLines] {
+			body = append(body, "│ "+l)
+		}
+		omitted := len(lines) - agentContextPreviewLines
+		body = append(body, fmt.Sprintf("│ … (%d more lines omitted)", omitted))
+	}
+	body = append(body, "│ → "+p.PromptFile)
+
+	var sb strings.Builder
+	sb.WriteString(header)
+	for _, l := range body {
+		sb.WriteByte('\n')
+		sb.WriteString(l)
+	}
+	sb.WriteString("\n└─")
+	return sb.String()
 }
 
 // ---------------------------------------------------------------------------

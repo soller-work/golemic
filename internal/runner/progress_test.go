@@ -246,7 +246,7 @@ func TestProgress_HappyPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestProgress_Quiet: --quiet suppresses all progress
+// TestProgress_Quiet: renderer disabled -> no lifecycle progress
 // ---------------------------------------------------------------------------
 
 func TestProgress_Quiet(t *testing.T) {
@@ -291,6 +291,105 @@ func TestProgress_UnknownEventType(t *testing.T) {
 // Renderer is a local helper to test the fallback without importing internal.
 type Renderer struct {
 	renderer *progress.Renderer
+}
+
+// ---------------------------------------------------------------------------
+// TestEmitAgentContext_PersistsPromptFile
+// ---------------------------------------------------------------------------
+
+func TestEmitAgentContext_PersistsPromptFile(t *testing.T) {
+	var buf bytes.Buffer
+	r := &Runner{progressRenderer: progress.New(&buf)}
+
+	runsDir := t.TempDir()
+	cfg := agent.RoleConfig{
+		Role:       "dev",
+		Model:      "claude-opus-4-7",
+		Round:      1,
+		Attempt:    0,
+		UserPrompt: "hello world prompt",
+		RunsDir:    runsDir,
+		RunID:      "issue-99-test",
+	}
+	r.emitAgentContext(cfg)
+
+	promptFile := filepath.Join(runsDir, "issue-99-test", "dev-r1-a0.prompt.md")
+	data, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatalf("prompt file not created: %v", err)
+	}
+	if string(data) != "hello world prompt" {
+		t.Errorf("prompt file content mismatch: got %q", string(data))
+	}
+	if !strings.Contains(buf.String(), "dev") {
+		t.Errorf("context block not emitted to renderer")
+	}
+}
+
+func TestEmitAgentContext_NilRenderer_NoOp(t *testing.T) {
+	r := &Runner{progressRenderer: nil}
+	// Must not panic and must not create any file.
+	cfg := agent.RoleConfig{Role: "dev", RunsDir: t.TempDir(), RunID: "x", Round: 1, Attempt: 0}
+	r.emitAgentContext(cfg) // should be a no-op
+}
+
+func TestEmitAgentContext_BlockContainsRoleModelRound(t *testing.T) {
+	var buf bytes.Buffer
+	r := &Runner{progressRenderer: progress.New(&buf)}
+
+	runsDir := t.TempDir()
+	cfg := agent.RoleConfig{
+		Role:       "reviewer",
+		Model:      "claude-sonnet-4-6",
+		Round:      2,
+		Attempt:    1,
+		UserPrompt: "review this please",
+		RunsDir:    runsDir,
+		RunID:      "issue-1-test",
+	}
+	r.emitAgentContext(cfg)
+
+	out := buf.String()
+	for _, want := range []string{"reviewer", "claude-sonnet-4-6", "r2/a1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("context block missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestEmitAgentContext_QuietStillEmitsAndPersistsPrompt_AC004(t *testing.T) {
+	var stderr bytes.Buffer
+	r := &Runner{quiet: true, progressRenderer: progress.New(&stderr)}
+
+	runsDir := t.TempDir()
+	cfg := agent.RoleConfig{
+		Role:       "dev",
+		Model:      "test/model",
+		Round:      1,
+		Attempt:    0,
+		UserPrompt: "line 1\nline 2",
+		RunsDir:    runsDir,
+		RunID:      "issue-99-test",
+	}
+
+	r.emitAgentContext(cfg)
+
+	out := stderr.String()
+	if !strings.Contains(out, "dev · test/model · r1/a0") {
+		t.Fatalf("quiet must still emit the dev agent context block; stderr:\n%s", out)
+	}
+	if strings.Contains(out, "Run ID:") || strings.Contains(out, "▶") {
+		t.Errorf("quiet must not emit run header or lifecycle lines; stderr:\n%s", out)
+	}
+
+	promptFile := filepath.Join(runsDir, "issue-99-test", "dev-r1-a0.prompt.md")
+	data, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatalf("prompt file not created: %v", err)
+	}
+	if string(data) != cfg.UserPrompt {
+		t.Errorf("prompt file content mismatch: got %q", string(data))
+	}
 }
 
 // ---------------------------------------------------------------------------
