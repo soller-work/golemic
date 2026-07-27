@@ -1244,44 +1244,15 @@ func TestRunDevAgent_MissingGuidelines_AC003(t *testing.T) {
 // agent file, guidelines, and credentials.
 func setupDevRunner(t *testing.T) (r *Runner, golemicDir string, stderr *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-
-	golemicDirPath := filepath.Join(repoRoot, ".golemic")
-
-	agentsDir := filepath.Join(golemicDirPath, "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\nDev persona.\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	guidelinesDir := filepath.Join(golemicDirPath, "guidelines")
-	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatalf("load credentials: %v", err)
-	}
-
-	runner := New(nil, homeDir, repoRoot, 42)
-	runner.repoRoot = repoRoot
-	runner.project = project
-	runner.creds = creds
-	runner.runID = "issue-42-20240101T000000Z"
-	runner.issue = &issueData{Number: 42, Title: "t"}
-	runner.cfg = &config.Config{VerifyCommand: "go test"}
-	runner.branchName = "golemic-dev-42"
-
-	var buf bytes.Buffer
-	runner.SetStderr(&buf)
-	return runner, golemicDirPath, &buf
+	f := newRunnerFixture(t,
+		withGuidelines("dev"),
+		withAgents("dev"),
+		withRunID("issue-42-20240101T000000Z"),
+		withBranchName("golemic-dev-42"),
+		withConfig(&config.Config{VerifyCommand: "go test"}),
+		withIssue(&issueData{Number: 42, Title: "t"}),
+	)
+	return f.r, filepath.Join(f.repoRoot, ".golemic"), f.stderr
 }
 
 // TestRunDevAgent_SystemPromptFromAgentsDir_AC001 verifies that when

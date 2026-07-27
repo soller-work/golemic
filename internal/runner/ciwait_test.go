@@ -114,57 +114,22 @@ func ciWaitExecutor(checkRunsJSON string, checkRunsErr error, commentCalls *[]st
 // buildCIGateRunner creates a runner for runCIGate unit tests.
 func buildCIGateRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-	creds := loadTestCreds(t, homeDir, project)
-
-	// Write guidelines so RenderDevCIRetry can read them
-	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
-	guidelinesDir := filepath.Join(golemicCfgDir, "guidelines")
-	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Write agent file so resolveAgentFile can read model+persona
-	agentsDir := filepath.Join(golemicCfgDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	r := New(exec, homeDir, repoRoot, 42)
-	r.repoRoot = repoRoot
-	r.project = project
-	r.runID = "issue-42-ci-gate"
-	r.branchName = "golemic/issue-42"
-	r.creds = creds
-	r.cfg = &config.Config{
-		VerifyCommand:    "go test",
-		CITimeoutMinutes: 15,
-		TimeoutMinutes:   30,
-	}
-	r.issue = &issueData{Number: 42, Title: "T"}
-	r.SetCIPollInterval(1 * time.Millisecond)
-	r.SetCITimeout(5 * time.Millisecond) // fast timeout for tests
-
-	var stderr bytes.Buffer
-	r.SetStderr(&stderr)
-
-	logPath := filepath.Join(homeDir, ".golemic", project, "runs", "issue-42-ci-gate", "events.jsonl")
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		t.Fatal(err)
-	}
-	// seed log with run_started
-	w, _ := eventlog.NewWriter(logPath)
-	payload, _ := json.Marshal(map[string]interface{}{"issue": 42, "runId": "issue-42-ci-gate"})
-	_ = w.Write(eventlog.Event{Type: eventlog.EventRunStarted, Ts: time.Now().Format(time.RFC3339), RunID: "issue-42-ci-gate", Payload: payload})
-	w.Close() //nolint:errcheck
-
-	return r, logPath, &stderr
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withRunID("issue-42-ci-gate"),
+		withGuidelines("dev"),
+		withAgents("dev"),
+		withConfig(&config.Config{
+			VerifyCommand:    "go test",
+			CITimeoutMinutes: 15,
+			TimeoutMinutes:   30,
+		}),
+		withIssue(&issueData{Number: 42, Title: "T"}),
+		withCIPollInterval(1*time.Millisecond),
+		withCITimeout(5*time.Millisecond),
+		withSeedEventLog(),
+	)
+	return f.r, f.eventLogPath, f.stderr
 }
 
 // seqResponse returns responses in sequence; repeats last when exhausted.

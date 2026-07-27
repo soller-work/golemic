@@ -13,7 +13,6 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/loop"
 )
@@ -25,76 +24,20 @@ import (
 // setupResumeRunner creates a minimal Runner ready for resume unit tests.
 func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatalf("load credentials: %v", err)
-	}
-
-	shortHome := "/tmp"
-	shortProject := "rs"
-	shortRunID := "issue-42-resume"
-	t.Cleanup(func() { os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) }) //nolint:errcheck
-
-	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":false}}`, shortProject)
-	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
-	}
-	credDir := filepath.Join(shortHome, ".golemic", shortProject)
-	if err := os.MkdirAll(credDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	credJSON := fmt.Sprintf(`{"dev_token":%q,"reviewer_token":%q}`, creds.DevToken(), creds.ReviewerToken())
-	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	golemicDir := filepath.Join(repoRoot, ".golemic")
-	guidelinesDir := filepath.Join(golemicDir, "guidelines")
-	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Dev Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("# Reviewer Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	agentsDir := filepath.Join(golemicDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, role := range []string{"dev", "reviewer"} {
-		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	r := New(exec, shortHome, repoRoot, 42)
-	r.repoRoot = repoRoot
-	r.project = shortProject
-	r.homeDir = shortHome
-	r.runID = shortRunID
-	r.branchName = "golemic/issue-42"
-	r.creds = creds
-	r.cfg = &config.Config{
-		VerifyCommand:   "go test",
-		TimeoutMinutes:  30,
-		MaxReviewRounds: 3,
-	}
-	r.issue = &issueData{Number: 42, Title: "Test Issue", State: "OPEN"}
-
-	var stderr bytes.Buffer
-	r.SetStderr(&stderr)
-	// Inject no-op precheck so tests don't need a real git repo in the reviewer worktree.
-	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
-
 	injectFakeGMBrokerPP(t)
-
-	return r, filepath.Join(shortHome, ".golemic", shortProject, "runs", shortRunID, "events.jsonl"), &stderr
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withShortHome("rs", "issue-42-resume"),
+		withGuidelines("dev", "reviewer"),
+		withAgents("dev", "reviewer"),
+		withConfig(&config.Config{
+			VerifyCommand:   "go test",
+			TimeoutMinutes:  30,
+			MaxReviewRounds: 3,
+		}),
+		withNoopReviewerPrecheck(),
+	)
+	return f.r, f.eventLogPath, f.stderr
 }
 
 // runResumeOrchestrate prepares the event log and runs the machine from PREPARE.

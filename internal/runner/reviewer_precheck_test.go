@@ -264,15 +264,18 @@ func TestReviewerPrompt_PrecheckBlockInjected(t *testing.T) {
 // newPrecheckRunner creates a minimal Runner wired up for precheck unit tests.
 func newPrecheckRunner(t *testing.T, homeDir, repoRoot string) *Runner {
 	t.Helper()
-	r := New(nil, homeDir, repoRoot, 42)
-	r.repoRoot = repoRoot
-	r.project = "testproject"
-	r.runID = "r-pre-" + t.Name()
-	if len(r.runID) > 50 {
-		r.runID = r.runID[:50]
+	runID := "r-pre-" + t.Name()
+	if len(runID) > 50 {
+		runID = runID[:50]
 	}
-	r.turnCounter = 1
-	return r
+	f := newRunnerFixture(t,
+		withHomeDir(homeDir),
+		withRepoRoot(repoRoot),
+		withProject("testproject"),
+		withRunID(runID),
+		withTurnCounter(1),
+	)
+	return f.r
 }
 
 // assertPrecheckEvent finds the reviewer_precheck event in events and returns its payload map.

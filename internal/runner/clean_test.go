@@ -77,22 +77,12 @@ func setupCleanExecutor(issueNum int, localBranchExists, remoteBranchExists bool
 // from a temp home dir.
 func newCleanRunner(t *testing.T, exec *fakeExecutor, issueNum int) (*Runner, string) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-	creds := loadTestCreds(t, homeDir, project)
-
-	r := &Runner{
-		executor:   exec,
-		homeDir:    homeDir,
-		project:    project,
-		repoRoot:   repoRoot,
-		issueNum:   issueNum,
-		branchName: fmt.Sprintf("golemic/issue-%d", issueNum),
-		creds:      creds,
-		stdout:     &bytes.Buffer{},
-		stderr:     &bytes.Buffer{},
-	}
-	golemicDir := filepath.Join(homeDir, ".golemic", project)
-	return r, golemicDir
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withIssueNum(issueNum),
+		withBranchName(fmt.Sprintf("golemic/issue-%d", issueNum)),
+	)
+	return f.r, filepath.Join(f.homeDir, ".golemic", f.project)
 }
 
 // mkWorktreeDir creates the worktree directory on disk so os.Stat sees it.

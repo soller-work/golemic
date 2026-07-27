@@ -13,7 +13,6 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/cbmbroker"
 	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/gmbroker"
 	"golemic/internal/loop"
 )
@@ -21,62 +20,19 @@ import (
 // setupGMRunner creates a minimal runner for GM broker tests.
 func setupGMRunner(t *testing.T) (*Runner, string) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-
-	golemicDir := filepath.Join(repoRoot, ".golemic")
-	for _, dir := range []string{
-		filepath.Join(golemicDir, "guidelines"),
-		filepath.Join(golemicDir, "agents"),
-	} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, name := range []string{"dev.md", "reviewer.md"} {
-		if err := os.WriteFile(filepath.Join(golemicDir, "guidelines", name), []byte("# guidelines"), 0644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(golemicDir, "agents", name), []byte("---\nmodel: test/model\n---\npersona\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatalf("load credentials: %v", err)
-	}
-
-	// Use /tmp as homeDir so that socket paths stay within the 104-byte unix
-	// socket limit on macOS. Directories created under /tmp/.golemic/<project>
-	// are cleaned up explicitly in t.Cleanup.
-	const shortProject = "gmrp"
-	shortHome := "/tmp"
-	shortRunID := "gm42t"
-	t.Cleanup(func() {
-		os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) //nolint:errcheck
-	})
-
-	r := New(nil, shortHome, repoRoot, 42)
-	r.repoRoot = repoRoot
-	r.project = shortProject
-	r.homeDir = shortHome
-	r.runID = shortRunID
-	r.branchName = "golemic/issue-42"
-	r.creds = creds
-	r.cfg = &config.Config{
-		VerifyCommand:  "go test",
-		TimeoutMinutes: 30,
-	}
-	r.issue = &issueData{Number: 42, Title: "GM test issue"}
-	r.turnCounter = 1
-
-	devWT := filepath.Join(r.homeDir, ".golemic", shortProject, "worktrees", "issue-42")
-	if err := os.MkdirAll(devWT, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	return r, filepath.Join(repoRoot, ".golemic")
+	f := newRunnerFixture(t,
+		withShortHome("gmrp", "gm42t"),
+		withGuidelines("dev", "reviewer"),
+		withAgents("dev", "reviewer"),
+		withConfig(&config.Config{
+			VerifyCommand:  "go test",
+			TimeoutMinutes: 30,
+		}),
+		withIssue(&issueData{Number: 42, Title: "GM test issue"}),
+		withTurnCounter(1),
+		withDevWorktreeDir(),
+	)
+	return f.r, filepath.Join(f.repoRoot, ".golemic")
 }
 
 // injectFakeGMBroker overrides startGMBrokerFn to start a real unix-socket broker

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -493,34 +492,22 @@ func mustLoadCreds(t *testing.T) *credentials.Credentials { //nolint:unused
 // makeVerifyRunner builds a minimal Runner for verifyAndPush tests.
 func makeVerifyRunner(t *testing.T, exec *fakeExecutor, verifyCmds ...string) *Runner {
 	t.Helper()
-	homeDir := t.TempDir()
-	project := "proj"
-	credDir := mkCredDir(t, homeDir, project)
-	_ = credDir
-
 	verifyCmd := "echo ok"
 	if len(verifyCmds) > 0 {
 		verifyCmd = verifyCmds[0]
 	}
-
-	creds := mustLoadCredsFromDir(t, homeDir, project)
-
-	r := &Runner{
-		executor:               exec,
-		issueNum:               50,
-		runID:                  "test-run",
-		repoRoot:               "/repo",
-		homeDir:                homeDir,
-		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:low"}}},
-		cfg:                    &config.Config{Project: project, VerifyCommand: verifyCmd},
-		creds:                  creds,
-		branchName:             "golemic/issue-50",
-		ciTimeoutOverride:      100 * time.Millisecond,
-		ciPollIntervalOverride: 1 * time.Millisecond,
-	}
-	buf := &strings.Builder{}
-	r.stderr = buf
-	return r
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withIssueNum(50),
+		withRunID("test-run"),
+		withBranchName("golemic/issue-50"),
+		withConfig(&config.Config{Project: "proj", VerifyCommand: verifyCmd}),
+		withIssue(&issueData{Labels: []issueLabel{{Name: "risk:low"}}}),
+		withCIPollInterval(1*time.Millisecond),
+		withCITimeout(100*time.Millisecond),
+	)
+	f.r.stderr = &strings.Builder{}
+	return f.r
 }
 
 func mkCredDir(t *testing.T, homeDir, project string) string {
@@ -1357,29 +1344,24 @@ func TestRunMergePhase_GateSkipDoesNotDeleteRemote(t *testing.T) { //nolint:cycl
 // short CI timeouts so polling tests complete quickly.
 func makeMergePhaseRunner(t *testing.T, exec *fakeExecutor, issueNum int, logPath string) (*Runner, *[]eventlog.Event) {
 	t.Helper()
-	homeDir := t.TempDir()
-	project := "proj"
-	mkCredDir(t, homeDir, project)
-	creds := mustLoadCredsFromDir(t, homeDir, project)
 
 	var written []eventlog.Event
-	r := &Runner{
-		executor:               exec,
-		issueNum:               issueNum,
-		runID:                  "test-run",
-		repoRoot:               "/repo",
-		homeDir:                homeDir,
-		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
-		cfg:                    &config.Config{Project: project},
-		creds:                  creds,
-		branchName:             fmt.Sprintf("golemic/issue-%d", issueNum),
-		stderr:                 &strings.Builder{},
-		ciTimeoutOverride:      200 * time.Millisecond,
-		ciPollIntervalOverride: 1 * time.Millisecond,
-	}
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withHomeDir(t.TempDir()),
+		withRepoRoot("/repo"),
+		withProject("proj"),
+		withIssueNum(issueNum),
+		withRunID("test-run"),
+		withBranchName(fmt.Sprintf("golemic/issue-%d", issueNum)),
+		withConfig(&config.Config{Project: "proj"}),
+		withIssue(&issueData{Labels: []issueLabel{{Name: "risk:medium"}}}),
+		withCITimeout(200*time.Millisecond),
+		withCIPollInterval(1*time.Millisecond),
+	)
 	writePROpenedEvent(t, logPath, issueNum)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
-	return r, &written
+	return f.r, &written
 }
 
 // git fetch origin fails → merge_failed with "git fetch origin failed:" reason;
@@ -1786,67 +1768,28 @@ func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //n
 // It creates credentials, a guidelines file, and sets all fields required by the helper.
 func makeConflictRetryRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *[]eventlog.Event) {
 	t.Helper()
-	homeDir := t.TempDir()
-	repoRoot := t.TempDir()
-	project := "proj"
-
-	// credentials
-	credDir := filepath.Join(homeDir, ".golemic", project)
-	if err := os.MkdirAll(credDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	credJSON := `{"dev_token": "ghp_dev", "reviewer_token": "ghp_rev"}`
-	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
-		t.Fatal(err)
-	}
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// guidelines
-	guidelinesDir := filepath.Join(repoRoot, ".golemic", "guidelines")
-	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// agents
-	agentsDir := filepath.Join(repoRoot, ".golemic", "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(agentsDir, "dev.md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withIssueNum(65),
+		withRunID("test-run"),
+		withBranchName("golemic/issue-65"),
+		withGuidelines("dev"),
+		withAgents("dev"),
+		withConfig(&config.Config{
+			VerifyCommand:                 "go test ./...",
+			TimeoutMinutes:                30,
+			MaxConflictResolutionAttempts: 1,
+		}),
+		withIssue(&issueData{Labels: []issueLabel{{Name: "risk:medium"}}}),
+	)
+	f.r.stderr = &strings.Builder{}
 
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 65)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
 
 	var written []eventlog.Event
-	r := &Runner{
-		executor: exec,
-		issueNum: 65,
-		runID:    "test-run",
-		repoRoot: repoRoot,
-		homeDir:  homeDir,
-		project:  project,
-		issue:    &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
-		cfg: &config.Config{
-			Project:                       project,
-			VerifyCommand:                 "go test ./...",
-			TimeoutMinutes:                30,
-			MaxConflictResolutionAttempts: 1,
-		},
-		creds:      creds,
-		branchName: "golemic/issue-65",
-		stderr:     &strings.Builder{},
-	}
-	return r, logPath, &written
+	return f.r, logPath, &written
 }
 
 // conflictRebaseExec builds a fakeExecutor that simulates the full merge-phase
@@ -2231,25 +2174,18 @@ func TestRunMergePhase_ConflictPostVerificationFails_NotAncestor_AC004c(t *testi
 // buildOODRunner creates a minimal Runner for mergeWithOutOfDateRetry tests.
 func buildOODRunner(t *testing.T, exec *fakeExecutor) *Runner {
 	t.Helper()
-	homeDir := t.TempDir()
-	project := "proj"
-	mkCredDir(t, homeDir, project)
-	creds := mustLoadCredsFromDir(t, homeDir, project)
-	r := &Runner{
-		executor:               exec,
-		issueNum:               50,
-		runID:                  "test-run",
-		repoRoot:               "/repo",
-		homeDir:                homeDir,
-		issue:                  &issueData{},
-		cfg:                    &config.Config{Project: project},
-		creds:                  creds,
-		branchName:             "golemic/issue-50",
-		ciTimeoutOverride:      100 * time.Millisecond,
-		ciPollIntervalOverride: 1 * time.Millisecond,
-	}
-	r.stderr = &strings.Builder{}
-	return r
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withIssueNum(50),
+		withRunID("test-run"),
+		withBranchName("golemic/issue-50"),
+		withConfig(&config.Config{Project: "proj"}),
+		withIssue(&issueData{}),
+		withCIPollInterval(1*time.Millisecond),
+		withCITimeout(100*time.Millisecond),
+	)
+	f.r.stderr = &strings.Builder{}
+	return f.r
 }
 
 // Regression 1: first merge returns OOD, second succeeds → pr_merged, no automerge_failed.
