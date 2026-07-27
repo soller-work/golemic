@@ -158,6 +158,30 @@ func TestLoopTransitions_AC5_PrepareIsUniqueEntry(t *testing.T) {
 	}
 }
 
+// TestLoopTransitions_KeysInEnumerations asserts loopTransitions() only references
+// keys present in loop.AllSteps() and loop.AllEvents().
+func TestLoopTransitions_KeysInEnumerations(t *testing.T) {
+	knownSteps := make(map[loop.StepKey]bool)
+	for _, s := range loop.AllSteps() {
+		knownSteps[s] = true
+	}
+	knownEvents := make(map[loop.EventKey]bool)
+	for _, e := range loop.AllEvents() {
+		knownEvents[e] = true
+	}
+	for _, tr := range loopTransitions() {
+		if !knownSteps[tr.From] {
+			t.Errorf("transition From %q is not in AllSteps()", tr.From)
+		}
+		if !knownEvents[tr.Event] {
+			t.Errorf("transition Event %q is not in AllEvents()", tr.Event)
+		}
+		if !knownSteps[tr.To] {
+			t.Errorf("transition To %q is not in AllSteps()", tr.To)
+		}
+	}
+}
+
 // every non-terminal To has outgoing transitions; every From is non-terminal.
 func TestLoopTransitions_AC7_StructuralSanity(t *testing.T) {
 	terminals := loopTerminals()

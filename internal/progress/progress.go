@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 )
 
 const maxArgsPreview = 120
@@ -55,7 +56,7 @@ func (r *Renderer) EmitToolCall(role, toolName string, args json.RawMessage) {
 var lifecycleFormatters = map[string]func(json.RawMessage) string{
 	eventlog.EventRunStarted:             fmtRunStarted,
 	eventlog.EventWorktreeCreated:        fmtWorktreeCreated,
-	eventlog.EventDevStarted:             func(json.RawMessage) string { return "▶ dev started" },
+	eventlog.EventStepTransition:         fmtStepTransition,
 	eventlog.EventAgentCompleted:         fmtAgentCompleted,
 	eventlog.EventPROpened:               fmtPROpened,
 	eventlog.EventReviewSubmitted:        fmtReviewSubmitted,
@@ -76,6 +77,45 @@ func FormatLifecycleLine(event eventlog.Event) string {
 		return fn(event.Payload)
 	}
 	return "▶ " + event.Type
+}
+
+func fmtStepTransition(p json.RawMessage) string {
+	var v struct {
+		From    string `json:"from"`
+		Event   string `json:"event"`
+		To      string `json:"to"`
+		Guarded bool   `json:"guarded"`
+	}
+	if json.Unmarshal(p, &v) != nil || v.To == "" {
+		return "▶ step_transition"
+	}
+	return FormatStepTransitionLine(v.From, v.Event, v.To, v.Guarded)
+}
+
+// FormatStepTransitionLine returns a progress line for a state-machine transition.
+// Normal entry: "▶ <step label>". Guarded self-loop: "↻ <step> (<event>)".
+// Terminal success: "✔ <label>". Terminal failure: "✖ <label>".
+func FormatStepTransitionLine(from, event, to string, guarded bool) string {
+	toKey := loop.StepKey(to)
+	toLabel, ok := loop.StepLabel(toKey)
+	if !ok {
+		toLabel = to
+	}
+	if loop.IsTerminalStep(toKey) {
+		if loop.IsSuccessTerminal(toKey) {
+			return "✔ " + toLabel
+		}
+		return "✖ " + toLabel
+	}
+	if from == to && guarded {
+		eventKey := loop.EventKey(event)
+		eventLabel, ok := loop.EventLabel(eventKey)
+		if !ok {
+			eventLabel = event
+		}
+		return "↻ " + toLabel + " (" + eventLabel + ")"
+	}
+	return "▶ " + toLabel
 }
 
 func fmtRunStarted(p json.RawMessage) string {
