@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"golemic/internal/agent"
+	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/telemetry"
@@ -374,25 +375,28 @@ func makeTelemetryFakeAgent(t *testing.T) func(ctx context.Context, cfg agent.Ro
 
 func setupTelemetryRun(t *testing.T, agentFn func(context.Context, agent.RoleConfig) (int, agent.TranscriptPaths, error)) (*Runner, string, string, string, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
+	_, repoRoot, _ := setupRunnerTest(t)
 	exec := setupTelemetryFullRunExecutor(repoRoot)
 
-	createGuidelines(t, repoRoot)
 	injectFakeGMBrokerPP(t)
-	homeDir, project, runID := configureShortTelemetryIdentity(t, homeDir, project, repoRoot)
-
-	r := New(exec, homeDir, repoRoot, 42)
-	r.project = project
-	r.homeDir = homeDir
-	r.runID = runID
-	r.SetPreflighter(passingPreflighter{})
-	r.SetRunAgentFn(agentFn)
-	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
-
-	var stdout, stderr bytes.Buffer
-	r.SetStdout(&stdout)
-	r.SetStderr(&stderr)
-	return r, homeDir, project, runID, &stdout, &stderr
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withShortHome(ppProject, ppRunID),
+		withRepoRoot(repoRoot),
+		withGuidelines("dev", "reviewer"),
+		withAgents("dev", "reviewer"),
+		withConfigJSON(fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":false}}`, ppProject)),
+		withConfig(&config.Config{
+			Project:         ppProject,
+			VerifyCommand:   "go test",
+			TimeoutMinutes:  30,
+			MaxReviewRounds: 5,
+		}),
+		withPreflighter(passingPreflighter{}),
+		withRunAgentFn(agentFn),
+		withNoopReviewerPrecheck(),
+	)
+	return f.r, f.homeDir, f.project, f.runID, f.stdout, f.stderr
 }
 
 func readTelemetryArtifacts(t *testing.T, homeDir, project string) ([]eventlog.Event, []telemetry.Record) {

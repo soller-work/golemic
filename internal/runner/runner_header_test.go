@@ -16,22 +16,17 @@ import (
 // a successful issue load, using the given homeDir.
 func buildHeaderRunner(t *testing.T, homeDir string) *Runner {
 	t.Helper()
-	project := "hdr-project"
-	runID := "issue-7-20260717T120000Z"
-	repoRoot := t.TempDir()
-	r := &Runner{
-		homeDir:    homeDir,
-		project:    project,
-		runID:      runID,
-		branchName: "golemic/issue-7",
-		issueNum:   7,
-		repoRoot:   repoRoot,
-		cfg: &config.Config{
-			TimeoutMinutes: 45,
-		},
-		issue: &issueData{Number: 7, Title: "Add header feature"},
-	}
-	return r
+	f := newRunnerFixture(t,
+		withHomeDir(homeDir),
+		withRepoRoot(t.TempDir()),
+		withProject("hdr-project"),
+		withIssueNum(7),
+		withRunID("issue-7-20260717T120000Z"),
+		withBranchName("golemic/issue-7"),
+		withConfig(&config.Config{TimeoutMinutes: 45}),
+		withIssue(&issueData{Number: 7, Title: "Add header feature"}),
+	)
+	return f.r
 }
 
 // TestWriteRunHeader_AllFieldsPresent covers all RM-001 fields appear on stderr.
@@ -255,20 +250,15 @@ func setupCollisionRun(t *testing.T, quiet bool) (*bytes.Buffer, *bytes.Buffer, 
 	homeDir, repoRoot, _ := setupRunnerTest(t)
 	exec := setupHappyExecutor(repoRoot)
 
-	project := "test-project"
-	worktreeDir := filepath.Join(homeDir, ".golemic", project, "worktrees", "issue-42")
-	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	var stdout, stderr bytes.Buffer
-	r := New(exec, homeDir, repoRoot, 42)
-	r.SetPreflighter(passingPreflighter{})
-	r.SetStdout(&stdout)
-	r.SetStderr(&stderr)
-	r.SetQuiet(quiet)
-
-	return &stdout, &stderr, r.Run()
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withHomeDir(homeDir),
+		withRepoRoot(repoRoot),
+		withPreflighter(passingPreflighter{}),
+		withQuiet(quiet),
+		withDevWorktreeDir(),
+	)
+	return f.stdout, f.stderr, f.r.Run()
 }
 
 // TestRun_QuietSuppressesHeader_AC001 covers --quiet suppresses the header.

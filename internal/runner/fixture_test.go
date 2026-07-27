@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
@@ -37,6 +39,9 @@ type fixtureOpt func(*fixtureCfg)
 
 type fixtureCfg struct {
 	executor       preflight.Executor
+	homeDir        string
+	repoRoot       string
+	project        string
 	shortProject   string // if non-empty, use /tmp as homeDir with this project name
 	shortRunID     string // run ID used when shortProject is set
 	issueNum       int    // default 42
@@ -51,6 +56,8 @@ type fixtureCfg struct {
 	ciPollInterval time.Duration
 	ciTimeout      time.Duration
 	preflighter    Preflighter
+	runAgentFn     func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
+	quiet          bool
 	noopPrecheck   bool // inject no-op reviewerPrecheckFn
 	turnCounter    int
 	createDevWT    bool // create homeDir/.golemic/<project>/worktrees/issue-<n>
@@ -58,6 +65,18 @@ type fixtureCfg struct {
 
 func withExecutor(exec preflight.Executor) fixtureOpt {
 	return func(c *fixtureCfg) { c.executor = exec }
+}
+
+func withHomeDir(homeDir string) fixtureOpt {
+	return func(c *fixtureCfg) { c.homeDir = homeDir }
+}
+
+func withRepoRoot(repoRoot string) fixtureOpt {
+	return func(c *fixtureCfg) { c.repoRoot = repoRoot }
+}
+
+func withProject(project string) fixtureOpt {
+	return func(c *fixtureCfg) { c.project = project }
 }
 
 // withShortHome sets the runner's homeDir to /tmp with a short project name so
@@ -123,6 +142,14 @@ func withPreflighter(p Preflighter) fixtureOpt {
 	return func(c *fixtureCfg) { c.preflighter = p }
 }
 
+func withRunAgentFn(fn func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)) fixtureOpt {
+	return func(c *fixtureCfg) { c.runAgentFn = fn }
+}
+
+func withQuiet(quiet bool) fixtureOpt {
+	return func(c *fixtureCfg) { c.quiet = quiet }
+}
+
 // withNoopReviewerPrecheck injects a no-op reviewerPrecheckFn so tests do not
 // need a real git repository in the reviewer worktree.
 func withNoopReviewerPrecheck() fixtureOpt {
@@ -145,13 +172,14 @@ func withDevWorktreeDir() fixtureOpt {
 func newRunnerFixture(t *testing.T, opts ...fixtureOpt) runnerFixture {
 	t.Helper()
 
-	baseHomeDir, repoRoot, baseProject := setupRunnerTest(t)
+	baseHomeDir, baseRepoRoot, baseProject := setupRunnerTest(t)
 	fc := &fixtureCfg{issueNum: 42}
 	for _, opt := range opts {
 		opt(fc)
 	}
 
 	homeDir, project := resolveFixtureHome(fc, baseHomeDir, baseProject, t)
+	repoRoot := resolveFixtureRepoRoot(fc, baseRepoRoot)
 	runID := resolveFixtureRunID(fc)
 	branchName := resolveFixtureBranchName(fc)
 	writeFixtureConfig(t, repoRoot, project, fc)
@@ -179,6 +207,12 @@ func newRunnerFixture(t *testing.T, opts ...fixtureOpt) runnerFixture {
 func resolveFixtureHome(fc *fixtureCfg, baseHomeDir, baseProject string, t *testing.T) (string, string) {
 	homeDir := baseHomeDir
 	project := baseProject
+	if fc.homeDir != "" {
+		homeDir = fc.homeDir
+	}
+	if fc.project != "" {
+		project = fc.project
+	}
 	if fc.shortProject == "" {
 		return homeDir, project
 	}
@@ -186,6 +220,13 @@ func resolveFixtureHome(fc *fixtureCfg, baseHomeDir, baseProject string, t *test
 	project = fc.shortProject
 	t.Cleanup(func() { os.RemoveAll(filepath.Join("/tmp", ".golemic", fc.shortProject)) }) //nolint:errcheck
 	return homeDir, project
+}
+
+func resolveFixtureRepoRoot(fc *fixtureCfg, baseRepoRoot string) string {
+	if fc.repoRoot != "" {
+		return fc.repoRoot
+	}
+	return baseRepoRoot
 }
 
 func resolveFixtureRunID(fc *fixtureCfg) string {
@@ -292,6 +333,12 @@ func buildFixtureRunner(fc *fixtureCfg, homeDir, repoRoot, project, runID, branc
 	}
 	if fc.preflighter != nil {
 		r.SetPreflighter(fc.preflighter)
+	}
+	if fc.runAgentFn != nil {
+		r.SetRunAgentFn(fc.runAgentFn)
+	}
+	if fc.quiet {
+		r.SetQuiet(true)
 	}
 	if fc.noopPrecheck {
 		r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }

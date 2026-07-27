@@ -1344,29 +1344,24 @@ func TestRunMergePhase_GateSkipDoesNotDeleteRemote(t *testing.T) { //nolint:cycl
 // short CI timeouts so polling tests complete quickly.
 func makeMergePhaseRunner(t *testing.T, exec *fakeExecutor, issueNum int, logPath string) (*Runner, *[]eventlog.Event) {
 	t.Helper()
-	homeDir := t.TempDir()
-	project := "proj"
-	mkCredDir(t, homeDir, project)
-	creds := mustLoadCredsFromDir(t, homeDir, project)
 
 	var written []eventlog.Event
-	r := &Runner{
-		executor:               exec,
-		issueNum:               issueNum,
-		runID:                  "test-run",
-		repoRoot:               "/repo",
-		homeDir:                homeDir,
-		issue:                  &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
-		cfg:                    &config.Config{Project: project},
-		creds:                  creds,
-		branchName:             fmt.Sprintf("golemic/issue-%d", issueNum),
-		stderr:                 &strings.Builder{},
-		ciTimeoutOverride:      200 * time.Millisecond,
-		ciPollIntervalOverride: 1 * time.Millisecond,
-	}
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withHomeDir(t.TempDir()),
+		withRepoRoot("/repo"),
+		withProject("proj"),
+		withIssueNum(issueNum),
+		withRunID("test-run"),
+		withBranchName(fmt.Sprintf("golemic/issue-%d", issueNum)),
+		withConfig(&config.Config{Project: "proj"}),
+		withIssue(&issueData{Labels: []issueLabel{{Name: "risk:medium"}}}),
+		withCITimeout(200*time.Millisecond),
+		withCIPollInterval(1*time.Millisecond),
+	)
 	writePROpenedEvent(t, logPath, issueNum)
 	writeReviewEventForMerge(t, logPath, "approved", "high")
-	return r, &written
+	return f.r, &written
 }
 
 // git fetch origin fails → merge_failed with "git fetch origin failed:" reason;

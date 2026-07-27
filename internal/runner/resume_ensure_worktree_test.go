@@ -20,16 +20,18 @@ func (w *recordingEventWriter) Write(ev eventlog.Event) error {
 }
 
 // newEnsureWTRunner builds a minimal Runner for ensureDevWorktreeForResume tests.
-func newEnsureWTRunner(exec *fakeExecutor) (*Runner, *bytes.Buffer) {
-	r := New(exec, "/home/t", "/repo", 7)
-	r.repoRoot = "/repo"
-	r.project = "proj"
-	r.cfg = &config.Config{Project: "proj"}
-	r.branchName = "golemic/issue-7"
-	r.runID = "run-1"
-	var buf bytes.Buffer
-	r.SetStderr(&buf)
-	return r, &buf
+func newEnsureWTRunner(t *testing.T, exec *fakeExecutor) (*Runner, *bytes.Buffer) {
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withHomeDir(t.TempDir()),
+		withRepoRoot("/repo"),
+		withProject("proj"),
+		withIssueNum(7),
+		withConfig(&config.Config{Project: "proj"}),
+		withBranchName("golemic/issue-7"),
+		withRunID("run-1"),
+	)
+	return f.r, f.stderr
 }
 
 func devWTFor(r *Runner) string {
@@ -40,7 +42,7 @@ func devWTFor(r *Runner) string {
 func TestEnsureDevWorktreeForResume_IdempotentNoOp(t *testing.T) {
 	var r *Runner
 	exec := &fakeExecutor{}
-	r, _ = newEnsureWTRunner(exec)
+	r, _ = newEnsureWTRunner(t, exec)
 	devWT := devWTFor(r)
 	exec.runFunc = func(name string, args ...string) (string, error) {
 		joined := strings.Join(args, " ")
@@ -68,7 +70,7 @@ func TestEnsureDevWorktreeForResume_IdempotentNoOp(t *testing.T) {
 // directory registered on a different branch -> clear abort, no recreation.
 func TestEnsureDevWorktreeForResume_WrongBranchAborts(t *testing.T) {
 	exec := &fakeExecutor{}
-	r, stderr := newEnsureWTRunner(exec)
+	r, stderr := newEnsureWTRunner(t, exec)
 	devWT := devWTFor(r)
 	exec.runFunc = func(name string, args ...string) (string, error) {
 		joined := strings.Join(args, " ")
@@ -89,7 +91,7 @@ func TestEnsureDevWorktreeForResume_WrongBranchAborts(t *testing.T) {
 // no local dev worktree -> recreated on the PR branch before delegating.
 func TestEnsureDevWorktreeForResume_RecreatesFromRemoteBranch(t *testing.T) {
 	exec := &fakeExecutor{}
-	r, _ := newEnsureWTRunner(exec)
+	r, _ := newEnsureWTRunner(t, exec)
 	exec.runFunc = func(name string, args ...string) (string, error) {
 		joined := strings.Join(args, " ")
 		switch {
@@ -130,7 +132,7 @@ func hasTrackingWorktreeAdd(calls []callRecord, branch string) bool {
 // remote branch missing during recreation -> abort, no event.
 func TestEnsureDevWorktreeForResume_RemoteBranchMissingAborts(t *testing.T) {
 	exec := &fakeExecutor{}
-	r, stderr := newEnsureWTRunner(exec)
+	r, stderr := newEnsureWTRunner(t, exec)
 	exec.runFunc = func(name string, args ...string) (string, error) {
 		joined := strings.Join(args, " ")
 		switch {

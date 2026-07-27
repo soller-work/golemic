@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"golemic/internal/agent"
+	"golemic/internal/config"
 	"golemic/internal/telemetry"
 )
 
@@ -272,12 +273,24 @@ func writeActivityForInvocation(t *testing.T, runsDir, runID, role string, round
 // buildTokenUsageRunner sets up a pingpong-style runner with a recording sink.
 func buildTokenUsageRunner(t *testing.T) (*Runner, string, *recordingSink) {
 	t.Helper()
+	injectFakeGMBrokerPP(t)
 	exec := pingPongExecutor(false, nil)
-	r, logPath, _ := setupPingPongRunner(t, exec)
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withShortHome(ppProject, ppRunID),
+		withGuidelines("dev", "reviewer"),
+		withAgents("dev", "reviewer"),
+		withConfig(&config.Config{
+			VerifyCommand:   "go test",
+			TimeoutMinutes:  30,
+			MaxReviewRounds: 5,
+		}),
+		withNoopReviewerPrecheck(),
+	)
 	sink := &recordingSink{}
-	r.sink = sink
-	r.traceID = telemetry.TraceID(r.runID)
-	return r, logPath, sink
+	f.r.sink = sink
+	f.r.traceID = telemetry.TraceID(f.runID)
+	return f.r, f.eventLogPath, sink
 }
 
 // agentFnWithUsage returns a fake agent that writes known usage lines per invocation.
