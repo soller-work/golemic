@@ -137,7 +137,7 @@ func TestLoadIssue_ParsesState(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRunner_SkipsWhenIssueClosed_WithReadyLabel — AC-002
+// TestRunner_SkipsWhenIssueClosed_WithReadyLabel
 // ---------------------------------------------------------------------------
 
 func TestRunner_SkipsWhenIssueClosed_WithReadyLabel(t *testing.T) {
@@ -178,7 +178,7 @@ func TestRunner_SkipsWhenIssueClosed_WithReadyLabel(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRunner_SkipsWhenIssueClosed_WithoutReadyLabel — AC-003
+// TestRunner_SkipsWhenIssueClosed_WithoutReadyLabel
 // ---------------------------------------------------------------------------
 
 func TestRunner_SkipsWhenIssueClosed_WithoutReadyLabel(t *testing.T) {
@@ -212,7 +212,7 @@ func TestRunner_SkipsWhenIssueClosed_WithoutReadyLabel(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRunner_SkipsWhenIssueStateUnknown — AC-004 (fail-closed on empty state)
+// TestRunner_SkipsWhenIssueStateUnknown (fail-closed on empty state)
 // ---------------------------------------------------------------------------
 
 func TestRunner_SkipsWhenIssueStateUnknown(t *testing.T) {
@@ -242,7 +242,7 @@ func TestRunner_SkipsWhenIssueStateUnknown(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestRunner_ProceedsWhenIssueOpen — AC-001 regression guard
+// TestRunner_ProceedsWhenIssueOpen regression guard
 // ---------------------------------------------------------------------------
 
 func TestRunner_ProceedsWhenIssueOpen(t *testing.T) {

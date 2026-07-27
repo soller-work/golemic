@@ -568,7 +568,7 @@ func assertGateRetrySelfLoop(t *testing.T, events []eventlog.Event, records []te
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: Full Run() emits paired spans to telemetry.jsonl including run span
+// Full Run() emits paired spans to telemetry.jsonl including run span
 // ---------------------------------------------------------------------------
 
 func TestTelemetry_FullRun_PairedSpansInFile_AC001(t *testing.T) {
@@ -662,7 +662,7 @@ func TestTelemetry_GateRetrySelfLoop_AC009(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: span.start is present in records before span.end (start-before-end ordering)
+// span.start is present in records before span.end (start-before-end ordering)
 // ---------------------------------------------------------------------------
 
 func TestTelemetry_AgentTurnSpanStartBeforeEnd_AC002(t *testing.T) {
@@ -717,7 +717,7 @@ func TestTelemetry_AgentTurnSpanStartBeforeEnd_AC002(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: telemetry.enabled=false → no telemetry.jsonl created
+// telemetry.enabled=false → no telemetry.jsonl created
 // ---------------------------------------------------------------------------
 
 func TestTelemetry_Disabled_NoFileCreated_AC003(t *testing.T) {
@@ -769,7 +769,7 @@ func TestTelemetry_Disabled_NoFileCreated_AC003(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-004: Failing sink does not abort the run
+// Failing sink does not abort the run
 // ---------------------------------------------------------------------------
 
 func TestTelemetry_FailingSink_DoesNotAbortRun_AC004(t *testing.T) {
@@ -818,7 +818,7 @@ func TestTelemetry_FailingSink_ViaRun_AC004(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-006: Telemetry records contain no secrets or content
+// Telemetry records contain no secrets or content
 // ---------------------------------------------------------------------------
 
 func TestTelemetry_NoSecretsInRecords_AC006(t *testing.T) {
@@ -890,7 +890,7 @@ func TestTelemetry_NoSecretsInRecords_AC006(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-005: Ping-pong rounds encoded as attributes, not in span name
+// Ping-pong rounds encoded as attributes, not in span name
 // ---------------------------------------------------------------------------
 
 func TestTelemetry_RoundAttributes_NotInSpanName_AC005(t *testing.T) {

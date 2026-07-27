@@ -15,7 +15,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// AC-2 (new): ineligible issue → TERMINAL_SKIPPED, run_finished: skipped, exit 0
+// ineligible issue → TERMINAL_SKIPPED, run_finished: skipped, exit 0
 // ---------------------------------------------------------------------------
 
 func TestStepPrepare_IneligibleIssue_TerminalSkipped_AC2(t *testing.T) {
@@ -46,7 +46,7 @@ func TestStepPrepare_IneligibleIssue_TerminalSkipped_AC2(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-3 (new): collision → TERMINAL_ABORTED, run_finished: aborted, exit 1
+// collision → TERMINAL_ABORTED, run_finished: aborted, exit 1
 // ---------------------------------------------------------------------------
 
 // buildLocalBranchCollisionExec returns an executor where the given branch
@@ -108,7 +108,7 @@ func TestStepPrepare_Collision_TerminalAborted_AC3(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-4 (new): worktree-create failure → sets WorktreeCreateFailed flag
+// worktree-create failure → sets WorktreeCreateFailed flag
 // ---------------------------------------------------------------------------
 
 // buildWorktreeFailExec returns an executor that fails git worktree add.

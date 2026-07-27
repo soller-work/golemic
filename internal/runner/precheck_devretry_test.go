@@ -166,7 +166,7 @@ func TestPrecheckNotOk_RoundsExhausted_Escalates(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-P4 (BR-P5): green precheck → reviewer LLM runs unchanged, no dev-retry
+// green precheck → reviewer LLM runs unchanged, no dev-retry
 // ---------------------------------------------------------------------------
 
 func TestPrecheckGreen_ReviewerRunsUnchanged(t *testing.T) {

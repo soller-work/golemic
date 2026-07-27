@@ -36,7 +36,7 @@ func devWTFor(r *Runner) string {
 	return filepath.Join(r.homeDir, ".golemic", r.cfg.Project, "worktrees", "issue-7")
 }
 
-// AC-2: existing valid dev worktree on the correct branch -> idempotent no-op.
+// existing valid dev worktree on the correct branch -> idempotent no-op.
 func TestEnsureDevWorktreeForResume_IdempotentNoOp(t *testing.T) {
 	var r *Runner
 	exec := &fakeExecutor{}
@@ -65,7 +65,7 @@ func TestEnsureDevWorktreeForResume_IdempotentNoOp(t *testing.T) {
 	}
 }
 
-// AC-3: directory registered on a different branch -> clear abort, no recreation.
+// directory registered on a different branch -> clear abort, no recreation.
 func TestEnsureDevWorktreeForResume_WrongBranchAborts(t *testing.T) {
 	exec := &fakeExecutor{}
 	r, stderr := newEnsureWTRunner(exec)
@@ -86,7 +86,7 @@ func TestEnsureDevWorktreeForResume_WrongBranchAborts(t *testing.T) {
 	}
 }
 
-// AC-1: no local dev worktree -> recreated on the PR branch before delegating.
+// no local dev worktree -> recreated on the PR branch before delegating.
 func TestEnsureDevWorktreeForResume_RecreatesFromRemoteBranch(t *testing.T) {
 	exec := &fakeExecutor{}
 	r, _ := newEnsureWTRunner(exec)
@@ -127,7 +127,7 @@ func hasTrackingWorktreeAdd(calls []callRecord, branch string) bool {
 	return false
 }
 
-// AC-4 (defensive BR-1): remote branch missing during recreation -> abort, no event.
+// remote branch missing during recreation -> abort, no event.
 func TestEnsureDevWorktreeForResume_RemoteBranchMissingAborts(t *testing.T) {
 	exec := &fakeExecutor{}
 	r, stderr := newEnsureWTRunner(exec)

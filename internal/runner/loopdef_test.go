@@ -6,7 +6,7 @@ import (
 	"golemic/internal/loop"
 )
 
-// AC-5: terminalOutcome is total over the 9 terminal steps with correct pairs.
+// terminalOutcome is total over the 9 terminal steps with correct pairs.
 func TestTerminalOutcome_AC5_Totality(t *testing.T) {
 	cases := []struct {
 		step     loop.StepKey
@@ -47,7 +47,7 @@ func TestTerminalOutcome_AC5_Totality(t *testing.T) {
 	}
 }
 
-// AC-5: terminalOutcome panics on an unknown step.
+// terminalOutcome panics on an unknown step.
 func TestTerminalOutcome_UnknownStepPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {
@@ -57,7 +57,7 @@ func TestTerminalOutcome_UnknownStepPanics(t *testing.T) {
 	terminalOutcome("NOT_A_TERMINAL")
 }
 
-// guardFixtures is the fixture set specified in AC-6.
+// guardFixtures is the fixture set for guard transition testing.
 var guardFixtures = func() []RunContext {
 	var fixtures []RunContext
 	maxRounds := 3
@@ -85,7 +85,7 @@ var guardFixtures = func() []RunContext {
 	return fixtures
 }()
 
-// AC-6: for every (From, Event) group with >1 edge, exactly one guard matches per fixture.
+// for every (From, Event) group with >1 edge, exactly one guard matches per fixture.
 func TestLoopTransitions_AC6_GuardDisjointness(t *testing.T) {
 	transitions := loopTransitions()
 
@@ -134,7 +134,7 @@ func computeReachable(seed loop.StepKey, transitions []loop.Transition[RunContex
 	return reachable
 }
 
-// AC-5 (slice 5): fresh-run machine starts at StepPrepare and all non-terminal
+// fresh-run machine starts at StepPrepare and all non-terminal
 // steps are reachable from PREPARE.
 func TestLoopTransitions_AC5_PrepareIsUniqueEntry(t *testing.T) {
 	transitions := loopTransitions()
@@ -158,7 +158,7 @@ func TestLoopTransitions_AC5_PrepareIsUniqueEntry(t *testing.T) {
 	}
 }
 
-// AC-7: every non-terminal To has outgoing transitions; every From is non-terminal.
+// every non-terminal To has outgoing transitions; every From is non-terminal.
 func TestLoopTransitions_AC7_StructuralSanity(t *testing.T) {
 	terminals := loopTerminals()
 	transitions := loopTransitions()

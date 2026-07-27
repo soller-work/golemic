@@ -8,7 +8,7 @@ import (
 	"golemic/internal/eventlog"
 )
 
-// --- AC-006: Runner assigns strictly increasing turnId per agent turn ---
+// --- Runner assigns strictly increasing turnId per agent turn ---
 
 func TestRunnerTurnIDMonotonic_AC006(t *testing.T) {
 	// dev → reviewer (approved) — two RunRole calls must get TurnID 1, 2.
@@ -20,7 +20,7 @@ func TestRunnerTurnIDMonotonic_AC006(t *testing.T) {
 		captured = append(captured, cfg)
 		switch cfg.Role {
 		case "dev":
-			// Satisfy the §10 gate; runner writes pr_opened.
+			// Satisfy the gate; runner writes pr_opened.
 			if !sendGMProjectCheck(cfg.Env) {
 				t.Errorf("TestRunnerTurnIDMonotonic_AC006: sendGMProjectCheck failed")
 			}
@@ -62,7 +62,7 @@ func TestRunnerTurnIDMonotonicPingPong_AC006(t *testing.T) {
 		captured = append(captured, cfg)
 		switch cfg.Role {
 		case "dev":
-			// Satisfy the §10 gate; runner writes pr_opened on the first call.
+			// Satisfy the gate; runner writes pr_opened on the first call.
 			if !sendGMProjectCheck(cfg.Env) {
 				t.Errorf("TestRunnerTurnIDMonotonicPingPong_AC006: sendGMProjectCheck failed")
 			}
@@ -106,7 +106,7 @@ func roleNames(cfgs []agent.RoleConfig) []string {
 	return names
 }
 
-// --- AC-008: Runner-emitted repeated event types are never deduped ---
+// --- Runner-emitted repeated event types are never deduped ---
 
 func TestRunnerWorktreeCreatedAcrossRoundsNotDeduped_AC008(t *testing.T) { //nolint:cyclop
 	// dev(1) → reviewer-changes_requested(2) → dev-retry(3) → reviewer-approved(4)
@@ -118,7 +118,7 @@ func TestRunnerWorktreeCreatedAcrossRoundsNotDeduped_AC008(t *testing.T) { //nol
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		switch cfg.Role {
 		case "dev":
-			// Satisfy the §10 gate; runner writes pr_opened on the first call.
+			// Satisfy the gate; runner writes pr_opened on the first call.
 			if !sendGMProjectCheck(cfg.Env) {
 				t.Errorf("TestRunnerWorktreeCreated: sendGMProjectCheck failed")
 			}

@@ -126,7 +126,6 @@ func TestRunReviewerAgent_ChainExhausted_NonZeroAgentCompleted(t *testing.T) {
 	}
 }
 
-// TestRunReviewerAgent_ChainExhausted_WithPR_PostsOneComment verifies BR-10.
 func TestRunReviewerAgent_ChainExhausted_WithPR_PostsOneComment(t *testing.T) {
 	r, logPath, _ := setupExitCodeRunner(t, "reviewer")
 
@@ -164,7 +163,7 @@ func TestRunReviewerAgent_ChainExhausted_WithPR_PostsOneComment(t *testing.T) {
 	}
 }
 
-// TestRunDevAgent_ChainExhausted_NoPR_NoComment verifies BR-10: no PR → no comment.
+// TestRunDevAgent_ChainExhausted_NoPR_NoComment verifies no PR → no comment.
 func TestRunDevAgent_ChainExhausted_NoPR_NoComment(t *testing.T) {
 	// Use dev setup which has no pr_opened event in log
 	r, logPath, _ := setupExitCodeRunner(t, "dev")
@@ -188,7 +187,6 @@ func TestRunDevAgent_ChainExhausted_NoPR_NoComment(t *testing.T) {
 	}
 }
 
-// TestRunDevAgent_ChainExhausted_DiagnosticsContainModels verifies BR-8.
 func TestRunDevAgent_ChainExhausted_DiagnosticsContainModels(t *testing.T) {
 	r, logPath, stderr := setupExitCodeRunner(t, "dev")
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
