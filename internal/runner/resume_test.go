@@ -15,13 +15,14 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 )
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-// setupResumeRunner creates a minimal Runner ready for resumeOrchestrate unit tests.
+// setupResumeRunner creates a minimal Runner ready for resume unit tests.
 func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *bytes.Buffer) {
 	t.Helper()
 	homeDir, repoRoot, project := setupRunnerTest(t)
@@ -84,7 +85,7 @@ func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 		TimeoutMinutes:  30,
 		MaxReviewRounds: 3,
 	}
-	r.issue = &issueData{Number: 42, Title: "Test Issue"}
+	r.issue = &issueData{Number: 42, Title: "Test Issue", State: "OPEN"}
 
 	var stderr bytes.Buffer
 	r.SetStderr(&stderr)
@@ -96,7 +97,7 @@ func setupResumeRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *byte
 	return r, filepath.Join(shortHome, ".golemic", shortProject, "runs", shortRunID, "events.jsonl"), &stderr
 }
 
-// runResumeOrchestrate prepares the event log and runs resumeOrchestrate.
+// runResumeOrchestrate prepares the event log and runs the machine from PREPARE.
 func runResumeOrchestrate(t *testing.T, r *Runner, logPath string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
@@ -120,7 +121,26 @@ func runResumeOrchestrate(t *testing.T, r *Runner, logPath string) string {
 		t.Fatalf("open resume writer: %v", err)
 	}
 	defer writer.Close() //nolint:errcheck
-	return r.resumeOrchestrate(writer, logPath, "")
+
+	var timeout time.Duration
+	if r.cfg.TimeoutSeconds > 0 {
+		timeout = time.Duration(r.cfg.TimeoutSeconds) * time.Second
+	} else {
+		timeout = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+	}
+	ctx := &RunContext{
+		GolemicDir:   filepath.Join(r.homeDir, ".golemic", r.project),
+		EventLogPath: logPath,
+		Timeout:      timeout,
+		ParentSpanID: "",
+		Round:        1,
+		MaxRounds:    r.cfg.MaxReviewRounds,
+		Writer:       writer,
+		DevMode:      DevModeInitial,
+		Resume:       true,
+	}
+	r.loopCtx = ctx
+	return r.runMachineFrom(loop.StepPrepare, ctx)
 }
 
 // prListJSON returns a gh pr list --state all JSON response.
@@ -432,7 +452,7 @@ func baseResumeExecutor(
 
 // makeResumeFakeAgent returns a runAgentFn for resume tests.
 // Unlike makeOrchestrateFakeAgent, it does NOT write pr_opened for the first dev call
-// (since in resume mode, pr_opened is already synthesized by resumeOrchestrate).
+// (since in resume mode, pr_opened is already synthesized during PREPARE hydration).
 func makeResumeFakeAgent(t *testing.T, rounds []agentRoundConfig, capture *promptCapture) func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 	t.Helper()
 	callIdx := 0
@@ -658,6 +678,9 @@ func TestResume_PRAlreadyMerged_IdempotentSuccess(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "already merged") {
 		t.Errorf("expected 'already merged' in stderr, got: %q", stderr.String())
+	}
+	if callIndexMatching(exec.calls, "gh", "pr", "merge", "7", "--squash") != -1 {
+		t.Fatalf("did not expect gh pr merge on already merged PR, got calls: %+v", exec.calls)
 	}
 
 	// Verify pr_opened event was synthesized

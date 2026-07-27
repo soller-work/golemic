@@ -66,14 +66,17 @@ var guardFixtures = func() []RunContext {
 			for _, resume := range []bool{false, true} {
 				for _, verdict := range []string{"", "approved", "changes_requested"} {
 					for _, wtFailed := range []bool{false, true} {
-						fixtures = append(fixtures, RunContext{
-							DevAttempt:           devAttempt,
-							Round:                round,
-							MaxRounds:            maxRounds,
-							Resume:               resume,
-							ResumeVerdict:        verdict,
-							WorktreeCreateFailed: wtFailed,
-						})
+						for _, failKind := range []string{"", "dev_failed", "review_failed", "escalated"} {
+							fixtures = append(fixtures, RunContext{
+								DevAttempt:           devAttempt,
+								Round:                round,
+								MaxRounds:            maxRounds,
+								Resume:               resume,
+								ResumeVerdict:        verdict,
+								WorktreeCreateFailed: wtFailed,
+								PrepareFailKind:      failKind,
+							})
+						}
 					}
 				}
 			}

@@ -9,12 +9,14 @@ import (
 )
 
 // stepPrepare runs, in order: skip check, --clean cleanup, collision check
-// (skipped when ctx.Resume is true), and dev-worktree creation.
+// (skipped when ctx.Resume is true), resume hydration, and dev-worktree
+// creation for fresh runs.
 //
 // Event mapping:
 //
 //	issue not eligible (skip)                           → loop.EventNotEligible
 //	clean failure / collision detected / check error    → loop.EventPrepareFailed
+//	resume hydration failure                            → loop.EventPrepareFailed
 //	worktree-create failure                             → loop.EventPrepareFailed
 //	                                                      (ctx.WorktreeCreateFailed = true)
 //	all checks passed, worktree ready                   → loop.EventReady
@@ -53,21 +55,24 @@ func (r *Runner) stepPrepare(ctx *RunContext) loop.EventKey {
 			fmt.Fprintln(r.stderr, collision.Message)
 			return loop.EventPrepareFailed
 		}
+		// Create dev worktree (turn 1: initial dev).
+		// The worktree.create span is a child of the run span so callers must set
+		// r.traceID and r.sink before entering the machine.
+		r.turnCounter++
+		_, endCreateDevWT := telemetry.StartSpan(r.sink, r.traceID, ctx.ParentSpanID, telemetry.SpanWorktreeCreate,
+			map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
+		if err := worktree.Create(r.repoRoot, ctx.GolemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, ctx.Writer, r.turnCounter); err != nil {
+			endCreateDevWT(telemetry.StatusError, nil)
+			fmt.Fprintf(r.stderr, "Failed to create dev worktree: %v\n", err)
+			ctx.WorktreeCreateFailed = true
+			return loop.EventPrepareFailed
+		}
+		endCreateDevWT(telemetry.StatusOK, nil)
+		return loop.EventReady
 	}
 
-	// Create dev worktree (turn 1: initial dev).
-	// The worktree.create span is a child of the run span so callers must set
-	// r.traceID and r.sink before entering the machine.
-	r.turnCounter++
-	_, endCreateDevWT := telemetry.StartSpan(r.sink, r.traceID, ctx.ParentSpanID, telemetry.SpanWorktreeCreate,
-		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
-	if err := worktree.Create(r.repoRoot, ctx.GolemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, ctx.Writer, r.turnCounter); err != nil {
-		endCreateDevWT(telemetry.StatusError, nil)
-		fmt.Fprintf(r.stderr, "Failed to create dev worktree: %v\n", err)
-		ctx.WorktreeCreateFailed = true
+	if err := r.hydrateResume(ctx); err != nil {
 		return loop.EventPrepareFailed
 	}
-	endCreateDevWT(telemetry.StatusOK, nil)
-
 	return loop.EventReady
 }

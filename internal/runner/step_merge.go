@@ -10,6 +10,9 @@ import (
 // runMergePhase only returns outcomeSuccess or outcomeMergeFailed today;
 // any unexpected string is routed to EventMergeFailed with a stderr note.
 func (r *Runner) stepMergePR(ctx *RunContext) loop.EventKey {
+	if ctx.PRState == "MERGED" {
+		return loop.EventMerged
+	}
 	outcome := r.runMergePhase(ctx.Writer, ctx.EventLogPath)
 	return mapMergePROutcome(r, outcome)
 }

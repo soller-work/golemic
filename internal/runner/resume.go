@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"golemic/internal/eventlog"
-	"golemic/internal/loop"
 	"golemic/internal/worktree"
 )
 
@@ -319,111 +318,192 @@ func confidenceFromLabels(labels []string) string {
 	return "low"
 }
 
-// resumeOrchestrate implements the resume orchestration path, called instead of orchestrate()
-// when --resume is active. It uses GitHub as the source of truth to reconstruct run state.
-func (r *Runner) resumeOrchestrate(writer worktree.EventWriter, eventLogPath string, runSpanID string) string {
-	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+// applyRunMode copies runner mode into the shared context.
+func (r *Runner) applyRunMode(ctx *RunContext) { ctx.Resume = r.resume }
 
-	var timeout time.Duration
-	if r.cfg.TimeoutSeconds > 0 {
-		timeout = time.Duration(r.cfg.TimeoutSeconds) * time.Second
-	} else {
-		timeout = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+// hydrateResume reconstructs RunContext and synthesized events from GitHub state.
+func (r *Runner) hydrateResume(ctx *RunContext) error {
+	ctx.PrepareFailKind = ""
+
+	pr, botLogin, merged, validateErr := r.resumeValidate(ctx.Writer)
+	if validateErr != "" {
+		return fmt.Errorf("%s", validateErr)
+	}
+	if merged {
+		return r.hydrateMergedResume(ctx)
+	}
+	return r.hydrateOpenResume(ctx, pr, botLogin)
+}
+
+func (r *Runner) hydrateMergedResume(ctx *RunContext) error {
+	ctx.Round = 0
+	ctx.ResumeVerdict = "approved"
+	ctx.PRState = "MERGED"
+	return nil
+}
+
+func (r *Runner) hydrateOpenResume(ctx *RunContext, pr *prInfo, botLogin string) error {
+	if o := r.ensureDevWorktreeForResume(ctx.Writer); o != "" {
+		return fmt.Errorf("resume: failed to ensure dev worktree")
 	}
 
-	r.loopCtx = &RunContext{
-		GolemicDir:   golemicDir,
-		EventLogPath: eventLogPath,
-		Timeout:      timeout,
-		ParentSpanID: runSpanID,
-		MaxRounds:    r.cfg.MaxReviewRounds,
-		Writer:       writer,
-	}
-
-	pr, botLogin, outcome := r.resumeValidate(writer)
-	if outcome != "" {
-		return outcome
-	}
-
-	if o := r.ensureDevWorktreeForResume(writer); o != "" {
-		return o
-	}
-
-	if synthErr := r.synthesizePROpenedEvent(writer, pr.Number); synthErr != nil {
+	if synthErr := r.synthesizePROpenedEvent(ctx.Writer, pr.Number); synthErr != nil {
 		fmt.Fprintf(r.stderr, "resume: failed to write pr_opened event: %v\n", synthErr)
-		return outcomeAborted
+		return synthErr
 	}
 
 	allReviews, err := r.fetchSubmittedGitHubReviews(pr.Number)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "resume: failed to fetch reviews for PR #%d: %v\n", pr.Number, err)
-		return outcomeAborted
+		return err
 	}
 
-	return r.resumeHandleReviews(writer, eventLogPath, pr, botLogin, allReviews, timeout, runSpanID)
+	return r.hydrateResumeReviews(ctx, pr, botLogin, allReviews)
 }
 
-// resumeHandleReviews chooses the next resume step based on the fetched review list.
-func (r *Runner) resumeHandleReviews(writer worktree.EventWriter, eventLogPath string, pr *prInfo, botLogin string, allReviews []githubReview, timeout time.Duration, runSpanID string) string {
+func (r *Runner) hydrateResumeReviews(ctx *RunContext, pr *prInfo, botLogin string, allReviews []githubReview) error {
 	submittedReviews := filterDecisionReviews(allReviews)
+	ctx.Round = countBotChangesRequestedReviews(submittedReviews, botLogin)
+	ctx.PRState = ""
+
 	if len(submittedReviews) == 0 {
-		if o := r.runCIGate(pr.Number, eventLogPath, timeout); o != outcomeSuccess {
-			return o
-		}
-		return r.resumeStartReviewerTurn(pr.Number, botLogin)
+		return r.hydrateResumeNoDecision(ctx, pr, botLogin)
 	}
+	return r.hydrateResumeDecision(ctx, pr, botLogin, submittedReviews)
+}
 
+func (r *Runner) hydrateResumeNoDecision(ctx *RunContext, pr *prInfo, botLogin string) error {
+	if o := r.runCIGate(pr.Number, ctx.EventLogPath, ctx.Timeout); o != outcomeSuccess {
+		ctx.PrepareFailKind = "dev_failed"
+		return fmt.Errorf("resume: CI gate failed")
+	}
+	if err := r.resumePrepareReviewerTurn(pr.Number, botLogin); err != nil {
+		fmt.Fprintf(r.stderr, "%v\n", err)
+		return err
+	}
+	ctx.ReviewerWorktreeExists = true
+	ctx.ResumeVerdict = ""
+	return nil
+}
+
+func (r *Runner) hydrateResumeDecision(ctx *RunContext, pr *prInfo, botLogin string, submittedReviews []githubReview) error {
 	lastReview := submittedReviews[len(submittedReviews)-1]
-	botRounds := countBotChangesRequestedReviews(submittedReviews, botLogin)
-
 	switch lastReview.State {
 	case "CHANGES_REQUESTED":
-		return r.resumeHandleChangesRequested(writer, eventLogPath, pr.Number, submittedReviews, lastReview, botLogin, botRounds, runSpanID)
+		return r.hydrateResumeChangesRequested(ctx, pr, botLogin, submittedReviews, lastReview)
 	case "APPROVED":
-		return r.resumeHandleApproved(writer, eventLogPath, pr, lastReview)
+		return r.hydrateResumeApproved(ctx, pr, lastReview)
 	default:
 		fmt.Fprintf(r.stderr, "resume: last submitted review has unhandled state %q\n", lastReview.State)
-		return outcomeAborted
+		return fmt.Errorf("resume: unhandled review state %q", lastReview.State)
 	}
 }
 
-// resumeStartReviewerTurn proves pending review state and then starts the reviewer loop.
-func (r *Runner) resumeStartReviewerTurn(prNumber int, botLogin string) string {
-	if err := r.resumePrepareReviewerTurn(prNumber, botLogin); err != nil {
-		fmt.Fprintf(r.stderr, "%v\n", err)
-		return outcomeAborted
+func (r *Runner) hydrateResumeChangesRequested(ctx *RunContext, pr *prInfo, botLogin string, submittedReviews []githubReview, lastReview githubReview) error {
+	ctx.ResumeVerdict = "changes_requested"
+	if err := r.resumeSynthesizeBotCREvents(ctx.Writer, pr.Number, submittedReviews, botLogin); err != nil {
+		fmt.Fprintf(r.stderr, "resume: failed to synthesize review event: %v\n", err)
+		return err
 	}
-	r.loopCtx.ReviewerWorktreeExists = true
-	return r.runMachineFrom(loop.StepRunReviewer, r.loopCtx)
+	if ctx.Round >= r.cfg.MaxReviewRounds {
+		r.postEscalationCommentWithSpan(ctx.EventLogPath, ctx.ParentSpanID, ctx.Round)
+		ctx.PrepareFailKind = "escalated"
+		return fmt.Errorf("resume: review rounds exhausted")
+	}
+
+	findings, findingsJSON, err := r.hydrateResumeFindings(pr, lastReview)
+	if err != nil {
+		return err
+	}
+	if findings == "" {
+		findings = "See inline review comments"
+	}
+
+	ctx.Round = ctx.Round + 1
+	ctx.Findings = findings
+	ctx.FindingsJSON = findingsJSON
+	ctx.DevMode = DevModeRetryWithFindings
+	ctx.DevAttempt = 0
+	ctx.ReviewerWorktreeExists = true
+	return nil
 }
 
-// resumeCheckPRState validates the PR state for the resume path.
-// Returns (pr, outcome): outcome is non-empty when the caller should return it immediately.
-func (r *Runner) resumeCheckPRState(pr *prInfo, writer worktree.EventWriter) (*prInfo, string) {
+func (r *Runner) hydrateResumeFindings(pr *prInfo, lastReview githubReview) (string, string, error) {
+	findings := lastReview.Body
+	findingsJSON, err := r.buildFindingsJSONForReview(pr.Number, lastReview.databaseIDStr())
+	if err != nil {
+		fmt.Fprintf(r.stderr, "resume: failed to load inline comments for review #%d: %v\n", lastReview.DatabaseID, err)
+		return "", "", err
+	}
+	if findings == "" && findingsJSON == "" {
+		fmt.Fprintf(r.stderr,
+			"resume: CHANGES_REQUESTED review #%d has no findings (empty body and no inline comments)\n",
+			lastReview.DatabaseID)
+		return "", "", fmt.Errorf("resume: empty findings")
+	}
+	return findings, findingsJSON, nil
+}
+
+func (r *Runner) hydrateResumeApproved(ctx *RunContext, pr *prInfo, lastReview githubReview) error {
+	ctx.ResumeVerdict = "approved"
+	confidence := confidenceFromLabels(pr.Labels)
+	if synthErr := r.synthesizeReviewSubmittedEvent(ctx.Writer, pr.Number, "approved", confidence, lastReview.databaseIDStr()); synthErr != nil {
+		fmt.Fprintf(r.stderr, "resume: failed to write review_submitted event: %v\n", synthErr)
+		return synthErr
+	}
+	return nil
+}
+
+// resumeValidate fetches and validates the PR for resume, checking state, remote branch, bot login,
+// and human pending reviews. Returns the PR info, bot login, a merged flag, and a non-empty outcome on failure.
+func (r *Runner) resumeValidate(writer worktree.EventWriter) (*prInfo, string, bool, string) {
+	pr, err := r.fetchOpenPRForResume()
+	if err != nil {
+		fmt.Fprintf(r.stderr, "resume: %v\n", err)
+		return nil, "", false, outcomeAborted
+	}
+
 	switch pr.State {
 	case "MERGED":
 		if synthErr := r.synthesizePROpenedEvent(writer, pr.Number); synthErr != nil {
 			fmt.Fprintf(r.stderr, "resume: failed to write pr_opened event: %v\n", synthErr)
-			return nil, outcomeAborted
+			return nil, "", false, outcomeAborted
 		}
 		fmt.Fprintf(r.stderr, "resume: PR #%d is already merged; nothing to do\n", pr.Number)
-		return nil, outcomeSuccess
+		return pr, "", true, ""
 	case "CLOSED":
 		fmt.Fprintf(r.stderr, "resume: PR #%d is closed but not merged; manual intervention required\n", pr.Number)
-		return nil, outcomeAborted
+		return nil, "", false, outcomeAborted
 	case "OPEN":
-		return pr, ""
 	default:
 		fmt.Fprintf(r.stderr, "resume: PR #%d has unexpected state %q\n", pr.Number, pr.State)
-		return nil, outcomeAborted
+		return nil, "", false, outcomeAborted
 	}
+
+	remoteOut, gitErr := r.executor.RunInDir(r.repoRoot, "git", "ls-remote", "--heads", "origin", r.branchName)
+	if gitErr != nil {
+		fmt.Fprintf(r.stderr, "resume: failed to check remote branch: %v\n", gitErr)
+		return nil, "", false, outcomeAborted
+	}
+	if strings.TrimSpace(remoteOut) == "" {
+		fmt.Fprintf(r.stderr, "resume: remote branch %s not found on origin; cannot resume\n", r.branchName)
+		return nil, "", false, outcomeAborted
+	}
+
+	botLogin, err := r.fetchBotLogin()
+	if err != nil {
+		fmt.Fprintf(r.stderr, "resume: %v\n", err)
+		return nil, "", false, outcomeAborted
+	}
+
+	return pr, botLogin, false, ""
 }
 
 // ensureDevWorktreeForResume guarantees a dev worktree on the PR branch exists
-// before the resume flow delegates to functions that operate on devWorktreePath()
-// (runDevTurn, runPreReviewSyncGate, runMergePhase). All git plumbing lives in
-// the worktree package (worktree.EnsureForResume); this only maps failures to the
-// resume outcome. Returns "" on success or outcomeAborted on failure.
+// before the resume flow delegates to functions that operate on devWorktreePath().
+// All git plumbing lives in the worktree package (worktree.EnsureForResume);
+// this only maps failures to the resume outcome. Returns "" on success or
+// outcomeAborted on failure.
 func (r *Runner) ensureDevWorktreeForResume(writer worktree.EventWriter) string {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	if err := worktree.EnsureForResume(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer, r.turnCounter); err != nil {
@@ -431,38 +511,6 @@ func (r *Runner) ensureDevWorktreeForResume(writer worktree.EventWriter) string 
 		return outcomeAborted
 	}
 	return ""
-}
-
-// resumeValidate fetches and validates the PR for resume, checking state, remote branch, bot login,
-// and human pending reviews. Returns the PR info, bot login, and a non-empty outcome on failure.
-func (r *Runner) resumeValidate(writer worktree.EventWriter) (*prInfo, string, string) {
-	pr, err := r.fetchOpenPRForResume()
-	if err != nil {
-		fmt.Fprintf(r.stderr, "resume: %v\n", err)
-		return nil, "", outcomeAborted
-	}
-
-	if _, stateOutcome := r.resumeCheckPRState(pr, writer); stateOutcome != "" {
-		return nil, "", stateOutcome
-	}
-
-	remoteOut, gitErr := r.executor.RunInDir(r.repoRoot, "git", "ls-remote", "--heads", "origin", r.branchName)
-	if gitErr != nil {
-		fmt.Fprintf(r.stderr, "resume: failed to check remote branch: %v\n", gitErr)
-		return nil, "", outcomeAborted
-	}
-	if strings.TrimSpace(remoteOut) == "" {
-		fmt.Fprintf(r.stderr, "resume: remote branch %s not found on origin; cannot resume\n", r.branchName)
-		return nil, "", outcomeAborted
-	}
-
-	botLogin, err := r.fetchBotLogin()
-	if err != nil {
-		fmt.Fprintf(r.stderr, "resume: %v\n", err)
-		return nil, "", outcomeAborted
-	}
-
-	return pr, botLogin, ""
 }
 
 // filterDecisionReviews returns only APPROVED and CHANGES_REQUESTED reviews.
@@ -486,62 +534,4 @@ func (r *Runner) resumeSynthesizeBotCREvents(writer worktree.EventWriter, prNumb
 		}
 	}
 	return nil
-}
-
-// resumeHandleChangesRequested handles the CHANGES_REQUESTED resume path.
-func (r *Runner) resumeHandleChangesRequested(
-	writer worktree.EventWriter,
-	eventLogPath string,
-	prNumber int,
-	submittedReviews []githubReview,
-	lastReview githubReview,
-	botLogin string,
-	botRounds int,
-	runSpanID string,
-) string {
-	if err := r.resumeSynthesizeBotCREvents(writer, prNumber, submittedReviews, botLogin); err != nil {
-		fmt.Fprintf(r.stderr, "resume: failed to synthesize review event: %v\n", err)
-		return outcomeAborted
-	}
-
-	if botRounds >= r.cfg.MaxReviewRounds {
-		r.postEscalationCommentWithSpan(eventLogPath, runSpanID, botRounds)
-		return outcomeEscalated
-	}
-
-	findings := lastReview.Body
-	findingsJSON, findErr := r.buildFindingsJSONForReview(prNumber, lastReview.databaseIDStr())
-	if findErr != nil {
-		fmt.Fprintf(r.stderr, "resume: failed to load inline comments for review #%d: %v\n", lastReview.DatabaseID, findErr)
-		return outcomeAborted
-	}
-	if findings == "" && findingsJSON == "" {
-		fmt.Fprintf(r.stderr,
-			"resume: CHANGES_REQUESTED review #%d has no findings (empty body and no inline comments)\n",
-			lastReview.DatabaseID)
-		return outcomeAborted
-	}
-	// RenderDevRetry requires non-empty findings text; fall back to a placeholder when only inline
-	// comments are available (BR-R7 permits body=empty when inline comments exist).
-	if findings == "" {
-		findings = "See inline review comments"
-	}
-
-	r.loopCtx.Round = botRounds + 1
-	r.loopCtx.Findings = findings
-	r.loopCtx.FindingsJSON = findingsJSON
-	r.loopCtx.DevMode = DevModeRetryWithFindings
-	r.loopCtx.DevAttempt = 0
-	r.loopCtx.ReviewerWorktreeExists = true
-	return r.runMachineFrom(loop.StepRunDev, r.loopCtx)
-}
-
-// resumeHandleApproved handles the APPROVED resume path.
-func (r *Runner) resumeHandleApproved(writer worktree.EventWriter, eventLogPath string, pr *prInfo, lastReview githubReview) string {
-	confidence := confidenceFromLabels(pr.Labels)
-	if synthErr := r.synthesizeReviewSubmittedEvent(writer, pr.Number, "approved", confidence, lastReview.databaseIDStr()); synthErr != nil {
-		fmt.Fprintf(r.stderr, "resume: failed to write review_submitted event: %v\n", synthErr)
-		return outcomeAborted
-	}
-	return r.runMachineFrom(loop.StepMergePR, r.loopCtx)
 }

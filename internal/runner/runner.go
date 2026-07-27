@@ -279,56 +279,43 @@ func (r *Runner) Run() int {
 		"pid":          os.Getpid(),
 	})
 
-	var finalOutcome string
-	var exitCode int
-	if r.resume {
-		// Resume path unchanged until Slice 6.
-		finalOutcome = r.resumeOrchestrate(ew, eventLogPath, runSpanID)
-		if finalOutcome == outcomeSuccess {
-			exitCode = 0
-		} else {
-			exitCode = 1
-		}
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	var timeoutDuration time.Duration
+	if r.cfg.TimeoutSeconds > 0 {
+		timeoutDuration = time.Duration(r.cfg.TimeoutSeconds) * time.Second
 	} else {
-		// Fresh run: drive the full lifecycle through the step machine from PREPARE.
-		golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-		var timeoutDuration time.Duration
-		if r.cfg.TimeoutSeconds > 0 {
-			timeoutDuration = time.Duration(r.cfg.TimeoutSeconds) * time.Second
-		} else {
-			timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
-		}
-		loopCtx := &RunContext{
-			GolemicDir:   golemicDir,
-			EventLogPath: eventLogPath,
-			Timeout:      timeoutDuration,
-			ParentSpanID: runSpanID,
-			Round:        1,
-			MaxRounds:    r.cfg.MaxReviewRounds,
-			Writer:       ew,
-			DevMode:      DevModeInitial,
-			Resume:       r.resume,
-		}
-		r.loopCtx = loopCtx
-		m := &loop.Machine[RunContext]{
-			Transitions: loopTransitions(),
-			Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
-				loop.StepPrepare:     r.stepPrepare,
-				loop.StepRunDev:      r.stepRunDev,
-				loop.StepSyncCI:      r.stepSyncCI,
-				loop.StepRunReviewer: r.stepRunReviewer,
-				loop.StepMergePR:     r.stepMergePR,
-			},
-			Start:     loop.StepPrepare,
-			Terminals: loopTerminals(),
-		}
-		final, machineErr := m.Run(loopCtx)
-		if machineErr != nil {
-			fmt.Fprintf(r.stderr, "%v\n", machineErr)
-			final = loop.StepTerminalDevFailed
-		}
-		finalOutcome, exitCode = terminalOutcome(final)
+		timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 	}
+	loopCtx := &RunContext{
+		GolemicDir:   golemicDir,
+		EventLogPath: eventLogPath,
+		Timeout:      timeoutDuration,
+		ParentSpanID: runSpanID,
+		Round:        1,
+		MaxRounds:    r.cfg.MaxReviewRounds,
+		Writer:       ew,
+		DevMode:      DevModeInitial,
+	}
+	r.applyRunMode(loopCtx)
+	r.loopCtx = loopCtx
+	m := &loop.Machine[RunContext]{
+		Transitions: loopTransitions(),
+		Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
+			loop.StepPrepare:     r.stepPrepare,
+			loop.StepRunDev:      r.stepRunDev,
+			loop.StepSyncCI:      r.stepSyncCI,
+			loop.StepRunReviewer: r.stepRunReviewer,
+			loop.StepMergePR:     r.stepMergePR,
+		},
+		Start:     loop.StepPrepare,
+		Terminals: loopTerminals(),
+	}
+	final, machineErr := m.Run(loopCtx)
+	if machineErr != nil {
+		fmt.Fprintf(r.stderr, "%v\n", machineErr)
+		final = loop.StepTerminalDevFailed
+	}
+	finalOutcome, exitCode := terminalOutcome(final)
 
 	// Worktree cleanup spans (children of run span, only on success)
 	golemicDir2 := filepath.Join(r.homeDir, ".golemic", r.project)
@@ -511,31 +498,6 @@ func (r *Runner) postModelChainExhaustedComment(prNumber int, chainErr *agent.Mo
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Warning: failed to post model chain exhausted comment: %v\n", err) //nolint:errcheck
 	}
-}
-
-// runMachineFrom runs the loop machine starting at start, walking to a terminal.
-// A StateError from the machine is printed to stderr and yields outcomeDevFailed.
-// Tests that bypass PREPARE call this directly from StepRunDev.
-func (r *Runner) runMachineFrom(start loop.StepKey, ctx *RunContext) string {
-	m := &loop.Machine[RunContext]{
-		Transitions: loopTransitions(),
-		Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
-			loop.StepPrepare:     r.stepPrepare,
-			loop.StepRunDev:      r.stepRunDev,
-			loop.StepSyncCI:      r.stepSyncCI,
-			loop.StepRunReviewer: r.stepRunReviewer,
-			loop.StepMergePR:     r.stepMergePR,
-		},
-		Start:     start,
-		Terminals: loopTerminals(),
-	}
-	final, err := m.Run(ctx)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
-		return outcomeDevFailed
-	}
-	outcome, _ := terminalOutcome(final)
-	return outcome
 }
 
 func (r *Runner) prepareReviewerWorktree(golemicDir string, writer worktree.EventWriter, runSpanID string, cleanupBeforeFirstReviewerRound bool) (string, string) {
