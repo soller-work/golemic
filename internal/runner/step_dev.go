@@ -35,7 +35,7 @@ func (r *Runner) stepRunDev(ctx *RunContext) loop.EventKey {
 	}
 	defer cleanupPrompt()
 
-	// CBM indexing only on attempt 0 to avoid expensive re-indexing on gate retries (BR-2).
+	// CBM indexing only on attempt 0 to avoid expensive re-indexing on gate retries.
 	cbmEnabled := r.cfg.CodebaseMemory.Enabled && ctx.DevAttempt == 0
 	if cbmEnabled {
 		devWorktreePath := filepath.Join(ctx.GolemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))

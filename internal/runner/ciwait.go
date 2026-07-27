@@ -315,7 +315,7 @@ func (r *Runner) pollCIChecks(prNumber int, ciTimeout time.Duration) (string, []
 }
 
 // writeCIWaitFinished appends a ci_wait_finished event to the event log and
-// emits a progress line. Errors are silently dropped per BR-P3.
+// emits a progress line. Errors are silently dropped (non-fatal).
 func (r *Runner) writeCIWaitFinished(eventLogPath, result string, round int) {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {

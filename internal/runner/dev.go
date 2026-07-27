@@ -249,7 +249,7 @@ func (r *Runner) commitPushAndOpenPR(devWT, eventLogPath string, devDone gmbroke
 }
 
 // commitAndForcePush stages all changes, commits, and force-pushes the branch.
-// Used for dev-retry turns where the PR is already open (BR-6).
+// Used for dev-retry turns where the PR is already open.
 func (r *Runner) commitAndForcePush(devWT string, devDone gmbroker.DevDoneParams) error {
 	if _, err := r.executor.RunInDir(devWT, "git", "add", "-A"); err != nil {
 		return fmt.Errorf("git add -A: %w", err)
@@ -359,7 +359,7 @@ var startCBMBrokerFn = func(sockPath string, env map[string]string) (*cbmbroker.
 var gmDevToolNames = []string{"gm_slice_get", "gm_project_check", "gm_dev_done"}
 
 // gmCodeToolNames are added to the dev and reviewer allowlists when CBM is also enabled.
-// They expose read-only code-intelligence operations over the gm_ transport (BR-5).
+// They expose read-only code-intelligence operations over the gm_ transport.
 var gmCodeToolNames = []string{
 	"gm_code_search",
 	"gm_code_search_graph",
@@ -372,7 +372,7 @@ var gmCodeToolNames = []string{
 }
 
 // gmReviewerToolNames are the gm_ tools available to the reviewer agent.
-// bash/edit/write/gm_project_check are excluded (BR-9 read-only lockdown).
+// bash/edit/write/gm_project_check are excluded (reviewer read-only lockdown).
 var gmReviewerToolNames = []string{"gm_slice_get", "gm_pr_view", "gm_repo_tree", "gm_review_submit_comment", "gm_review_submit"}
 
 // startGMBrokerFn is a variable so tests can replace it without a real gh call.
@@ -423,7 +423,7 @@ func (r *Runner) startCBMBroker(sockPath, cbmCacheDir string) (*cbmbroker.Broker
 }
 
 // indexWorktree runs codebase-memory-mcp to index wtPath with the given project name.
-// Failure is logged and does not abort the run (BR-7).
+// Failure is logged and does not abort the run.
 func (r *Runner) indexWorktree(wtPath, cbmCacheDir, projectName string) bool {
 	if err := os.MkdirAll(cbmCacheDir, 0755); err != nil {
 		fmt.Fprintf(r.stderr, "Warning: failed to create CBM cache dir %s: %v\n", cbmCacheDir, err)

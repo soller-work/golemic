@@ -2,14 +2,6 @@
 // loading, runId generation, event log creation, issue loading via gh, collision checks,
 // dev/reviewer worktrees, agent execution, event reading, outcome determination,
 // run_finished writing, and cleanup.
-//
-// Process steps (PS-001–PS-006 per spec):
-//  1. Resolve host repo (git root; if under tools/golemic, find enclosing repo)
-//  2. Load config and credentials (fail-closed before any GitHub access)
-//  3. Generate runId, create event log, write run_started
-//  4. Load issue from GitHub via gh issue view
-//  5. Collision check (worktree, local/remote branch, open PR)
-//  6. Full orchestration: dev worktree → dev agent → pr_opened → reviewer worktree → reviewer agent → dirty check → review_submitted → outcome determination → run_finished → cleanup
 package runner
 
 import (
@@ -155,17 +147,8 @@ func (r *Runner) SetSink(s telemetry.Sink) {
 // ---------------------------------------------------------------------------
 
 // Run executes the full run process and returns the process exit code.
-//
-// Process flow (per spec §Process Steps):
-//
-//	PS-001: Resolve host repo
-//	PS-002: Load config and credentials (fail-closed)
-//	PS-003: Generate runId, create event log, write run_started
-//	PS-004: Load issue from GitHub
-//	PS-005: Collision check
-//	PS-006: Full orchestration
 func (r *Runner) Run() int {
-	// ---- PS-001: Resolve host repo ----
+	// Resolve host repo
 	repoRoot, err := resolveHostRepo(r.executor, r.cwd)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to resolve host repo: %v\n", err)
@@ -192,7 +175,7 @@ func (r *Runner) Run() int {
 		return 1
 	}
 
-	// ---- PS-002: Load config and credentials (BR-002: fail-closed) ----
+	// Load config and credentials (fail-closed)
 	cfg, err := config.Load(repoRoot)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to load config: %v\n", err)
@@ -210,7 +193,7 @@ func (r *Runner) Run() int {
 	}
 	r.creds = creds
 
-	// ---- PS-003: Generate runId and create event log (BR-003, BR-007) ----
+	// Generate runId and create event log
 	r.runID = fmt.Sprintf("issue-%d-%s", r.issueNum, time.Now().UTC().Format("20060102T150405Z"))
 	r.branchName = fmt.Sprintf("%s%d", branchPrefix, r.issueNum)
 
@@ -223,14 +206,14 @@ func (r *Runner) Run() int {
 	}
 	defer writer.Close()
 
-	// Wrap writer with progress renderer when not quiet (BR-P2).
+	// Wrap writer with progress renderer when not quiet.
 	var ew worktree.EventWriter = writer
 	if !r.quiet {
 		r.progressRenderer = progress.New(r.stderr)
 		ew = &progressEventWriter{inner: writer, renderer: r.progressRenderer}
 	}
 
-	// Write run_started (BR-007: must be written before any GitHub access)
+	// Write run_started (must be written before any GitHub access)
 	startPayload, _ := json.Marshal(runStartedPayload{
 		Issue: r.issueNum,
 		RunID: r.runID,
@@ -246,7 +229,7 @@ func (r *Runner) Run() int {
 		return 1
 	}
 
-	// ---- PS-004: Load issue from GitHub ----
+	// Load issue from GitHub
 	issue, err := r.loadIssue()
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to load issue %d: %v\n", r.issueNum, err)
@@ -270,7 +253,7 @@ func (r *Runner) Run() int {
 		}
 	}
 
-	// ---- PS-006: Full orchestration ----
+	// Full orchestration
 	runSpanID, endRunSpan := telemetry.StartSpan(r.sink, r.traceID, "", telemetry.SpanRun, map[string]any{
 		"service.name": "golemic",
 		"run_id":       r.runID,
@@ -383,7 +366,7 @@ func (r *Runner) Run() int {
 	}
 	endRunSpan(runStatus, map[string]any{"outcome": finalOutcome})
 
-	// Write run_finished with final outcome (BR-001: always the last event)
+	// Write run_finished with final outcome (always the last event)
 	finishedPayload, _ := json.Marshal(runFinishedPayload{
 		Outcome:    finalOutcome,
 		TokenUsage: buildTokenUsageAggregate(r.tokenUsageLog),
@@ -406,7 +389,7 @@ func (r *Runner) Run() int {
 }
 
 // writeAgentCompleted appends an agent_completed event to the event log and
-// emits a progress line. Errors are silently dropped per BR-P3.
+// emits a progress line. Errors are silently dropped (non-fatal).
 func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int, activityPath, stderrPath string) {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
@@ -482,7 +465,7 @@ func (r *Runner) postEscalationCommentWithSpan(eventLogPath, parentSpanID string
 }
 
 // postEscalationComment posts a deterministic escalation comment on the PR using
-// the reviewer token. Errors are logged but do not change the escalated outcome (BR-008).
+// the reviewer token. Errors are logged but do not change the escalated outcome.
 func (r *Runner) postEscalationComment(prNumber, roundCount int) {
 	body := fmt.Sprintf(
 		"golemic has completed %d review round(s) for issue #%d (PR #%d). "+
@@ -501,7 +484,7 @@ func (r *Runner) postEscalationComment(prNumber, roundCount int) {
 }
 
 // postModelChainExhaustedComment posts one sanitized PR comment when the model chain is
-// exhausted. Errors are logged and do not change the outcome (BR-10, BR-11).
+// exhausted. Errors are logged and do not change the outcome.
 func (r *Runner) postModelChainExhaustedComment(prNumber int, chainErr *agent.ModelChainExhaustedError) {
 	if r.executor == nil {
 		return

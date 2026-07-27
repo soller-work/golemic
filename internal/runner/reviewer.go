@@ -261,7 +261,7 @@ func (r *Runner) handleReviewerAgentResult(err error, exitCode int, paths agent.
 		return r.handleReviewerAgentError(err, exitCode, eventLogPath, endSpan, paths.Stdout, paths.Stderr)
 	}
 
-	// Record agent exit code in event log (BR-004)
+	// Record agent exit code in event log
 	r.writeAgentCompleted(eventLogPath, "reviewer", exitCode, paths.Stdout, paths.Stderr)
 	r.emitAgentWrittenEvents(eventLogPath)
 
@@ -667,7 +667,7 @@ func tailBytes(s string, n int) (string, bool) {
 	return s[start:], true
 }
 
-// buildReviewerToolList builds the reviewer tool allowlist (BR-9: read-only).
+// buildReviewerToolList builds the reviewer tool allowlist (read-only).
 // bash/edit/write are excluded; gm_ reviewer tools are added when the GM broker
 // socket is present in the environment.
 func buildReviewerToolList(brokerEnv []string) []string {
@@ -959,7 +959,7 @@ func (r *Runner) submitPendingReview(reviewID, verdict, body string) (submittedR
 	return dbID, count, nil
 }
 
-// writeReviewSubmittedEventFromRunner writes a review_submitted event (BR-10).
+// writeReviewSubmittedEventFromRunner writes a review_submitted event.
 func (r *Runner) writeReviewSubmittedEventFromRunner(eventLogPath, reviewID, verdict, body, confidence string, inlineCommentCount, prNumber, reviewRound int, headSHA string) error {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {

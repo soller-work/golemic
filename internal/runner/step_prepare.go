@@ -44,7 +44,7 @@ func (r *Runner) stepPrepare(ctx *RunContext) loop.EventKey {
 		}
 	}
 
-	// Collision check (skipped in resume mode per BR-3)
+	// Collision check (skipped in resume mode)
 	if !ctx.Resume {
 		collision, err := r.checkAllCollisions()
 		if err != nil {

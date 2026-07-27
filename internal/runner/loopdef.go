@@ -38,7 +38,7 @@ type RunContext struct {
 	// DevMode indicates whether the RUN_DEV step should use an initial or retry prompt.
 	DevMode DevMode
 
-	// Operational fields: populated by the adapter before each stepRunDev call.
+	// Operational fields: set once when the RunContext is created in Run().
 	GolemicDir   string
 	EventLogPath string
 	Timeout      time.Duration
@@ -103,7 +103,7 @@ var terminalOutcomeTable = map[loop.StepKey]terminalResult{
 }
 
 // terminalOutcome maps a terminal step to the outcome string and exit code.
-// Panics on unknown step — totality is enforced by AC-5.
+// Panics on unknown step — totality is enforced by the step table above.
 func terminalOutcome(s loop.StepKey) (string, int) {
 	r, ok := terminalOutcomeTable[s]
 	if !ok {
