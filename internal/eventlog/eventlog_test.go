@@ -473,8 +473,8 @@ func TestResolveContext_EmptyProject(t *testing.T) {
 
 func TestAllEventTypes(t *testing.T) {
 	types := AllEventTypes()
-	if len(types) != 16 {
-		t.Errorf("expected 16 event types, got %d", len(types))
+	if len(types) != 17 {
+		t.Errorf("expected 17 event types, got %d", len(types))
 	}
 }
 
@@ -534,6 +534,42 @@ func TestReaderFileNotFound(t *testing.T) {
 	}
 }
 
+func TestStepTransitionPayloadRoundTrip(t *testing.T) {
+	payload, err := MarshalStepTransitionPayload("RUN_DEV", "DEV_GATE_REJECTED", "RUN_DEV", true, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateStepTransitionPayload(payload); err != nil {
+		t.Fatalf("validate step transition payload: %v", err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "events.jsonl")
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(Event{Type: EventStepTransition, Ts: "2024-01-01T00:00:00Z", RunID: "r1", TurnID: 7, Payload: payload}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	w.Close() //nolint:errcheck
+
+	var r Reader
+	events, err := r.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != EventStepTransition {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+}
+
+func TestValidateStepTransitionPayload_Empty(t *testing.T) {
+	if err := ValidateStepTransitionPayload(nil); err == nil {
+		t.Fatal("expected error for empty payload")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helper
 // ---------------------------------------------------------------------------
@@ -561,6 +597,13 @@ func TestValidateCIWaitFinishedPayload_InvalidResult(t *testing.T) {
 func TestValidateCIWaitFinishedPayload_Empty(t *testing.T) {
 	if err := ValidateCIWaitFinishedPayload(nil); err == nil {
 		t.Error("expected error for empty payload, got nil")
+	}
+}
+
+func TestValidateStepTransitionPayload_InvalidSeq(t *testing.T) {
+	payload, _ := MarshalStepTransitionPayload("A", "go", "B", false, 0)
+	if err := ValidateStepTransitionPayload(payload); err == nil {
+		t.Error("expected error for invalid seq, got nil")
 	}
 }
 

@@ -298,6 +298,22 @@ func (r *Runner) Run() int {
 	}
 	r.applyRunMode(loopCtx)
 	r.loopCtx = loopCtx
+
+	startStepSpan := func(step loop.StepKey, from loop.StepKey, event loop.EventKey, guarded bool, seq int) func(string, map[string]any) {
+		attrs := map[string]any{
+			"run_id":  r.runID,
+			"issue":   r.issueNum,
+			"from":    string(from),
+			"event":   string(event),
+			"guarded": guarded,
+			"seq":     seq,
+		}
+		_, endSpan := telemetry.StartSpan(r.sink, r.traceID, runSpanID, "step."+string(step), attrs)
+		return endSpan
+	}
+
+	currentStepSeq := 0
+	currentStepSpanEnd := startStepSpan(loop.StepPrepare, "", "", false, 0)
 	m := &loop.Machine[RunContext]{
 		Transitions: loopTransitions(),
 		Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
@@ -309,8 +325,34 @@ func (r *Runner) Run() int {
 		},
 		Start:     loop.StepPrepare,
 		Terminals: loopTerminals(),
+		OnTransition: func(from loop.StepKey, event loop.EventKey, to loop.StepKey, guarded bool) {
+			seq := currentStepSeq + 1
+			currentStepSeq = seq
+
+			if payload, err := eventlog.MarshalStepTransitionPayload(string(from), string(event), string(to), guarded, seq); err == nil {
+				_ = ew.Write(eventlog.Event{
+					Type:    eventlog.EventStepTransition,
+					Ts:      time.Now().Format(time.RFC3339),
+					RunID:   r.runID,
+					TurnID:  r.turnCounter,
+					Payload: payload,
+				})
+			}
+
+			if currentStepSpanEnd != nil {
+				currentStepSpanEnd(telemetry.StatusOK, nil)
+			}
+			currentStepSpanEnd = startStepSpan(to, from, event, guarded, seq)
+		},
 	}
 	final, machineErr := m.Run(loopCtx)
+	stepStatus := telemetry.StatusError
+	if machineErr == nil && (final == loop.StepTerminalSuccess || final == loop.StepTerminalSkipped) {
+		stepStatus = telemetry.StatusOK
+	}
+	if currentStepSpanEnd != nil {
+		currentStepSpanEnd(stepStatus, nil)
+	}
 	if machineErr != nil {
 		fmt.Fprintf(r.stderr, "%v\n", machineErr)
 		final = loop.StepTerminalDevFailed

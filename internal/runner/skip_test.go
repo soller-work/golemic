@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,39 @@ func readLastRunFinishedPayload(t *testing.T, homeDir, project string) string {
 	}
 	t.Fatal("no run_finished event found")
 	return ""
+}
+
+func TestReadLastRunFinishedPayload_IgnoresStepTransition(t *testing.T) {
+	homeDir := t.TempDir()
+	project := "proj"
+	runID := "issue-1-test"
+	logDir := filepath.Join(homeDir, ".golemic", project, "runs", runID)
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	w, err := eventlog.NewWriter(filepath.Join(logDir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transitionPayload, err := eventlog.MarshalStepTransitionPayload("PREPARE", "READY", "RUN_DEV", false, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(eventlog.Event{Type: eventlog.EventRunStarted, Ts: "2024-01-01T00:00:00Z", RunID: runID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(eventlog.Event{Type: eventlog.EventStepTransition, Ts: "2024-01-01T00:00:01Z", RunID: runID, TurnID: 1, Payload: transitionPayload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(eventlog.Event{Type: eventlog.EventRunFinished, Ts: "2024-01-01T00:00:02Z", RunID: runID, Payload: json.RawMessage(`{"outcome":"skipped"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	w.Close() //nolint:errcheck
+
+	got := readLastRunFinishedPayload(t, homeDir, project)
+	if got != `{"outcome":"skipped"}` {
+		t.Fatalf("got %s", got)
+	}
 }
 
 // ---------------------------------------------------------------------------

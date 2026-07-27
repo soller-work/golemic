@@ -276,8 +276,8 @@ func TestRun_WorktreeCollision_AC002(t *testing.T) {
 }
 
 // assertRunFinishedAborted reads the event log for a run in the given project's runs
-// directory and asserts that exactly 2 events exist: run_started followed by
-// run_finished with outcome aborted.
+// directory and asserts that the additive step_transition audit events do not
+// change the expected run_started → run_finished shape.
 func assertRunFinishedAborted(t *testing.T, homeDir, project string) {
 	t.Helper()
 	runsDir := filepath.Join(homeDir, ".golemic", project, "runs")
@@ -296,17 +296,24 @@ func assertRunFinishedAborted(t *testing.T, homeDir, project string) {
 	if err != nil {
 		t.Fatalf("failed to read event log: %v", err)
 	}
-	if len(events) != 2 {
-		t.Fatalf("expected 2 events (run_started + run_finished), got %d", len(events))
+	filtered := make([]eventlog.Event, 0, len(events))
+	for _, ev := range events {
+		if ev.Type == eventlog.EventStepTransition {
+			continue
+		}
+		filtered = append(filtered, ev)
 	}
-	if events[0].Type != eventlog.EventRunStarted {
-		t.Errorf("first event type: got %q, want %q", events[0].Type, eventlog.EventRunStarted)
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 non-transition events (run_started + run_finished), got %d", len(filtered))
 	}
-	if events[1].Type != eventlog.EventRunFinished {
-		t.Errorf("second event type: got %q, want %q", events[1].Type, eventlog.EventRunFinished)
+	if filtered[0].Type != eventlog.EventRunStarted {
+		t.Errorf("first event type: got %q, want %q", filtered[0].Type, eventlog.EventRunStarted)
 	}
-	if string(events[1].Payload) != `{"outcome":"aborted"}` {
-		t.Errorf("run_finished payload: got %s, want %q", string(events[1].Payload), `{"outcome":"aborted"}`)
+	if filtered[1].Type != eventlog.EventRunFinished {
+		t.Errorf("second event type: got %q, want %q", filtered[1].Type, eventlog.EventRunFinished)
+	}
+	if string(filtered[1].Payload) != `{"outcome":"aborted"}` {
+		t.Errorf("run_finished payload: got %s, want %q", string(filtered[1].Payload), `{"outcome":"aborted"}`)
 	}
 }
 

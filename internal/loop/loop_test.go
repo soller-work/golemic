@@ -5,7 +5,9 @@ import (
 	"testing"
 )
 
-type testCtx struct{}
+type testCtx struct {
+	calls []string
+}
 
 func TestMachine_AC1_RunsToTerminal(t *testing.T) {
 	m := Machine[testCtx]{
@@ -113,5 +115,53 @@ func TestMachine_AC4_NonTerminalWithoutHandler(t *testing.T) {
 	}
 	if step != "A" {
 		t.Errorf("returned step = %q, want %q", step, "A")
+	}
+}
+
+func TestMachine_AC5_OnTransitionObserver(t *testing.T) {
+	ctx := &testCtx{}
+	m := Machine[testCtx]{
+		Start: "A",
+		Terminals: map[StepKey]bool{
+			"C": true,
+		},
+		Handlers: map[StepKey]func(*testCtx) EventKey{
+			"A": func(c *testCtx) EventKey {
+				c.calls = append(c.calls, "handler:A")
+				return "go"
+			},
+			"B": func(c *testCtx) EventKey {
+				c.calls = append(c.calls, "handler:B")
+				return "go"
+			},
+		},
+		Transitions: []Transition[testCtx]{
+			{From: "A", Event: "go", To: "B"},
+			{From: "B", Event: "go", To: "C", Guard: func(*testCtx) bool { return true }},
+		},
+		OnTransition: func(from StepKey, event EventKey, to StepKey, guarded bool) {
+			ctx.calls = append(ctx.calls, string(from)+":"+string(event)+":"+string(to)+":"+func() string {
+				if guarded {
+					return "true"
+				}
+				return "false"
+			}())
+		},
+	}
+	step, err := m.Run(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if step != "C" {
+		t.Fatalf("got step %q, want C", step)
+	}
+	want := []string{"handler:A", "A:go:B:false", "handler:B", "B:go:C:true"}
+	if len(ctx.calls) != len(want) {
+		t.Fatalf("calls: got %v, want %v", ctx.calls, want)
+	}
+	for i, got := range ctx.calls {
+		if got != want[i] {
+			t.Errorf("calls[%d] = %q, want %q", i, got, want[i])
+		}
 	}
 }

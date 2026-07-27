@@ -14,6 +14,7 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/credentials"
+	"golemic/internal/eventlog"
 	"golemic/internal/telemetry"
 )
 
@@ -159,6 +160,16 @@ func assertSpanNamesPresent(t *testing.T, records []telemetry.Record) {
 	}
 }
 
+func stepSpans(records []telemetry.Record) []telemetry.Record {
+	var out []telemetry.Record
+	for _, r := range records {
+		if r.Kind == telemetry.KindSpanStart && strings.HasPrefix(r.Name, "step.") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // spansWithName returns all span.start records with the given name.
 func spansWithName(records []telemetry.Record, name string) []telemetry.Record {
 	var out []telemetry.Record
@@ -234,6 +245,25 @@ func attrRound(attrs map[string]any) int {
 		return int(v)
 	}
 	return 0
+}
+
+func attrInt(attrs map[string]any, key string) int {
+	switch v := attrs[key].(type) {
+	case int:
+		return v
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
+func endStatusForSpan(records []telemetry.Record, spanID string) string {
+	for _, rec := range records {
+		if rec.Kind == telemetry.KindSpanEnd && rec.SpanID == spanID {
+			return rec.Status
+		}
+	}
+	return ""
 }
 
 // telemetryGitHandler handles git commands for the full-run telemetry executor.
@@ -342,6 +372,201 @@ func makeTelemetryFakeAgent(t *testing.T) func(ctx context.Context, cfg agent.Ro
 	}
 }
 
+func setupTelemetryRun(t *testing.T, agentFn func(context.Context, agent.RoleConfig) (int, agent.TranscriptPaths, error)) (*Runner, string, string, string, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	homeDir, repoRoot, project := setupRunnerTest(t)
+	exec := setupTelemetryFullRunExecutor(repoRoot)
+
+	createGuidelines(t, repoRoot)
+	injectFakeGMBrokerPP(t)
+	homeDir, project, runID := configureShortTelemetryIdentity(t, homeDir, project, repoRoot)
+
+	r := New(exec, homeDir, repoRoot, 42)
+	r.project = project
+	r.homeDir = homeDir
+	r.runID = runID
+	r.SetPreflighter(passingPreflighter{})
+	r.SetRunAgentFn(agentFn)
+	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
+
+	var stdout, stderr bytes.Buffer
+	r.SetStdout(&stdout)
+	r.SetStderr(&stderr)
+	return r, homeDir, project, runID, &stdout, &stderr
+}
+
+func readTelemetryArtifacts(t *testing.T, homeDir, project string) ([]eventlog.Event, []telemetry.Record) {
+	t.Helper()
+	runsDir := filepath.Join(homeDir, ".golemic", project, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no run directory found in %s: %v", runsDir, err)
+	}
+	foundRunID := entries[0].Name()
+	events, err := eventlog.Reader{}.Read(filepath.Join(runsDir, foundRunID, "events.jsonl"))
+	if err != nil {
+		t.Fatalf("read event log: %v", err)
+	}
+	records := readTelemetryFile(t, filepath.Join(runsDir, foundRunID, "telemetry.jsonl"))
+	return events, records
+}
+
+func assertTelemetryStepAuditTrail(t *testing.T, events []eventlog.Event, records []telemetry.Record) {
+	t.Helper()
+	assertRunFinishedLast(t, events)
+	assertStepTransitionSequence(t, events)
+	assertStepSpanSequence(t, records, []string{"step.PREPARE", "step.RUN_DEV", "step.SYNC_CI", "step.RUN_REVIEWER", "step.MERGE_PR", "step.TERMINAL_SUCCESS"}, telemetry.StatusOK)
+}
+
+func assertRunFinishedLast(t *testing.T, events []eventlog.Event) {
+	t.Helper()
+	if got := events[len(events)-1].Type; got != eventlog.EventRunFinished {
+		t.Fatalf("last event type = %q, want %q", got, eventlog.EventRunFinished)
+	}
+}
+
+func assertStepTransitionSequence(t *testing.T, events []eventlog.Event) {
+	t.Helper()
+	wantTransitions := []struct {
+		from    string
+		event   string
+		to      string
+		guarded bool
+	}{
+		{"PREPARE", "READY", "RUN_DEV", true},
+		{"RUN_DEV", "DEV_DONE", "SYNC_CI", false},
+		{"SYNC_CI", "CI_GREEN", "RUN_REVIEWER", false},
+		{"RUN_REVIEWER", "REVIEW_APPROVED", "MERGE_PR", false},
+		{"MERGE_PR", "MERGED", "TERMINAL_SUCCESS", false},
+	}
+	gotTransitions := collectStepTransitions(t, events)
+	if len(gotTransitions) != len(wantTransitions) {
+		t.Fatalf("step_transition count = %d, want %d", len(gotTransitions), len(wantTransitions))
+	}
+	for i, want := range wantTransitions {
+		got := gotTransitions[i]
+		if got.from != want.from || got.event != want.event || got.to != want.to || got.guarded != want.guarded {
+			t.Fatalf("transition[%d] = %+v, want %+v", i, got, want)
+		}
+		if got.seq != i+1 {
+			t.Fatalf("transition[%d] seq = %d, want %d", i, got.seq, i+1)
+		}
+	}
+}
+
+func collectStepTransitions(t *testing.T, events []eventlog.Event) []struct {
+	from    string
+	event   string
+	to      string
+	guarded bool
+	seq     int
+} {
+	t.Helper()
+	var gotTransitions []struct {
+		from    string
+		event   string
+		to      string
+		guarded bool
+		seq     int
+	}
+	for _, ev := range events {
+		if ev.Type != eventlog.EventStepTransition {
+			continue
+		}
+		var payload struct {
+			From    string `json:"from"`
+			Event   string `json:"event"`
+			To      string `json:"to"`
+			Guarded bool   `json:"guarded"`
+			Seq     int    `json:"seq"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal step_transition payload: %v", err)
+		}
+		gotTransitions = append(gotTransitions, struct {
+			from    string
+			event   string
+			to      string
+			guarded bool
+			seq     int
+		}{payload.From, payload.Event, payload.To, payload.Guarded, payload.Seq})
+	}
+	return gotTransitions
+}
+
+func assertStepSpanSequence(t *testing.T, records []telemetry.Record, wantStepNames []string, wantStatus string) {
+	t.Helper()
+	stepStarts := stepSpans(records)
+	if len(stepStarts) != len(wantStepNames) {
+		t.Fatalf("step span count = %d, want %d", len(stepStarts), len(wantStepNames))
+	}
+	runSpans := spansWithName(records, telemetry.SpanRun)
+	if len(runSpans) != 1 {
+		t.Fatalf("expected 1 run span, got %d", len(runSpans))
+	}
+	runSpanID := runSpans[0].SpanID
+	for i, rec := range stepStarts {
+		if rec.Name != wantStepNames[i] {
+			t.Fatalf("step span[%d] name = %q, want %q", i, rec.Name, wantStepNames[i])
+		}
+		if rec.ParentSpanID != runSpanID {
+			t.Fatalf("step span[%d] parent = %q, want %q", i, rec.ParentSpanID, runSpanID)
+		}
+		if got := attrInt(rec.Attrs, "seq"); i == 0 {
+			if got != 0 {
+				t.Fatalf("step span[%d] seq = %d, want 0", i, got)
+			}
+		} else if got != i {
+			t.Fatalf("step span[%d] seq = %d, want %d", i, got, i)
+		}
+	}
+	if status := endStatusForSpan(records, stepStarts[len(stepStarts)-1].SpanID); status != wantStatus {
+		t.Fatalf("terminal step status = %q, want %q", status, wantStatus)
+	}
+}
+
+func assertTerminalStepStatusError(t *testing.T, records []telemetry.Record) {
+	t.Helper()
+	stepStarts := stepSpans(records)
+	if len(stepStarts) == 0 {
+		t.Fatal("no step spans recorded")
+	}
+	if got := stepStarts[len(stepStarts)-1].Name; got != "step.TERMINAL_DEV_FAILED" {
+		t.Fatalf("terminal step span = %q, want step.TERMINAL_DEV_FAILED", got)
+	}
+	if status := endStatusForSpan(records, stepStarts[len(stepStarts)-1].SpanID); status != telemetry.StatusError {
+		t.Fatalf("terminal step status = %q, want %q", status, telemetry.StatusError)
+	}
+}
+
+func assertGateRetrySelfLoop(t *testing.T, events []eventlog.Event, records []telemetry.Record) {
+	t.Helper()
+	var selfLoopFound bool
+	for _, ev := range events {
+		if ev.Type != eventlog.EventStepTransition {
+			continue
+		}
+		var payload struct {
+			From    string `json:"from"`
+			To      string `json:"to"`
+			Guarded bool   `json:"guarded"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatalf("unmarshal step_transition payload: %v", err)
+		}
+		if payload.From == "RUN_DEV" && payload.To == "RUN_DEV" && payload.Guarded {
+			selfLoopFound = true
+			break
+		}
+	}
+	if !selfLoopFound {
+		t.Fatal("expected RUN_DEV→RUN_DEV guarded step_transition event")
+	}
+	if got := len(spansWithName(records, "step.RUN_DEV")); got < 2 {
+		t.Fatalf("expected at least 2 step.RUN_DEV spans, got %d", got)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // AC-001: Full Run() emits paired spans to telemetry.jsonl including run span
 // ---------------------------------------------------------------------------
@@ -386,6 +611,54 @@ func TestTelemetry_FullRun_PairedSpansInFile_AC001(t *testing.T) {
 	assertPairedSpans(t, records)
 	assertRunSpanAttrs(t, records, runID)
 	assertSpanNamesPresent(t, records)
+}
+
+func TestTelemetry_StepTransitionsAndStepSpans_AC007(t *testing.T) {
+	r, homeDir, project, _, _, stderr := setupTelemetryRun(t, makeTelemetryFakeAgent(t))
+	if exitCode := r.Run(); exitCode != 0 {
+		t.Fatalf("Run() returned %d; stderr: %s", exitCode, stderr.String())
+	}
+	events, records := readTelemetryArtifacts(t, homeDir, project)
+	assertTelemetryStepAuditTrail(t, events, records)
+}
+
+func TestTelemetry_FailingTerminalStepSpan_StatusError_AC008(t *testing.T) {
+	r, homeDir, project, _, _, stderr := setupTelemetryRun(t, func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		if cfg.Role == "dev" {
+			return 1, agent.TranscriptPaths{Stderr: "/tmp/dev.stderr"}, nil
+		}
+		return 0, agent.TranscriptPaths{}, nil
+	})
+	if exitCode := r.Run(); exitCode == 0 {
+		t.Fatalf("expected non-zero exit code; stderr: %s", stderr.String())
+	}
+	_, records := readTelemetryArtifacts(t, homeDir, project)
+	assertTerminalStepStatusError(t, records)
+}
+
+func TestTelemetry_GateRetrySelfLoop_AC009(t *testing.T) {
+	r, homeDir, project, _, _, stderr := setupTelemetryRun(t, func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		switch cfg.Role {
+		case "dev":
+			if !sendGMProjectCheck(cfg.Env) {
+				t.Errorf("gate-retry agent: sendGMProjectCheck failed")
+			}
+			if cfg.Attempt == 0 {
+				return 0, agent.TranscriptPaths{Stderr: "/tmp/dev.stderr"}, nil
+			}
+			if !sendGMDevDone(cfg.Env) {
+				t.Errorf("gate-retry agent: sendGMDevDone failed")
+			}
+		case "reviewer":
+			writeReviewEvent(t, cfg.EventLogPath, "approved", "LGTM", cfg.Round, ciTestHeadSHA)
+		}
+		return 0, agent.TranscriptPaths{Stderr: "/tmp/fake.stderr"}, nil
+	})
+	if exitCode := r.Run(); exitCode != 0 {
+		t.Fatalf("Run() returned %d; stderr: %s", exitCode, stderr.String())
+	}
+	events, records := readTelemetryArtifacts(t, homeDir, project)
+	assertGateRetrySelfLoop(t, events, records)
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ const (
 	EventIssueClaimed            = "issue_claimed"
 	EventIssueReleased           = "issue_released"
 	EventReviewerPrecheck        = "reviewer_precheck"
+	EventStepTransition          = "step_transition"
 )
 
 // AllEventTypes returns every defined event type constant for documentation / validation.
@@ -58,6 +59,7 @@ func AllEventTypes() []string {
 		EventIssueClaimed,
 		EventIssueReleased,
 		EventReviewerPrecheck,
+		EventStepTransition,
 	}
 }
 
@@ -193,6 +195,44 @@ func MarshalAgentCompletedPayload(role string, exitCode int, activityPath, stder
 	return json.Marshal(agentCompletedData{Role: role, ExitCode: exitCode, ActivityPath: activityPath, StderrPath: stderrPath})
 }
 
+// stepTransitionData is the payload shape for step_transition events.
+type stepTransitionData struct {
+	From    string `json:"from"`
+	Event   string `json:"event"`
+	To      string `json:"to"`
+	Guarded bool   `json:"guarded"`
+	Seq     int    `json:"seq"`
+}
+
+// ValidateStepTransitionPayload checks that the payload has required transition fields.
+func ValidateStepTransitionPayload(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return fmt.Errorf("step_transition payload is empty")
+	}
+	var d stepTransitionData
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return fmt.Errorf("step_transition payload: invalid JSON: %w", err)
+	}
+	if d.From == "" {
+		return fmt.Errorf("step_transition payload: from is required")
+	}
+	if d.Event == "" {
+		return fmt.Errorf("step_transition payload: event is required")
+	}
+	if d.To == "" {
+		return fmt.Errorf("step_transition payload: to is required")
+	}
+	if d.Seq <= 0 {
+		return fmt.Errorf("step_transition payload: seq must be >= 1")
+	}
+	return nil
+}
+
+// MarshalStepTransitionPayload encodes a step_transition payload.
+func MarshalStepTransitionPayload(from, event, to string, guarded bool, seq int) (json.RawMessage, error) {
+	return json.Marshal(stepTransitionData{From: from, Event: event, To: to, Guarded: guarded, Seq: seq})
+}
+
 // ---------------------------------------------------------------------------
 // Event struct
 // ---------------------------------------------------------------------------
@@ -318,6 +358,8 @@ func validateEventPayload(event Event) error {
 		return ValidateIssueReleasedPayload(event.Payload)
 	case EventAutomergeConflictRetry:
 		return ValidateAutomergeConflictRetryPayload(event.Payload)
+	case EventStepTransition:
+		return ValidateStepTransitionPayload(event.Payload)
 	}
 	return nil
 }

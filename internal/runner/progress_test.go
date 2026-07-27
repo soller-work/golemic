@@ -169,6 +169,9 @@ func TestProgress_HappyPath(t *testing.T) {
 	}
 
 	stderr := stderrBuf.String()
+	if strings.Contains(stderr, "step_transition") {
+		t.Errorf("step_transition must not be surfaced in stderr:\n%s", stderr)
+	}
 
 	// BR-P7: lifecycle lines appear in the expected relative order
 	wantOrder := []string{
