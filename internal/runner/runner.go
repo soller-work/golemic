@@ -314,37 +314,25 @@ func (r *Runner) Run() int {
 
 	currentStepSeq := 0
 	currentStepSpanEnd := startStepSpan(loop.StepPrepare, "", "", false, 0)
-	m := &loop.Machine[RunContext]{
-		Transitions: loopTransitions(),
-		Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
-			loop.StepPrepare:     r.stepPrepare,
-			loop.StepRunDev:      r.stepRunDev,
-			loop.StepSyncCI:      r.stepSyncCI,
-			loop.StepRunReviewer: r.stepRunReviewer,
-			loop.StepMergePR:     r.stepMergePR,
-		},
-		Start:     loop.StepPrepare,
-		Terminals: loopTerminals(),
-		OnTransition: func(from loop.StepKey, event loop.EventKey, to loop.StepKey, guarded bool) {
-			seq := currentStepSeq + 1
-			currentStepSeq = seq
+	m := r.buildMachine(loop.StepPrepare, func(from loop.StepKey, event loop.EventKey, to loop.StepKey, guarded bool) {
+		seq := currentStepSeq + 1
+		currentStepSeq = seq
 
-			if payload, err := eventlog.MarshalStepTransitionPayload(string(from), string(event), string(to), guarded, seq); err == nil {
-				_ = ew.Write(eventlog.Event{
-					Type:    eventlog.EventStepTransition,
-					Ts:      time.Now().Format(time.RFC3339),
-					RunID:   r.runID,
-					TurnID:  r.turnCounter,
-					Payload: payload,
-				})
-			}
+		if payload, err := eventlog.MarshalStepTransitionPayload(string(from), string(event), string(to), guarded, seq); err == nil {
+			_ = ew.Write(eventlog.Event{
+				Type:    eventlog.EventStepTransition,
+				Ts:      time.Now().Format(time.RFC3339),
+				RunID:   r.runID,
+				TurnID:  r.turnCounter,
+				Payload: payload,
+			})
+		}
 
-			if currentStepSpanEnd != nil {
-				currentStepSpanEnd(telemetry.StatusOK, nil)
-			}
-			currentStepSpanEnd = startStepSpan(to, from, event, guarded, seq)
-		},
-	}
+		if currentStepSpanEnd != nil {
+			currentStepSpanEnd(telemetry.StatusOK, nil)
+		}
+		currentStepSpanEnd = startStepSpan(to, from, event, guarded, seq)
+	})
 	final, machineErr := m.Run(loopCtx)
 	stepStatus := telemetry.StatusError
 	if machineErr == nil && (final == loop.StepTerminalSuccess || final == loop.StepTerminalSkipped) {
