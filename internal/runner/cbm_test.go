@@ -335,7 +335,7 @@ func runDevAgentCapture(t *testing.T, r *Runner, golemicDir string) []agent.Role
 	var stderr bytes.Buffer
 	r.stderr = &stderr
 	eventLogPath := filepath.Join(t.TempDir(), "events.jsonl")
-	r.runDevAgent(golemicDir, eventLogPath, 30*time.Second, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: eventLogPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	return captured
 }
 
@@ -528,7 +528,7 @@ func TestCBMBrokerCleanupOnRunDevAgentError(t *testing.T) {
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		return 1, agent.TranscriptPaths{}, fmt.Errorf("agent failed")
 	})
-	outcome := r.runDevAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(t.TempDir(), "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed outcome, got %q", outcome)
 	}
@@ -570,7 +570,7 @@ func TestCBMBrokerCleanupOnRunDevAgentTimeout(t *testing.T) {
 	r.SetRunAgentFn(func(_ context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		return 0, agent.TranscriptPaths{}, agent.ErrTimeout
 	})
-	outcome := r.runDevAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(t.TempDir(), "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeTimeout {
 		t.Fatalf("expected timeout outcome, got %q", outcome)
 	}
@@ -620,7 +620,7 @@ func TestCBMBrokerCleanupOnRunDevAgentPanic(t *testing.T) {
 				didPanic = true
 			}
 		}()
-		r.runDevAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, "", 1)
+		r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(t.TempDir(), "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	}()
 	if !didPanic {
 		t.Fatal("expected runDevAgent to panic")
@@ -690,7 +690,7 @@ func TestCBMBrokerSkippedWhenIndexingFailsRetry(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 	findings := "The reviewer requested changes."
-	r.runDevRetryAgent(golemicDir, filepath.Join(t.TempDir(), "events.jsonl"), 30*time.Second, findings, "", "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(t.TempDir(), "events.jsonl"), Timeout: 30 * time.Second, Round: 1, Findings: findings}, DevModeRetryWithFindings)
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")
 	}

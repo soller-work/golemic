@@ -109,7 +109,7 @@ func TestGMToolsInAllowlist(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	r.runDevAgent(golemicDir, filepath.Join(runsDir, r.runID, "events.jsonl"), 30*time.Second, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")
@@ -142,7 +142,7 @@ func TestGMSockEnvInjected(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	r.runDevAgent(golemicDir, filepath.Join(runsDir, r.runID, "events.jsonl"), 30*time.Second, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")
@@ -186,7 +186,7 @@ func TestGMBrokerSocketCleanup(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	r.runDevAgent(golemicDir, filepath.Join(runsDir, r.runID, "events.jsonl"), 30*time.Second, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 
 	if capturedSock == "" {
 		t.Fatal("startGMBrokerFn was not called")
@@ -396,7 +396,7 @@ func TestGMCodeTools_PresentWhenCBMEnabled(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	r.runDevAgent(golemicDir, filepath.Join(runsDir, r.runID, "events.jsonl"), 30*time.Second, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")
@@ -431,7 +431,7 @@ func TestGMCodeTools_AbsentWhenCBMDisabled(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	r.runDevAgent(golemicDir, filepath.Join(runsDir, r.runID, "events.jsonl"), 30*time.Second, "", 1)
+	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")

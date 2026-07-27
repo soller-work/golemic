@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"time"
+
 	"golemic/internal/loop"
 )
 
@@ -34,6 +36,19 @@ type RunContext struct {
 
 	// DevMode indicates whether the RUN_DEV step should use an initial or retry prompt.
 	DevMode DevMode
+
+	// Operational fields: populated by the adapter before each stepRunDev call.
+	GolemicDir   string
+	EventLogPath string
+	Timeout      time.Duration
+	ParentSpanID string
+
+	// GateReason is the rejection reason from the last §10 gate rejection.
+	GateReason string
+
+	// Findings and FindingsJSON carry reviewer feedback into the dev-retry prompt.
+	Findings     string
+	FindingsJSON string
 }
 
 // loopTerminals returns the set of terminal steps.

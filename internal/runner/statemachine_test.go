@@ -10,33 +10,12 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/gmbroker"
+	"golemic/internal/loop"
 )
 
 // ---------------------------------------------------------------------------
 // Pure predicate unit tests
 // ---------------------------------------------------------------------------
-
-func TestClassifyDevGate_GreenTree_SelectsGreenTransition_SM001(t *testing.T) {
-	got := classifyDevGate(true)
-	if got != StateGateRejectedGreen {
-		t.Errorf("classifyDevGate(true) = %q, want %q", got, StateGateRejectedGreen)
-	}
-}
-
-func TestClassifyDevGate_RedTree_SelectsRedTransition_SM002(t *testing.T) {
-	got := classifyDevGate(false)
-	if got != StateGateRejectedRed {
-		t.Errorf("classifyDevGate(false) = %q, want %q", got, StateGateRejectedRed)
-	}
-}
-
-func TestClassifyDevGate_GreenAndRed_AreDistinctStates_SM003(t *testing.T) {
-	green := classifyDevGate(true)
-	red := classifyDevGate(false)
-	if green == red {
-		t.Fatal("green and red gate transitions must be distinct states")
-	}
-}
 
 func TestReviewerFreshnessMet_True_SM004(t *testing.T) {
 	if !reviewerFreshnessMet(true) {
@@ -69,15 +48,15 @@ func TestStateError_Error_ContainsStatePredicateMessage_SM010(t *testing.T) {
 }
 
 func TestStateError_DevGate_ContainsPredicate_SM011(t *testing.T) {
-	e := &StateError{
-		State:     StateGateRejectedRed,
-		Predicate: "gm_dev_done",
-		Message:   "invocation ended without accepted call",
+	e := &loop.StateError{
+		Step:  loop.StepRunDev,
+		Event: loop.EventDevGateRejected,
+		Msg:   "predicate gm_dev_done unmet (tree red): invocation ended without accepted call",
 	}
 	got := e.Error()
-	for _, want := range []string{"gm_dev_done", string(StateGateRejectedRed)} {
+	for _, want := range []string{"gm_dev_done", string(loop.EventDevGateRejected), string(loop.StepRunDev)} {
 		if !strings.Contains(got, want) {
-			t.Errorf("StateError.Error() missing %q: %q", want, got)
+			t.Errorf("loop.StateError.Error() missing %q: %q", want, got)
 		}
 	}
 }
@@ -188,13 +167,13 @@ func TestRunDevAgent_GateRejected_RedTree_EmitsStateErrorRed_SM015(t *testing.T)
 	// Agent calls gm_dev_done without a prior gm_project_check → gate rejects (red).
 	r.SetRunAgentFn(gateTestAgent(t, nil, false, true))
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
 	stderrStr := stderrBuf.String()
-	if !strings.Contains(stderrStr, string(StateGateRejectedRed)) {
-		t.Errorf("expected %q in stderr, got: %s", StateGateRejectedRed, stderrStr)
+	if !strings.Contains(stderrStr, string(loop.EventDevGateRejected)) {
+		t.Errorf("expected %q in stderr, got: %s", loop.EventDevGateRejected, stderrStr)
 	}
 	if !strings.Contains(stderrStr, "gm_dev_done") {
 		t.Errorf("expected gm_dev_done predicate in stderr, got: %s", stderrStr)
@@ -229,7 +208,7 @@ func TestRunDevAgent_MissingDevDone_EmitsStateError_BoundedRetry_SM016(t *testin
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}

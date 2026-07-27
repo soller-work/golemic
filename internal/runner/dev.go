@@ -16,134 +16,18 @@ import (
 	"golemic/internal/cbmbroker"
 	"golemic/internal/eventlog"
 	"golemic/internal/gmbroker"
-	"golemic/internal/prompt"
+	"golemic/internal/loop"
 	"golemic/internal/telemetry"
 )
-
-// runDevRetryAgent runs the dev agent in the existing worktree to address reviewer findings.
-// findings must be non-empty (enforced by RenderDevRetry). findingsJSON may be empty.
-func (r *Runner) runDevRetryAgent(golemicDir, eventLogPath string, timeout time.Duration, findings, findingsJSON, parentSpanID string, round int) string {
-	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("dev")
-	if err != nil {
-		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
-		return outcomeDevFailed
-	}
-	defer cleanupPrompt()
-
-	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
-	cbmEnabled := r.cfg.CodebaseMemory.Enabled
-	if cbmEnabled {
-		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
-		projectName := fmt.Sprintf("golemic-issue-%d-dev", r.issueNum)
-		cbmEnabled = r.indexWorktree(devWorktreePath, cbmCacheDir, projectName)
-	}
-
-	userPrompt, err := prompt.RenderDevRetry(
-		findings,
-		findingsJSON,
-		prompt.Issue{
-			Number: r.issue.Number,
-			Title:  r.issue.Title,
-		},
-		r.branchName,
-		r.cfg.VerifyCommand,
-		filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
-		cbmEnabled,
-	)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "review_failed: %v\n", err)
-		return outcomeReviewFailed
-	}
-
-	outcome, gateReason := r.runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFile, model, userPrompt, cbmEnabled, timeout, parentSpanID, round, 0)
-
-	// Gate retry loop: up to 2 more attempts (3 total) within this reviewer-retry round.
-	for attempt := 1; attempt <= 2 && outcome == outcomeDevGateRejected; attempt++ {
-		gatePrompt, err := prompt.RenderDevGateRetry(
-			gateReason,
-			prompt.Issue{Number: r.issue.Number, Title: r.issue.Title},
-			r.branchName,
-			r.cfg.VerifyCommand,
-			filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
-		)
-		if err != nil {
-			fmt.Fprintf(r.stderr, "dev_failed: render gate retry prompt: %v\n", err)
-			return outcomeDevFailed
-		}
-		outcome, gateReason = r.runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFile, model, gatePrompt, cbmEnabled, timeout, parentSpanID, round, attempt)
-	}
-
-	if outcome == outcomeDevGateRejected {
-		fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", gateReason)
-		return outcomeDevFailed
-	}
-	return outcome
-}
-
-func (r *Runner) runDevAgent(golemicDir, eventLogPath string, timeout time.Duration, parentSpanID string, round int) string {
-	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("dev")
-	if err != nil {
-		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
-		return outcomeDevFailed
-	}
-	defer cleanupPrompt()
-
-	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
-	cbmEnabled := r.cfg.CodebaseMemory.Enabled
-	if cbmEnabled {
-		cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
-		projectName := fmt.Sprintf("golemic-issue-%d-dev", r.issueNum)
-		cbmEnabled = r.indexWorktree(devWorktreePath, cbmCacheDir, projectName)
-	}
-
-	userPrompt, err := prompt.RenderDev(
-		prompt.Issue{
-			Number: r.issue.Number,
-			Title:  r.issue.Title,
-		},
-		r.branchName,
-		r.cfg.VerifyCommand,
-		filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
-		cbmEnabled,
-	)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "Failed to render dev prompt: %v\n", err)
-		return outcomeDevFailed
-	}
-
-	outcome, gateReason := r.runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFile, model, userPrompt, cbmEnabled, timeout, parentSpanID, round, 0)
-
-	// Gate retry loop: up to 2 more attempts (3 total) for the initial dev round.
-	for attempt := 1; attempt <= 2 && outcome == outcomeDevGateRejected; attempt++ {
-		gatePrompt, err := prompt.RenderDevGateRetry(
-			gateReason,
-			prompt.Issue{Number: r.issue.Number, Title: r.issue.Title},
-			r.branchName,
-			r.cfg.VerifyCommand,
-			filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md"),
-		)
-		if err != nil {
-			fmt.Fprintf(r.stderr, "dev_failed: render gate retry prompt: %v\n", err)
-			return outcomeDevFailed
-		}
-		outcome, gateReason = r.runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFile, model, gatePrompt, cbmEnabled, timeout, parentSpanID, round, attempt)
-	}
-
-	if outcome == outcomeDevGateRejected {
-		fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", gateReason)
-		return outcomeDevFailed
-	}
-	return outcome
-}
 
 // runDevAgentWithPrompt executes one dev agent invocation with the given pre-rendered
 // prompt. It handles broker setup, agent execution, gate validation, and side effects.
 //
-// Returns (outcome, gateRejectionReason):
-//   - (outcomeSuccess, ""): gate passed, commit/push/open-PR (or push) done
-//   - (outcomeDevGateRejected, reason): §10 gate rejected by broker
-//   - (other outcome, ""): non-gate failure
-func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFile, model, userPrompt string, cbmEnabled bool, timeout time.Duration, parentSpanID string, round, attempt int) (string, string) {
+// Returns (event, gateRejectionReason):
+//   - (loop.EventDevDone, ""): gate passed, commit/push/open-PR (or push) done
+//   - (loop.EventDevGateRejected, reason): §10 gate rejected by broker
+//   - (other event, ""): non-gate failure
+func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFile, model, userPrompt string, cbmEnabled bool, timeout time.Duration, parentSpanID string, round, attempt int) (loop.EventKey, string) {
 	golemicBinaryPath, _ := os.Executable()
 	devWorktreePath := filepath.Join(golemicDir, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
@@ -178,10 +62,17 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 		}
 	} else {
 		fmt.Fprintf(r.stderr, "dev_failed: GM broker unavailable for dev invocation\n")
-		return outcomeDevFailed, ""
+		return loop.EventDevFailed, ""
 	}
+
+	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, round, attempt, brokerEnv)
+	return r.executeDevAgentCfg(gmb, devWorktreePath, eventLogPath, cfg, parentSpanID, round, attempt)
+}
+
+func (r *Runner) executeDevAgentCfg(gmb *gmbroker.Broker, devWorktreePath, eventLogPath string, cfg agent.RoleConfig, parentSpanID string, round, attempt int) (loop.EventKey, string) {
+	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
-		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "attempt": attempt, "model": model})
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "dev", "round": round, "attempt": attempt, "model": cfg.Model})
 
 	r.writeDevStarted(eventLogPath)
 	activityPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("dev-r%d-a%d.activity.jsonl", round, attempt))
@@ -192,7 +83,6 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 		runFn = agent.RunRole
 	}
 
-	cfg := r.buildDevAgentConfig(systemPromptFile, model, devWorktreePath, eventLogPath, userPrompt, golemicBinaryPath, timeout, runsDir, round, attempt, brokerEnv)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 	stopFollow()
 
@@ -211,82 +101,93 @@ func (r *Runner) runDevAgentWithPrompt(golemicDir, eventLogPath, systemPromptFil
 	if exitCode != 0 {
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent exited with code %d; see %s\n", exitCode, paths.Stderr)
-		return outcomeDevFailed, ""
+		return loop.EventDevFailed, ""
 	}
 
 	return r.finishDevAgentOutcome(gmb, eventLogPath, devWorktreePath, endSpan)
 }
 
-func (r *Runner) finishDevAgentOutcome(gmb *gmbroker.Broker, eventLogPath, devWorktreePath string, endSpan func(string, map[string]any)) (string, string) {
+func (r *Runner) finishDevAgentOutcome(gmb *gmbroker.Broker, eventLogPath, devWorktreePath string, endSpan func(string, map[string]any)) (loop.EventKey, string) {
 	if gmb != nil {
 		return r.finishDevAgentWithBroker(gmb, eventLogPath, devWorktreePath, endSpan)
 	}
 
 	endSpan(telemetry.StatusOK, nil)
-	return outcomeSuccess, ""
+	return loop.EventDevDone, ""
 }
 
-func (r *Runner) finishDevAgentWithBroker(gmb *gmbroker.Broker, eventLogPath, devWorktreePath string, endSpan func(string, map[string]any)) (string, string) {
-	devDone, ok := gmb.DevDoneResult()
-	if ok {
-		acceptedFP, fpOK := gmb.DevDoneFingerprint()
-		if !fpOK {
-			endSpan(telemetry.StatusError, nil)
-			fmt.Fprintf(r.stderr, "dev_failed: gm_dev_done acceptance fingerprint missing\n")
-			return outcomeDevFailed, ""
-		}
-		currentFP, currentOK := gmb.CurrentFingerprint()
-		if currentOK && currentFP != acceptedFP {
-			endSpan(telemetry.StatusError, nil)
-			fmt.Fprintf(r.stderr, "dev_failed: worktree changed after gm_dev_done acceptance\n")
-			return outcomeDevFailed, ""
-		}
-		if sideEffectErr := r.commitDevDone(devWorktreePath, eventLogPath, *devDone); sideEffectErr != nil {
-			endSpan(telemetry.StatusError, nil)
-			fmt.Fprintf(r.stderr, "dev_failed: %v\n", sideEffectErr)
-			return outcomeDevFailed, ""
-		}
-		endSpan(telemetry.StatusOK, nil)
-		return outcomeSuccess, ""
+func (r *Runner) finishDevAgentWithBroker(gmb *gmbroker.Broker, eventLogPath, devWorktreePath string, endSpan func(string, map[string]any)) (loop.EventKey, string) {
+	// Accepted path: dev called gm_dev_done and the gate passed.
+	if devDone, ok := gmb.DevDoneResult(); ok {
+		return r.finalizeAcceptedDevDone(gmb, devWorktreePath, eventLogPath, endSpan, devDone)
 	}
 
 	// Deterministic finalize: the §10 gate rejected the call but the tree is now
 	// green (last check OK + current fingerprint matches) and valid params were
 	// already supplied. Finalize without launching another LLM turn.
-	if recoveredParams, hasParams := gmb.RecoveredDevDoneParams(); hasParams && gmb.IsTreeGreen() {
+	recoveredParams, hasParams := gmb.RecoveredDevDoneParams()
+	if hasParams && gmb.IsTreeGreen() {
 		if sideEffectErr := r.commitDevDone(devWorktreePath, eventLogPath, *recoveredParams); sideEffectErr != nil {
 			endSpan(telemetry.StatusError, nil)
 			fmt.Fprintf(r.stderr, "dev_failed: %v\n", sideEffectErr)
-			return outcomeDevFailed, ""
+			return loop.EventDevFailed, ""
 		}
 		endSpan(telemetry.StatusOK, nil)
-		return outcomeSuccess, ""
+		return loop.EventDevDone, ""
 	}
 
-	if outcome, reason, handled := r.finishDevAgentWithoutAcceptedDevDone(gmb, endSpan); handled {
+	if ev, reason, handled := r.finishDevAgentWithoutAcceptedDevDone(gmb, endSpan); handled {
 		if output := gmb.LastCheckOutput(); output != "" {
 			reason = reason + "\n\nFailing gm_project_check output:\n" + output
 		}
-		gateState := classifyDevGate(gmb.IsTreeGreen())
-		fmt.Fprintf(r.stderr, "%v\n", &StateError{State: gateState, Predicate: "gm_dev_done", Message: reason}) //nolint:errcheck
-		return outcome, reason
+		r.emitGateRejectionError(gmb, reason)
+		return ev, reason
 	}
 	endSpan(telemetry.StatusError, nil)
 	reason := "the invocation ended without a successful gm_dev_done call; run gm_project_check until green, then call gm_dev_done with summary, commitMsg, prTitle, and prBody"
-	gateState := classifyDevGate(gmb.IsTreeGreen())
-	fmt.Fprintf(r.stderr, "%v\n", &StateError{State: gateState, Predicate: "gm_dev_done", Message: reason}) //nolint:errcheck
-	return outcomeDevGateRejected, reason
+	r.emitGateRejectionError(gmb, reason)
+	return loop.EventDevGateRejected, reason
 }
 
-func (r *Runner) finishDevAgentWithoutAcceptedDevDone(gmb *gmbroker.Broker, endSpan func(string, map[string]any)) (string, string, bool) {
+func (r *Runner) finalizeAcceptedDevDone(gmb *gmbroker.Broker, devWorktreePath, eventLogPath string, endSpan func(string, map[string]any), devDone *gmbroker.DevDoneParams) (loop.EventKey, string) {
+	acceptedFP, fpOK := gmb.DevDoneFingerprint()
+	if !fpOK {
+		endSpan(telemetry.StatusError, nil)
+		fmt.Fprintf(r.stderr, "dev_failed: gm_dev_done acceptance fingerprint missing\n")
+		return loop.EventDevFailed, ""
+	}
+	currentFP, currentOK := gmb.CurrentFingerprint()
+	if currentOK && currentFP != acceptedFP {
+		endSpan(telemetry.StatusError, nil)
+		fmt.Fprintf(r.stderr, "dev_failed: worktree changed after gm_dev_done acceptance\n")
+		return loop.EventDevFailed, ""
+	}
+	if sideEffectErr := r.commitDevDone(devWorktreePath, eventLogPath, *devDone); sideEffectErr != nil {
+		endSpan(telemetry.StatusError, nil)
+		fmt.Fprintf(r.stderr, "dev_failed: %v\n", sideEffectErr)
+		return loop.EventDevFailed, ""
+	}
+	endSpan(telemetry.StatusOK, nil)
+	return loop.EventDevDone, ""
+}
+
+func (r *Runner) emitGateRejectionError(gmb *gmbroker.Broker, reason string) {
+	treeState := "tree red"
+	if gmb.IsTreeGreen() {
+		treeState = "tree green"
+	}
+	fmt.Fprintf(r.stderr, "%v\n", &loop.StateError{Step: loop.StepRunDev, Event: loop.EventDevGateRejected, Msg: "predicate gm_dev_done unmet (" + treeState + "): " + reason}) //nolint:errcheck
+}
+
+func (r *Runner) finishDevAgentWithoutAcceptedDevDone(gmb *gmbroker.Broker, endSpan func(string, map[string]any)) (loop.EventKey, string, bool) {
 	if gmb.DevDoneGateRejected() {
 		endSpan(telemetry.StatusError, nil)
-		return outcomeDevGateRejected, gmb.DevDoneGateReason(), true
+		return loop.EventDevGateRejected, gmb.DevDoneGateReason(), true
 	}
 	if status, ok := gmb.DevDoneTerminalStatus(); ok && (status == "SCHEMA_INVALID" || status == "PROTOCOL_ERROR") {
 		if msg, msgOK := gmb.DevDoneTerminalMessage(); msgOK && msg != "" {
 			endSpan(telemetry.StatusError, nil)
-			return outcomeDevGateRejected, msg, true
+			return loop.EventDevGateRejected, msg, true
 		}
 	}
 	return "", "", false
@@ -542,23 +443,23 @@ func (r *Runner) indexWorktree(wtPath, cbmCacheDir, projectName string) bool {
 }
 
 // handleDevAgentErrorWithLog processes agent errors, writes agent_completed for chain
-// exhaustion, and returns the outcome. eventLogPath may be empty for cases where no
+// exhaustion, and returns the event. eventLogPath may be empty for cases where no
 // pr comment is needed.
-func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endSpan func(string, map[string]any), activityPath, stderrPath string) string {
+func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endSpan func(string, map[string]any), activityPath, stderrPath string) loop.EventKey {
 	if errors.Is(err, agent.ErrTimeout) {
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent exceeded timeout\n")
-		return outcomeTimeout
+		return loop.EventAgentTimedOut
 	}
 	if errors.Is(err, agent.ErrStalled) {
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent stalled\n")
-		return outcomeStalled
+		return loop.EventAgentStalled
 	}
 	if errors.Is(err, agent.ErrThinkingLoop) {
 		endSpan(telemetry.StatusKilled, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: dev agent thinking loop\n")
-		return outcomeAborted
+		return loop.EventAgentAborted
 	}
 	var chainErr *agent.ModelChainExhaustedError
 	if errors.As(err, &chainErr) {
@@ -570,9 +471,9 @@ func (r *Runner) handleDevAgentErrorWithLog(eventLogPath string, err error, endS
 		}
 		endSpan(telemetry.StatusError, nil)
 		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err)
-		return outcomeDevFailed
+		return loop.EventDevFailed
 	}
 	endSpan(telemetry.StatusError, nil)
 	fmt.Fprintf(r.stderr, "dev_failed: agent failed: %v\n", err)
-	return outcomeDevFailed
+	return loop.EventDevFailed
 }

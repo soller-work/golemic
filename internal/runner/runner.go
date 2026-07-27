@@ -85,6 +85,10 @@ type Runner struct {
 
 	// Token usage collected across all invocations in this run.
 	tokenUsageLog []invocationTokenUsage
+
+	// loopCtx is the shared RunContext for the current orchestration run.
+	// Created by orchestrate, reused by handleVerdict/handlePrecheckFailure.
+	loopCtx *RunContext
 }
 
 // New creates a new Runner. executor is used for all gh/git commands, homeDir is
@@ -560,7 +564,15 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 	endCreateDevWT(telemetry.StatusOK, nil)
 
 	// Round 1 dev
-	devOutcome := r.runDevAgent(golemicDir, eventLogPath, timeoutDuration, runSpanID, 1)
+	r.loopCtx = &RunContext{
+		GolemicDir:   golemicDir,
+		EventLogPath: eventLogPath,
+		Timeout:      timeoutDuration,
+		ParentSpanID: runSpanID,
+		Round:        1,
+		MaxRounds:    r.cfg.MaxReviewRounds,
+	}
+	devOutcome := r.runDevTurn(r.loopCtx, DevModeInitial)
 	if devOutcome != outcomeSuccess {
 		return devOutcome
 	}
@@ -732,7 +744,10 @@ func (r *Runner) handlePrecheckFailure(golemicDir, eventLogPath string, timeout 
 	// BR-P4: synthesize findings encoding failure class + output tail.
 	findings := buildPrecheckFindings(res)
 	r.turnCounter++
-	if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, "", runSpanID, round+1); o != outcomeSuccess {
+	r.loopCtx.Round = round + 1
+	r.loopCtx.Findings = findings
+	r.loopCtx.FindingsJSON = ""
+	if o := r.runDevTurn(r.loopCtx, DevModeRetryWithFindings); o != outcomeSuccess {
 		return nil, o
 	}
 	return nil, outcomePrecheckDevRetryDone
@@ -827,7 +842,10 @@ func (r *Runner) handleVerdict(eventLogPath, golemicDir, runSpanID string, timeo
 		}
 		*round++
 		r.turnCounter++ // each dev-retry round gets its own turn
-		if o := r.runDevRetryAgent(golemicDir, eventLogPath, timeout, findings, findingsJSON, runSpanID, *round); o != outcomeSuccess {
+		r.loopCtx.Round = *round
+		r.loopCtx.Findings = findings
+		r.loopCtx.FindingsJSON = findingsJSON
+		if o := r.runDevTurn(r.loopCtx, DevModeRetryWithFindings); o != outcomeSuccess {
 			return false, o
 		}
 		return true, ""

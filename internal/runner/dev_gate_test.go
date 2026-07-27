@@ -124,7 +124,7 @@ func TestRunDevAgent_GateAccepted_CommitsPushesOpensPR_WritesEvent_AC001(t *test
 	)
 	r.SetRunAgentFn(gateTestAgent(t, nil, true, true))
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeSuccess {
 		t.Fatalf("expected success, got %q", outcome)
 	}
@@ -160,7 +160,7 @@ func TestRunDevAgent_GateRejected_NoPriorCheck_RestartsAndNoSideEffects_AC002(t 
 	var prompts []string
 	r.SetRunAgentFn(gateTestAgent(t, &prompts, false, true))
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
@@ -189,7 +189,7 @@ func TestRunDevAgent_GateRejected_TreeMutated_RestartsAndNoSideEffects_AC003(t *
 	)
 	r.SetRunAgentFn(gateTestAgent(t, nil, true, true))
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
@@ -244,7 +244,7 @@ func TestRunDevAgent_GateRejected_LastCheckRed_RestartsAndNoSideEffects_AC004(t 
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
@@ -268,7 +268,7 @@ func TestRunDevAgent_GateRetryBound_ThreeInvocationsThenDevFailed_AC005(t *testi
 	var prompts []string
 	r.SetRunAgentFn(gateTestAgent(t, &prompts, false, true))
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
@@ -290,7 +290,7 @@ func TestRunDevAgent_GMBrokerFailureFailsClosed_AC007(t *testing.T) {
 			called = true
 			return 0, agent.TranscriptPaths{}, nil
 		})
-		if outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1); outcome != outcomeDevFailed {
+		if outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial); outcome != outcomeDevFailed {
 			t.Fatalf("expected dev_failed, got %q", outcome)
 		}
 		if called {
@@ -314,7 +314,7 @@ func TestRunDevAgent_GMBrokerFailureFailsClosed_AC007(t *testing.T) {
 			called = true
 			return 0, agent.TranscriptPaths{}, nil
 		})
-		if outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1); outcome != outcomeDevFailed {
+		if outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial); outcome != outcomeDevFailed {
 			t.Fatalf("expected dev_failed, got %q", outcome)
 		}
 		if called {
@@ -369,7 +369,7 @@ func TestRunDevAgent_PostTerminalMutationAfterAcceptedFailsClosed_AC008(t *testi
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
@@ -411,7 +411,7 @@ func TestRunDevAgent_TerminalSchemaFailureReportsSchemaError_AC009(t *testing.T)
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
@@ -456,7 +456,7 @@ func TestRunDevAgent_MissingDevDone_RetryableAndExhausted_AC010(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed after 3 retries, got %q", outcome)
 	}
@@ -492,7 +492,7 @@ func TestRunDevRetryAgent_ExistingPROpened_CommitsPushesNoSecondPR_AC006(t *test
 	)
 	r.SetRunAgentFn(gateTestAgent(t, nil, true, true))
 
-	outcome := r.runDevRetryAgent(golemicDir, logPath, 30*time.Second, "Fix the typo", "", "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1, Findings: "Fix the typo"}, DevModeRetryWithFindings)
 	if outcome != outcomeSuccess {
 		t.Fatalf("expected success, got %q", outcome)
 	}
@@ -598,7 +598,7 @@ func TestRunDevAgent_GateRejected_GreenTree_ValidParams_DeterministicFinalize_AC
 		sendGMDevDone(cfg.Env) // gate rejects: computeFP "fp-changed" != "fp-ok"
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeSuccess {
 		t.Fatalf("expected success (deterministic finalize), got %q", outcome)
 	}
@@ -637,7 +637,7 @@ func TestRunDevAgent_GateRejected_GreenTree_ValidParams_NeverDevFailed_ACnew2(t 
 		sendGMDevDone(cfg.Env)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome == outcomeDevFailed {
 		t.Fatalf("green tree with recovered params must not result in dev_failed")
 	}
@@ -666,7 +666,7 @@ func TestRunDevAgent_GateRejected_RedTree_LLMRetryWithFailingOutput_ACnew3(t *te
 		gateTestCallGMTool(cfg.Env, "gm_dev_done", "test-done", gateTestDevDoneParams())
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	outcome := r.runDevAgent(golemicDir, logPath, 30*time.Second, "", 1)
+	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed after 3 retries on red tree, got %q", outcome)
 	}
