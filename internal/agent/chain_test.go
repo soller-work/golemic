@@ -27,6 +27,21 @@ func captureArgsFactory(t *testing.T, scripts []string, allArgs *[][]string) {
 	t.Cleanup(func() { CommandFactory = exec.Command })
 }
 
+func captureArgsHelperFactory(t *testing.T, modes []string, allArgs *[][]string) {
+	t.Helper()
+	invocations := 0
+	CommandFactory = func(name string, args ...string) *exec.Cmd {
+		idx := invocations
+		invocations++
+		*allArgs = append(*allArgs, append([]string{name}, args...))
+		if idx >= len(modes) {
+			t.Fatalf("unexpected invocation %d (only %d helper modes configured)", idx+1, len(modes))
+		}
+		return helperCommand(modes[idx])
+	}
+	t.Cleanup(func() { CommandFactory = exec.Command })
+}
+
 // limitErrorTranscript is a Pi JSONL transcript simulating a subscription limit error.
 const limitErrorTranscript = `{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"You have hit your limit today"}}` + "\n"
 
@@ -52,10 +67,7 @@ func TestRunRole_SingleModel_Success(t *testing.T) {
 	cfg.Timeout = 5 * time.Second
 
 	var allArgs [][]string
-	scripts := []string{
-		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
-	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsHelperFactory(t, []string{"helper-stop"}, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -81,11 +93,7 @@ func TestRunRole_TwoModelChain_FirstLimitFallback(t *testing.T) {
 	cfg.Timeout = 5 * time.Second
 
 	var allArgs [][]string
-	scripts := []string{
-		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
-		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
-	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsHelperFactory(t, []string{"helper-limit-error", "helper-stop"}, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -113,11 +121,7 @@ func TestRunRole_TwoModelChain_BothExhausted(t *testing.T) {
 	cfg.Timeout = 5 * time.Second
 
 	var allArgs [][]string
-	scripts := []string{
-		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
-		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
-	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsHelperFactory(t, []string{"helper-limit-error", "helper-limit-error"}, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if !errors.Is(err, ErrModelChainExhausted) {
@@ -151,11 +155,7 @@ func TestRunRole_AutoRetryEndFallback(t *testing.T) {
 	cfg.Timeout = 5 * time.Second
 
 	var allArgs [][]string
-	scripts := []string{
-		writeScript(t, `echo '`+autoRetryEndFailTranscript[:len(autoRetryEndFailTranscript)-1]+`'; exit 0`),
-		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
-	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsHelperFactory(t, []string{"helper-auto-retry-end-fail", "helper-stop"}, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -177,10 +177,7 @@ func TestRunRole_NonFallbackTaskFailure(t *testing.T) {
 
 	var allArgs [][]string
 	// First model: non-zero exit, transcript has stopReason:stop (not a provider error)
-	scripts := []string{
-		writeScript(t, `echo '`+taskFailTranscript[:len(taskFailTranscript)-1]+`'; exit 1`),
-	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsHelperFactory(t, []string{"helper-task-fail"}, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -292,11 +289,7 @@ func TestRunRole_EachModelGetsExactlyOneModelArg(t *testing.T) {
 	cfg.Timeout = 5 * time.Second
 
 	var allArgs [][]string
-	scripts := []string{
-		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
-		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
-	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsHelperFactory(t, []string{"helper-limit-error", "helper-stop"}, &allArgs)
 
 	_, _, _ = RunRole(context.Background(), cfg)
 
