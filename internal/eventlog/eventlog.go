@@ -23,7 +23,6 @@ import (
 const (
 	EventRunStarted              = "run_started"
 	EventWorktreeCreated         = "worktree_created"
-	EventDevStarted              = "dev_started"
 	EventPROpened                = "pr_opened"
 	EventReviewSubmitted         = "review_submitted"
 	EventRunFinished             = "run_finished"
@@ -45,7 +44,6 @@ func AllEventTypes() []string {
 	return []string{
 		EventRunStarted,
 		EventWorktreeCreated,
-		EventDevStarted,
 		EventPROpened,
 		EventReviewSubmitted,
 		EventRunFinished,
