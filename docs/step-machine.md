@@ -146,3 +146,15 @@ The test `TestLoopTransitions_AC6_GuardDisjointness` in `internal/runner/loopdef
 - `Run()` starts the machine at `PREPARE` for both fresh and resume runs.
 - `DevAttempt < 3` allows gate retries at attempts 0, 1, and 2 (3 total invocations). At attempt 3 the machine transitions to `TERMINAL_DEV_FAILED`.
 - `Round` starts at 1 and is incremented after each `RUN_REVIEWER` turn. The escalation boundary is `Round >= MaxRounds` (default `MaxRounds = 5`).
+
+## Audit trail
+
+Every transition is recorded twice:
+
+1. `events.jsonl` gets an additive `step_transition` event with payload
+   `{"from":"RUN_DEV","event":"DEV_GATE_REJECTED","to":"RUN_DEV","guarded":true,"seq":3}`.
+   `seq` starts at 1 and increases monotonically for the run.
+2. `telemetry.jsonl` gets one child span per visited step named `step.<StepKey>`.
+   The span is parented to the run span and carries `{run_id, issue, from, event, guarded, seq}`.
+
+The final transition into a terminal step is written before `run_finished`, and the last step span closes after the machine stops.

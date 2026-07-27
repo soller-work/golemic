@@ -39,7 +39,7 @@ type eventWriter interface {
 
 func (w *progressEventWriter) Write(event eventlog.Event) error {
 	err := w.inner.Write(event)
-	if err == nil {
+	if err == nil && event.Type != eventlog.EventStepTransition {
 		w.renderer.EmitLifecycle(event)
 	}
 	return err

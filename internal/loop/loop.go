@@ -16,6 +16,9 @@ type Transition[C any] struct {
 	Guard func(*C) bool
 }
 
+// TransitionObserver observes every successful state transition.
+type TransitionObserver[C any] func(from StepKey, event EventKey, to StepKey, guarded bool)
+
 // StateError is raised when dispatch cannot continue.
 type StateError struct {
 	Step  StepKey
@@ -29,10 +32,11 @@ func (e *StateError) Error() string {
 
 // Machine is a guarded transition machine over context type C.
 type Machine[C any] struct {
-	Transitions []Transition[C]
-	Handlers    map[StepKey]func(*C) EventKey
-	Start       StepKey
-	Terminals   map[StepKey]bool
+	Transitions  []Transition[C]
+	Handlers     map[StepKey]func(*C) EventKey
+	Start        StepKey
+	Terminals    map[StepKey]bool
+	OnTransition TransitionObserver[C]
 }
 
 // Run walks the machine from Start until a terminal step is reached.
@@ -52,7 +56,11 @@ func (m *Machine[C]) Run(ctx *C) (StepKey, error) {
 		ev := handler(ctx)
 		matched := m.collectMatches(step, ev, ctx)
 		if len(matched) == 1 {
-			step = matched[0].To
+			next := matched[0].To
+			if m.OnTransition != nil {
+				m.OnTransition(step, ev, next, matched[0].Guard != nil)
+			}
+			step = next
 			continue
 		}
 		return step, &StateError{Step: step, Event: ev, Msg: dispatchErrMsg(len(matched))}
