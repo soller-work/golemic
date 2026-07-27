@@ -44,6 +44,10 @@ type RunContext struct {
 	Timeout      time.Duration
 	ParentSpanID string
 
+	// WorktreeCreateFailed is set by stepPrepare when dev worktree creation
+	// fails, routing PREPARE_FAILED to TERMINAL_DEV_FAILED instead of TERMINAL_ABORTED.
+	WorktreeCreateFailed bool
+
 	// GateReason is the rejection reason from the last §10 gate rejection.
 	GateReason string
 
@@ -107,7 +111,10 @@ func loopTransitions() []loop.Transition[RunContext] {
 	return []loop.Transition[RunContext]{
 		// PREPARE: route based on eligibility and resume state.
 		{From: loop.StepPrepare, Event: loop.EventNotEligible, To: loop.StepTerminalSkipped},
-		{From: loop.StepPrepare, Event: loop.EventPrepareFailed, To: loop.StepTerminalAborted},
+		{From: loop.StepPrepare, Event: loop.EventPrepareFailed, To: loop.StepTerminalDevFailed,
+			Guard: func(rc *RunContext) bool { return rc.WorktreeCreateFailed }},
+		{From: loop.StepPrepare, Event: loop.EventPrepareFailed, To: loop.StepTerminalAborted,
+			Guard: func(rc *RunContext) bool { return !rc.WorktreeCreateFailed }},
 		// EventReady with no prior approval → run dev (initial or retry).
 		{From: loop.StepPrepare, Event: loop.EventReady, To: loop.StepRunDev,
 			Guard: func(rc *RunContext) bool { return !rc.Resume || rc.ResumeVerdict != "approved" }},
