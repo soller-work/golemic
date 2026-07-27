@@ -412,7 +412,7 @@ func setupDevWTWithGit(t *testing.T, golemicDir string) string {
 	return devWT
 }
 
-// TestCBMDevTools_FlagOn verifies that the dev allowlist is exactly read,bash,write,edit even when CBM is on (BR-C7).
+// TestCBMDevTools_FlagOn verifies that the dev allowlist is exactly read,bash,write,edit even when CBM is on.
 func TestCBMDevTools_FlagOn(t *testing.T) {
 	exec := makePassthroughGitExec()
 	r, golemicDir := setupCBMRunner(t, exec, true)

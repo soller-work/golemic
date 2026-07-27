@@ -32,7 +32,7 @@ func makeProgressFakeAgent(t *testing.T, devActivityLines, reviewerActivityLines
 			fmt.Sprintf("%s-r%d-a%d.activity.jsonl", cfg.Role, cfg.Round, cfg.Attempt))
 		switch cfg.Role {
 		case "dev":
-			// Satisfy the §10 gate; runner writes pr_opened on the first call.
+			// Satisfy the gate; runner writes pr_opened on the first call.
 			if !sendGMProjectCheck(cfg.Env) {
 				t.Errorf("makeProgressFakeAgent: sendGMProjectCheck failed")
 			}
@@ -173,7 +173,7 @@ func TestProgress_HappyPath(t *testing.T) {
 		t.Errorf("step_transition must not be surfaced in stderr:\n%s", stderr)
 	}
 
-	// BR-P7: lifecycle lines appear in the expected relative order
+	// lifecycle lines appear in the expected relative order
 	wantOrder := []string{
 		"▶ worktree ready (dev)",
 		"▶ dev started",
@@ -189,7 +189,7 @@ func TestProgress_HappyPath(t *testing.T) {
 		t.Errorf("lifecycle lines not in expected order\nstderr:\n%s\nwant order: %v", stderr, wantOrder)
 	}
 
-	// Tool call lines appear (BR-P5)
+	// Tool call lines appear.
 	if !strings.Contains(stderr, "dev · bash: go build ./...") {
 		t.Errorf("expected dev bash tool call line in stderr:\n%s", stderr)
 	}
@@ -200,7 +200,7 @@ func TestProgress_HappyPath(t *testing.T) {
 		t.Errorf("expected reviewer bash tool call line in stderr:\n%s", stderr)
 	}
 
-	// BR-P1: stdout contract — stdout must not contain any progress lines
+	// stdout contract — stdout must not contain any progress lines
 	stdout := stdoutBuf.String()
 	if strings.Contains(stdout, "▶") {
 		t.Errorf("progress lines must not appear on stdout, got: %q", stdout)
@@ -208,7 +208,7 @@ func TestProgress_HappyPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestProgress_Quiet: --quiet suppresses all progress (BR-P2)
+// TestProgress_Quiet: --quiet suppresses all progress
 // ---------------------------------------------------------------------------
 
 func TestProgress_Quiet(t *testing.T) {
@@ -231,7 +231,7 @@ func TestProgress_Quiet(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestProgress_UnknownEventType: fallback line emitted, run continues (BR-P4)
+// TestProgress_UnknownEventType: fallback line emitted, run continues
 // ---------------------------------------------------------------------------
 
 func TestProgress_UnknownEventType(t *testing.T) {
@@ -256,7 +256,7 @@ type Renderer struct {
 }
 
 // ---------------------------------------------------------------------------
-// TestProgress_FollowReaderError: run succeeds when activity.jsonl is missing (BR-P3)
+// TestProgress_FollowReaderError: run succeeds when activity.jsonl is missing
 // ---------------------------------------------------------------------------
 
 func TestProgress_FollowReaderError(t *testing.T) {
@@ -266,7 +266,7 @@ func TestProgress_FollowReaderError(t *testing.T) {
 	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
 		switch cfg.Role {
 		case "dev":
-			// Satisfy the §10 gate; runner writes pr_opened.
+			// Satisfy the gate; runner writes pr_opened.
 			if !sendGMProjectCheck(cfg.Env) {
 				t.Errorf("TestProgress_FollowReaderError: sendGMProjectCheck failed")
 			}
@@ -289,7 +289,7 @@ func TestProgress_FollowReaderError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestProgress_StdoutContractIntact: stdout = runId only on success (BR-P1)
+// TestProgress_StdoutContractIntact: stdout = runId only on success
 // ---------------------------------------------------------------------------
 
 // makeMinimalFakeAgent creates a fake agent for the stdout contract test.

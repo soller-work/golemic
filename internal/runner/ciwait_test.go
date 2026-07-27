@@ -274,7 +274,7 @@ func ciWaitResult(t *testing.T, ev eventlog.Event) string {
 // queryCIChecks unit tests
 // ---------------------------------------------------------------------------
 
-// AC-002: no check runs for current SHA → pending
+// no check runs for current SHA → pending
 func TestQueryCIChecks_NoChecks_AC002(t *testing.T) {
 	r, logPath, _ := buildCIGateRunner(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 	_ = logPath
@@ -291,7 +291,7 @@ func TestQueryCIChecks_NoChecks_AC002(t *testing.T) {
 	}
 }
 
-// AC-001: all required check runs completed successfully → green
+// all required check runs completed successfully → green
 func TestQueryCIChecks_AllPassed_AC001(t *testing.T) {
 	checks := requiredVerifyCheckRunsJSON(
 		ghCheckRunItem{Name: "build", Status: "completed", Conclusion: "success"},
@@ -308,7 +308,7 @@ func TestQueryCIChecks_AllPassed_AC001(t *testing.T) {
 	}
 }
 
-// AC-003, AC-005: any failed check run → red with failed items
+// any failed check run → red with failed items
 func TestQueryCIChecks_HasFailed_AC003(t *testing.T) {
 	checks := ghCheckRunsJSON([]ghCheckRunItem{
 		{Name: "build", Status: "completed", Conclusion: "success"},
@@ -345,7 +345,7 @@ func TestQueryCIChecks_StillPending(t *testing.T) {
 	}
 }
 
-// AC-007: gh pr view error → CHECKS_QUERY_FAILED
+// gh pr view error → CHECKS_QUERY_FAILED
 func TestQueryCIChecks_GhError_AC007(t *testing.T) {
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
@@ -447,7 +447,7 @@ func TestQueryCIChecks_FailClosed_AC007(t *testing.T) {
 // pollCIChecks
 // ---------------------------------------------------------------------------
 
-// AC-001: immediate green → no wait
+// immediate green → no wait
 func TestPollCIChecks_ImmediateGreen_AC001(t *testing.T) {
 	checks := requiredVerifyCheckRunsJSON()
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
@@ -461,7 +461,7 @@ func TestPollCIChecks_ImmediateGreen_AC001(t *testing.T) {
 	}
 }
 
-// AC-005: pending checks time out
+// pending checks time out
 func TestPollCIChecks_TimeoutWhilePending_AC005(t *testing.T) {
 	checks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "build", Status: "in_progress"}})
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(checks, nil, nil))
@@ -476,7 +476,7 @@ func TestPollCIChecks_TimeoutWhilePending_AC005(t *testing.T) {
 	}
 }
 
-// AC-002: no check runs for current SHA are treated as pending until timeout.
+// no check runs for current SHA are treated as pending until timeout.
 func TestPollCIChecks_NoChecksPassThrough_AC002(t *testing.T) {
 	r, _, _ := buildCIGateRunner(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 	r.SetCIPollInterval(1 * time.Millisecond)
@@ -539,7 +539,7 @@ func TestWriteCIWaitFinished_WritesCorrectEvent(t *testing.T) {
 // runCIGate integration-level tests
 // ---------------------------------------------------------------------------
 
-// AC-001: green checks release the reviewer
+// green checks release the reviewer
 func TestRunCIGate_GreenPassThrough_AC001(t *testing.T) {
 	greenChecks := requiredVerifyCheckRunsJSON()
 	exec := ciGateExecutor([]string{greenChecks}, nil, nil)
@@ -559,7 +559,7 @@ func TestRunCIGate_GreenPassThrough_AC001(t *testing.T) {
 	}
 }
 
-// AC-002: no checks → immediate pass-through
+// no checks → immediate pass-through
 func TestRunCIGate_NoChecksPassThrough_AC002(t *testing.T) {
 	greenChecks := requiredVerifyCheckRunsJSON()
 	exec := ciGateExecutor([]string{emptyCheckRunsJSON, greenChecks}, nil, nil)
@@ -579,7 +579,7 @@ func TestRunCIGate_NoChecksPassThrough_AC002(t *testing.T) {
 	}
 }
 
-// AC-003: red build triggers dev retry that heals the PR
+// red build triggers dev retry that heals the PR
 func TestRunCIGate_RedThenGreen_AC003(t *testing.T) {
 	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
 	greenChecks := requiredVerifyCheckRunsJSON()
@@ -616,7 +616,7 @@ func TestRunCIGate_RedThenGreen_AC003(t *testing.T) {
 	}
 }
 
-// AC-004: retries exhausted → escalate with PR comment mentioning 3 attempts
+// retries exhausted → escalate with PR comment mentioning 3 attempts
 func TestRunCIGate_ExhaustedRetries_AC004(t *testing.T) {
 	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
 	lsRemoteResps := []string{
@@ -651,7 +651,7 @@ func TestRunCIGate_ExhaustedRetries_AC004(t *testing.T) {
 	}
 }
 
-// AC-005: CI timeout is treated as red → triggers retry
+// CI timeout is treated as red → triggers retry
 func TestRunCIGate_TimeoutTreatedAsRed_AC005(t *testing.T) {
 	pendingChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "in_progress"}})
 	greenChecks := requiredVerifyCheckRunsJSON()
@@ -693,7 +693,7 @@ func TestRunCIGate_TimeoutTreatedAsRed_AC005(t *testing.T) {
 	}
 }
 
-// AC-006: failed retry round escalates immediately (non-zero exit)
+// failed retry round escalates immediately (non-zero exit)
 func TestRunCIGate_FailedRetryEscalates_AC006(t *testing.T) {
 	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
 	lsRemoteResps := []string{
@@ -717,7 +717,7 @@ func TestRunCIGate_FailedRetryEscalates_AC006(t *testing.T) {
 	}
 }
 
-// AC-006: dev pushes nothing → escalate
+// dev pushes nothing → escalate
 func TestRunCIGate_NoPushEscalates_AC006b(t *testing.T) {
 	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "test", Status: "completed", Conclusion: "failure"}})
 	// Both ls-remote calls return the same SHA → no push detected
@@ -739,7 +739,7 @@ func TestRunCIGate_NoPushEscalates_AC006b(t *testing.T) {
 	}
 }
 
-// AC-007: check query failure is fail-closed
+// check query failure is fail-closed
 func TestRunCIGate_CheckQueryFailure_AC007(t *testing.T) {
 	var commentCalls []string
 	exec := &fakeExecutor{
@@ -771,7 +771,7 @@ func TestRunCIGate_CheckQueryFailure_AC007(t *testing.T) {
 	}
 }
 
-// AC-008: prompt contains failed check info
+// prompt contains failed check info
 func TestRunDevCIRetryAgent_PromptContainsCheckInfo(t *testing.T) {
 	var capturedPrompt string
 	homeDir, repoRoot, project := setupRunnerTest(t)
@@ -880,7 +880,7 @@ func TestRunDevCIRetryAgent_ErrStalledMapsToStalledOutcome_P2_1b(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// require_ci_checks=true tests (AC-001..AC-005 from issue #72)
+// require_ci_checks=true tests
 // ---------------------------------------------------------------------------
 
 // buildCIGateRunnerWithRequireCIChecks creates a runner with RequireCIChecks=true.
@@ -891,7 +891,7 @@ func buildCIGateRunnerWithRequireCIChecks(t *testing.T, exec *fakeExecutor) (*Ru
 	return r, logPath, stderr
 }
 
-// AC-001/AC-002 regression guard: no checks for the current head are pending even
+// regression guard: no checks for the current head are pending even
 // when require_ci_checks=false, so the runner cannot merge on a not-yet-reported
 // required check after a force-push.
 func TestQueryCIChecks_RequireCIChecksFalse_NoChecksArePending(t *testing.T) {
@@ -907,7 +907,7 @@ func TestQueryCIChecks_RequireCIChecksFalse_NoChecksArePending(t *testing.T) {
 	}
 }
 
-// AC-003: require_ci_checks=true keeps empty current-head checks pending in queryCIChecks.
+// require_ci_checks=true keeps empty current-head checks pending in queryCIChecks.
 func TestQueryCIChecks_RequireCIChecksTrue_NoChecksMappedToPending(t *testing.T) {
 	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 
@@ -920,7 +920,7 @@ func TestQueryCIChecks_RequireCIChecksTrue_NoChecksMappedToPending(t *testing.T)
 	}
 }
 
-// AC-003: require_ci_checks=true, no_checks then green → pollCIChecks returns green.
+// require_ci_checks=true, no_checks then green → pollCIChecks returns green.
 func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenGreen_AC003(t *testing.T) {
 	greenChecks := requiredVerifyCheckRunsJSON()
 
@@ -959,7 +959,7 @@ func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenGreen_AC003(t *testing.T) 
 	}
 }
 
-// AC-004: require_ci_checks=true, no_checks then red → pollCIChecks returns red.
+// require_ci_checks=true, no_checks then red → pollCIChecks returns red.
 func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenRed_AC004(t *testing.T) {
 	redChecks := ghCheckRunsJSON([]ghCheckRunItem{{Name: "verify", Status: "completed", Conclusion: "failure"}})
 
@@ -998,7 +998,7 @@ func TestPollCIChecks_RequireCIChecksTrue_NoChecksThenRed_AC004(t *testing.T) {
 	}
 }
 
-// AC-005: require_ci_checks=true, no_checks throughout until ciTimeout → returns timeout.
+// require_ci_checks=true, no_checks throughout until ciTimeout → returns timeout.
 func TestPollCIChecks_RequireCIChecksTrue_AlwaysNoChecksTimesOut_AC005(t *testing.T) {
 	r, _, _ := buildCIGateRunnerWithRequireCIChecks(t, ciWaitExecutor(emptyCheckRunsJSON, nil, nil))
 	r.SetCIPollInterval(1 * time.Millisecond)

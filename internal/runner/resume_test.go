@@ -1043,7 +1043,7 @@ func TestResume_Approved_ConfidenceLow_SkipsMerge(t *testing.T) {
 
 	outcome := runResumeOrchestrate(t, r, logPath)
 
-	// automerge_skipped is treated as success (BR-008)
+	// automerge_skipped is treated as success
 	if outcome != outcomeSuccess {
 		t.Errorf("outcome: got %q, want %q; stderr: %s", outcome, outcomeSuccess, stderr.String())
 	}

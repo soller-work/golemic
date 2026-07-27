@@ -46,10 +46,10 @@ func newLogPath(t *testing.T) string {
 }
 
 // ---------------------------------------------------------------------------
-// latestReviewVerdict unit tests (AC-001 – AC-004)
+// latestReviewVerdict unit tests
 // ---------------------------------------------------------------------------
 
-// AC-001: approved verdict is returned correctly.
+// approved verdict is returned correctly.
 func TestLatestReviewVerdict_Approved_AC001(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
@@ -64,7 +64,7 @@ func TestLatestReviewVerdict_Approved_AC001(t *testing.T) {
 	}
 }
 
-// AC-002: changes_requested verdict is returned correctly.
+// changes_requested verdict is returned correctly.
 func TestLatestReviewVerdict_ChangesRequested_AC002(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
@@ -95,7 +95,7 @@ func TestLatestReviewVerdict_MostRecentWins(t *testing.T) {
 	}
 }
 
-// AC-003: no review_submitted event returns NO_VALID_REVIEW error.
+// no review_submitted event returns NO_VALID_REVIEW error.
 func TestLatestReviewVerdict_NoEvent_AC003(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
@@ -112,7 +112,7 @@ func TestLatestReviewVerdict_NoEvent_AC003(t *testing.T) {
 	}
 }
 
-// AC-003: non-existent log file returns NO_VALID_REVIEW error.
+// non-existent log file returns NO_VALID_REVIEW error.
 func TestLatestReviewVerdict_MissingFile_AC003(t *testing.T) {
 	r := &Runner{}
 	_, err := r.latestReviewVerdict("/nonexistent/events.jsonl", 0, "")
@@ -121,7 +121,7 @@ func TestLatestReviewVerdict_MissingFile_AC003(t *testing.T) {
 	}
 }
 
-// AC-004: invalid verdict payload (not approved or changes_requested) returns error.
+// invalid verdict payload (not approved or changes_requested) returns error.
 func TestLatestReviewVerdict_InvalidVerdict_AC004(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
@@ -151,7 +151,7 @@ func TestLatestReviewVerdict_InvalidVerdict_AC004(t *testing.T) {
 // orchestrate verdict-to-outcome mapping tests
 // ---------------------------------------------------------------------------
 
-// AC-001: orchestrate returns outcomeSuccess for approved verdict.
+// orchestrate returns outcomeSuccess for approved verdict.
 func TestOrchestrate_ApprovedVerdict_ReturnsSuccess_AC001(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
@@ -175,7 +175,7 @@ func TestOrchestrate_ApprovedVerdict_ReturnsSuccess_AC001(t *testing.T) {
 	}
 }
 
-// AC-002: orchestrate returns outcomeEscalated for changes_requested verdict.
+// orchestrate returns outcomeEscalated for changes_requested verdict.
 func TestOrchestrate_ChangesRequestedVerdict_ReturnsEscalated_AC002(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
@@ -199,7 +199,7 @@ func TestOrchestrate_ChangesRequestedVerdict_ReturnsEscalated_AC002(t *testing.T
 	}
 }
 
-// AC-003: orchestrate returns outcomeReviewFailed when no review_submitted event exists.
+// orchestrate returns outcomeReviewFailed when no review_submitted event exists.
 func TestOrchestrate_MissingReviewEvent_ReturnsReviewFailed_AC003(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)

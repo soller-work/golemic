@@ -136,7 +136,7 @@ func readAgentCompletedEvents(t *testing.T, logPath string) []eventlog.Event {
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: Dev agent non-zero exit returns dev_failed and emits diagnostic
+// Dev agent non-zero exit returns dev_failed and emits diagnostic
 // ---------------------------------------------------------------------------
 
 func TestRunDevAgent_NonZeroExit_ReturnsDevFailed_AC002(t *testing.T) {
@@ -164,7 +164,7 @@ func TestRunDevAgent_NonZeroExit_ReturnsDevFailed_AC002(t *testing.T) {
 	}
 }
 
-// AC-002: runAgentFn is only invoked for dev when dev exits non-zero
+// runAgentFn is only invoked for dev when dev exits non-zero
 func TestRunDevAgent_NonZeroExit_ReviewerNotCalled_AC002(t *testing.T) {
 	r, logPath, _ := setupExitCodeRunner(t, "dev")
 	var calledRoles []string
@@ -187,7 +187,7 @@ func TestRunDevAgent_NonZeroExit_ReviewerNotCalled_AC002(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: Reviewer agent non-zero exit returns review_failed and emits diagnostic
+// Reviewer agent non-zero exit returns review_failed and emits diagnostic
 // ---------------------------------------------------------------------------
 
 func TestRunReviewerAgent_NonZeroExit_ReturnsReviewFailed_AC001(t *testing.T) {
@@ -216,7 +216,7 @@ func TestRunReviewerAgent_NonZeroExit_ReturnsReviewFailed_AC001(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: Agent exit code is recorded in the event log
+// Agent exit code is recorded in the event log
 // ---------------------------------------------------------------------------
 
 func TestRunDevAgent_ExitCodeRecordedInEventLog_AC003(t *testing.T) {
@@ -292,7 +292,7 @@ func TestRunReviewerAgent_ExitCodeRecordedInEventLog_AC003(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-004: Zero-exit reviewer with no review_submitted event uses existing message
+// Zero-exit reviewer with no review_submitted event uses existing message
 // ---------------------------------------------------------------------------
 
 func TestRunReviewerAgent_ZeroExit_NoReviewSubmitted_ExistingMessage_AC004(t *testing.T) {
@@ -313,7 +313,7 @@ func TestRunReviewerAgent_ZeroExit_NoReviewSubmitted_ExistingMessage_AC004(t *te
 }
 
 // ---------------------------------------------------------------------------
-// AC-005: Diagnostic never contains agent stderr content
+// Diagnostic never contains agent stderr content
 // ---------------------------------------------------------------------------
 
 func TestRunDevAgent_NonZeroExit_DiagnosticNoStderrContent_AC005(t *testing.T) {

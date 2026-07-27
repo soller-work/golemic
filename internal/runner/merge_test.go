@@ -183,7 +183,7 @@ func dispatchMergeGhMerge(args []string, mergeSHA string) (string, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Merge phase: up-to-date shortcut skips rebase, verify, push (BR-003)
+// Merge phase: up-to-date shortcut skips rebase, verify, push
 // ---------------------------------------------------------------------------
 
 func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop,gocognit
@@ -250,7 +250,7 @@ func TestRunMergePhase_UpToDate_SquashMerges(t *testing.T) { //nolint:cyclop,goc
 }
 
 // ---------------------------------------------------------------------------
-// Merge phase: skip path writes automerge_skipped and returns success (BR-008)
+// Merge phase: skip path writes automerge_skipped and returns success
 // ---------------------------------------------------------------------------
 
 // TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped also asserts that
@@ -303,10 +303,10 @@ func TestRunMergePhase_ConfidenceLow_WritesAutomergeSkipped(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Merge phase: rebase conflict → automerge_failed + merge_failed (BR-005, AC-006)
+// Merge phase: rebase conflict → automerge_failed + merge_failed
 // ---------------------------------------------------------------------------
 
-// AC-005: rebase failure that is NOT a merge conflict takes the existing failMerge path
+// rebase failure that is NOT a merge conflict takes the existing failMerge path
 // (git status --porcelain reports no U-status entries). No automerge_conflict_retry event
 // is written; git rebase --abort is called; automerge_failed is written.
 func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //nolint:cyclop,gocognit
@@ -327,7 +327,7 @@ func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //no
 				return "", fmt.Errorf("fatal: cannot rebase")
 			}
 			if name == "git" && args[0] == "status" && len(args) >= 2 && args[1] == "--porcelain" {
-				return "", nil // no U-status entries → not a merge conflict (AC-005)
+				return "", nil // no U-status entries → not a merge conflict
 			}
 			if name == "git" && args[0] == "rebase" && len(args) >= 2 && args[1] == "--abort" {
 				abortCalled = true
@@ -384,7 +384,7 @@ func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //no
 }
 
 // ---------------------------------------------------------------------------
-// Merge phase: gh pr merge failure → automerge_failed (BR-006, AC-011)
+// Merge phase: gh pr merge failure → automerge_failed
 // ---------------------------------------------------------------------------
 
 func TestRunMergePhase_MergeFailure_AutomergeFailed_AC011(t *testing.T) { //nolint:cyclop
@@ -451,7 +451,7 @@ func TestRunMergePhase_MergeFailure_AutomergeFailed_AC011(t *testing.T) { //noli
 }
 
 // ---------------------------------------------------------------------------
-// Cleanup: runs on success and skip, not on merge_failed (BR-006, BR-008)
+// Cleanup: runs on success and skip, not on merge_failed
 // ---------------------------------------------------------------------------
 
 // This is tested implicitly via Run() — the outcome determines cleanup.
@@ -487,7 +487,7 @@ func mustLoadCreds(t *testing.T) *credentials.Credentials { //nolint:unused
 }
 
 // ---------------------------------------------------------------------------
-// verifyAndPush unit tests — PS-003 branches (AC-001, AC-007, AC-008)
+// verifyAndPush unit tests
 // ---------------------------------------------------------------------------
 
 // makeVerifyRunner builds a minimal Runner for verifyAndPush tests.
@@ -546,7 +546,7 @@ func mustLoadCredsFromDir(t *testing.T, homeDir, project string) *credentials.Cr
 	return creds
 }
 
-// AC-001: branch has CI checks; after push checks turn green → squash merge succeeds.
+// branch has CI checks; after push checks turn green → squash merge succeeds.
 func TestVerifyAndPush_GreenCI_MergesSuccessfully_AC001(t *testing.T) { //nolint:cyclop
 	checksCall := 0
 	exec := &fakeExecutor{
@@ -597,7 +597,7 @@ func TestVerifyAndPush_GreenCI_MergesSuccessfully_AC001(t *testing.T) { //nolint
 	}
 }
 
-// AC-007: CI checks fail after the rebase push → automerge_failed, no merge.
+// CI checks fail after the rebase push → automerge_failed, no merge.
 func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolint:cyclop
 	checksCall := 0
 	exec := &fakeExecutor{
@@ -651,7 +651,7 @@ func TestVerifyAndPush_RedCI_AfterPush_MergeFailed_AC007(t *testing.T) { //nolin
 	}
 }
 
-// AC-009: stale green on the superseded SHA must not merge; only the pushed SHA can release the merge.
+// stale green on the superseded SHA must not merge; only the pushed SHA can release the merge.
 func TestVerifyAndPush_StaleGreenIgnoredUntilPushedGreen_AC009(t *testing.T) { //nolint:funlen,gocognit,cyclop
 	oldSHA := "sha-old"
 	pushedSHA := "sha-new"
@@ -732,7 +732,7 @@ func TestVerifyAndPush_StaleGreenIgnoredUntilPushedGreen_AC009(t *testing.T) { /
 	}
 }
 
-// AC-008 regression: empty current-head checks stay pending and must not fall back
+// regression: empty current-head checks stay pending and must not fall back
 // to local verify_command + immediate squash merge.
 func TestVerifyAndPush_NoCI_TimesOutWithoutMerging_AC008(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
@@ -776,7 +776,7 @@ func TestVerifyAndPush_NoCI_TimesOutWithoutMerging_AC008(t *testing.T) { //nolin
 	}
 }
 
-// AC-008 (failure): no CI configured → verify_command fails → no push, automerge_failed.
+// no CI configured → verify_command fails → no push, automerge_failed.
 func TestVerifyAndPush_NoCI_VerifyFails_MergeFailed_AC008(t *testing.T) { //nolint:cyclop
 	exec := &fakeExecutor{
 		runFunc: func(name string, args ...string) (string, error) {
@@ -898,10 +898,10 @@ func TestRunMergePhase_FreshnessCheckNonExit1_AutomergeFailed(t *testing.T) { //
 }
 
 // ---------------------------------------------------------------------------
-// Issue #39: deleteRemoteBranch — AC-001 through AC-005
+// Issue #39: deleteRemoteBranch
 // ---------------------------------------------------------------------------
 
-// AC-001: squashMerge must not pass --delete-branch to gh pr merge.
+// squashMerge must not pass --delete-branch to gh pr merge.
 func TestSquashMerge_OmitsDeleteBranchFlag(t *testing.T) {
 	creds := mustLoadCreds(t)
 
@@ -944,7 +944,7 @@ func TestSquashMerge_OmitsDeleteBranchFlag(t *testing.T) {
 	}
 }
 
-// AC-002: remote branch exists → deleteRemoteBranch calls ls-remote then push --delete.
+// remote branch exists → deleteRemoteBranch calls ls-remote then push --delete.
 func TestRunMergePhase_DeletesRemoteBranchAfterMerge(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 42)
@@ -1030,7 +1030,7 @@ func TestRunMergePhase_DeletesRemoteBranchAfterMerge(t *testing.T) { //nolint:cy
 	}
 }
 
-// AC-003: remote branch already gone → no push --delete, no warning.
+// remote branch already gone → no push --delete, no warning.
 func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cyclop
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 43)
@@ -1090,7 +1090,7 @@ func TestRunMergePhase_SkipsDeleteWhenRemoteAbsent(t *testing.T) { //nolint:cycl
 	}
 }
 
-// AC-004b: push --delete fails with 'remote ref does not exist' (TOCTOU race) → silent success, no warning.
+// push --delete fails with 'remote ref does not exist' (TOCTOU race) → silent success, no warning.
 func TestRunMergePhase_SilentSuccessOnRaceDeleteFailure(t *testing.T) { //nolint:cyclop,funlen
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 43)
@@ -1155,7 +1155,7 @@ func TestRunMergePhase_SilentSuccessOnRaceDeleteFailure(t *testing.T) { //nolint
 	}
 }
 
-// AC-004c: push --delete fails with 'cannot lock ref / unable to resolve reference' (GitHub auto-delete race)
+// push --delete fails with 'cannot lock ref / unable to resolve reference' (GitHub auto-delete race)
 // → branch is gone on re-check → silent success, no warning.
 func TestRunMergePhase_SilentSuccessOnCannotLockRefRace(t *testing.T) { //nolint:cyclop,funlen
 	logPath := newLogPath(t)
@@ -1221,7 +1221,7 @@ func TestRunMergePhase_SilentSuccessOnCannotLockRefRace(t *testing.T) { //nolint
 	}
 }
 
-// AC-004: push --delete fails after successful merge → warning on stderr, outcome still success.
+// push --delete fails after successful merge → warning on stderr, outcome still success.
 func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclop,funlen,gocognit
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 44)
@@ -1294,7 +1294,7 @@ func TestRunMergePhase_WarnsOnRemoteDeleteFailure(t *testing.T) { //nolint:cyclo
 	}
 }
 
-// AC-005: gate skip (confidence low) → neither squashMerge nor deleteRemoteBranch triggered.
+// gate skip (confidence low) → neither squashMerge nor deleteRemoteBranch triggered.
 func TestRunMergePhase_GateSkipDoesNotDeleteRemote(t *testing.T) { //nolint:cyclop
 	logPath := newLogPath(t)
 	writePROpenedEvent(t, logPath, 45)
@@ -1350,7 +1350,7 @@ func TestRunMergePhase_GateSkipDoesNotDeleteRemote(t *testing.T) { //nolint:cycl
 }
 
 // ---------------------------------------------------------------------------
-// Issue #50: fetch + CI gate on up-to-date branch (AC-001 through AC-006)
+// Issue #50: fetch + CI gate on up-to-date branch
 // ---------------------------------------------------------------------------
 
 // makeMergePhaseRunner builds a minimal Runner for runMergePhase tests with
@@ -1382,7 +1382,7 @@ func makeMergePhaseRunner(t *testing.T, exec *fakeExecutor, issueNum int, logPat
 	return r, &written
 }
 
-// AC-001: git fetch origin fails → merge_failed with "git fetch origin failed:" reason;
+// git fetch origin fails → merge_failed with "git fetch origin failed:" reason;
 // isBranchUpToDate and gh pr merge must never be called.
 func TestRunMergePhase_FetchFails_MergeFailed_AC001(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
@@ -1440,7 +1440,7 @@ func TestRunMergePhase_FetchFails_MergeFailed_AC001(t *testing.T) { //nolint:cyc
 	}
 }
 
-// AC-002: up-to-date branch + green CI → exactly one gh pr merge --squash, pr_merged event, outcomeSuccess;
+// up-to-date branch + green CI → exactly one gh pr merge --squash, pr_merged event, outcomeSuccess;
 // rebaseBranch and the local verify_command (sh -c) must not be invoked.
 func TestRunMergePhase_UpToDate_GreenCI_Merges_AC002(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
@@ -1502,7 +1502,7 @@ func TestRunMergePhase_UpToDate_GreenCI_Merges_AC002(t *testing.T) { //nolint:cy
 	}
 }
 
-// AC-003: up-to-date branch + CI pending then green → pollCIChecks polls at least twice,
+// up-to-date branch + CI pending then green → pollCIChecks polls at least twice,
 // then squash-merges and writes pr_merged.
 func TestRunMergePhase_UpToDate_PendingThenGreen_Merges_AC003(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
@@ -1562,7 +1562,7 @@ func TestRunMergePhase_UpToDate_PendingThenGreen_Merges_AC003(t *testing.T) { //
 	}
 }
 
-// AC-004: up-to-date branch + red CI → merge_failed with reason containing "CI checks failed" and check name.
+// up-to-date branch + red CI → merge_failed with reason containing "CI checks failed" and check name.
 func TestRunMergePhase_UpToDate_RedCI_MergeFailed_AC004(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
 
@@ -1619,7 +1619,7 @@ func TestRunMergePhase_UpToDate_RedCI_MergeFailed_AC004(t *testing.T) { //nolint
 	}
 }
 
-// AC-005: up-to-date branch + no CI checks → merge_failed with "required check not reported for PR head";
+// up-to-date branch + no CI checks → merge_failed with "required check not reported for PR head";
 // The local verify_command (sh -c) and forcePushBranch must not be called.
 func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nolint:cyclop,gocognit
 	logPath := newLogPath(t)
@@ -1685,7 +1685,7 @@ func TestRunMergePhase_UpToDate_NoChecks_MergeFailed_AC005(t *testing.T) { //nol
 	}
 }
 
-// AC-006: behind branch (isBranchUpToDate=false after fetch) → rebaseBranch + verifyAndPush flow,
+// behind branch (isBranchUpToDate=false after fetch) → rebaseBranch + verifyAndPush flow,
 // then force-pushes and waits for a current-head required check before merge.
 func TestRunMergePhase_BehindBranch_RebasesAndVerifies_AC006(t *testing.T) { //nolint:cyclop,gocognit,funlen
 	logPath := newLogPath(t)
@@ -1974,7 +1974,7 @@ func buildConflictRebaseExec(t *testing.T, cfg conflictRebaseExecConfig) *fakeEx
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: happy path — conflict, agent resolves, CI absent → verify+push+merge
+// happy path — conflict, agent resolves, CI absent → verify+push+merge
 // ---------------------------------------------------------------------------
 
 func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nolint:cyclop,gocognit
@@ -2038,7 +2038,7 @@ func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nol
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: conflict resolved but the current-head required CI check fails → merge_failed
+// conflict resolved but the current-head required CI check fails → merge_failed
 // ---------------------------------------------------------------------------
 
 func TestRunMergePhase_ConflictResolved_CIFails_AC002(t *testing.T) { //nolint:cyclop
@@ -2092,7 +2092,7 @@ func TestRunMergePhase_ConflictResolved_CIFails_AC002(t *testing.T) { //nolint:c
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: agent exits non-zero → unresolved, abort, failMerge
+// agent exits non-zero → unresolved, abort, failMerge
 // ---------------------------------------------------------------------------
 
 func TestRunMergePhase_ConflictAgentNonZeroExit_AC003(t *testing.T) { //nolint:cyclop
@@ -2136,7 +2136,7 @@ func TestRunMergePhase_ConflictAgentNonZeroExit_AC003(t *testing.T) { //nolint:c
 }
 
 // ---------------------------------------------------------------------------
-// AC-004: agent exits 0 but post-verification fails (rebase still in progress)
+// agent exits 0 but post-verification fails (rebase still in progress)
 // ---------------------------------------------------------------------------
 
 func TestRunMergePhase_ConflictPostVerificationFails_RebaseInProgress_AC004(t *testing.T) { //nolint:cyclop
@@ -2175,7 +2175,7 @@ func TestRunMergePhase_ConflictPostVerificationFails_RebaseInProgress_AC004(t *t
 	}
 }
 
-// AC-004 variant: tree dirty after agent
+// tree dirty after agent
 func TestRunMergePhase_ConflictPostVerificationFails_TreeDirty_AC004b(t *testing.T) { //nolint:cyclop
 	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{
 		statusOnConflict:   "UU foo.go\n",
@@ -2207,7 +2207,7 @@ func TestRunMergePhase_ConflictPostVerificationFails_TreeDirty_AC004b(t *testing
 	}
 }
 
-// AC-004 variant: origin/main not ancestor after retry
+// origin/main not ancestor after retry
 func TestRunMergePhase_ConflictPostVerificationFails_NotAncestor_AC004c(t *testing.T) { //nolint:cyclop
 	// ancestorAfterAgent=false makes the second merge-base call return exit 1
 	exec := buildConflictRebaseExec(t, conflictRebaseExecConfig{

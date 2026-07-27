@@ -446,7 +446,7 @@ func TestGMCodeTools_AbsentWhenCBMDisabled(t *testing.T) {
 }
 
 // TestGMCodeTools_PresentInReviewerAllowlist verifies that all eight gm_code_* tools appear
-// in the reviewer agent ToolAllowlist when CBM is enabled. AC: allowlist (reviewer side, BR-5).
+// in the reviewer agent ToolAllowlist when CBM is enabled.
 func TestGMCodeTools_PresentInReviewerAllowlist(t *testing.T) {
 	injectFakeGMBroker(t)
 

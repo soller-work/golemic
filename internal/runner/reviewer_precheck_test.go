@@ -182,7 +182,7 @@ func TestReviewerPrecheck_GreenNoOutputBlock(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReviewerToolAllowlist_ReadOnly verifies gmReviewerToolNames excludes
-// bash/edit/write/gm_project_check (BR-9) and includes all required reviewer tools.
+// bash/edit/write/gm_project_check and includes all required reviewer tools.
 func TestReviewerToolAllowlist_ReadOnly(t *testing.T) {
 	for _, banned := range []string{"bash", "edit", "write", "gm_project_check"} {
 		if containsTool(gmReviewerToolNames, banned) {
@@ -201,7 +201,7 @@ func TestReviewerToolAllowlist_ReadOnly(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReviewerPrompt_DiscoveryTools verifies the rendered reviewer prompt uses
-// gm_ tools for discovery and verdict (BR-9/§12/§13), and excludes bash/CLI submit.
+// gm_ tools for discovery and verdict, and excludes bash/CLI submit.
 func TestReviewerPrompt_DiscoveryTools(t *testing.T) {
 	_, repoRoot, _ := setupRunnerTest(t)
 	guidelinesPath := filepath.Join(repoRoot, ".golemic", "guidelines", "reviewer.md")

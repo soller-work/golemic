@@ -109,7 +109,7 @@ func mkWorktreeDir(t *testing.T, golemicDir string, issueNum int, reviewer bool)
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: full cleanup — all artifacts exist, all removed
+// full cleanup — all artifacts exist, all removed
 // ---------------------------------------------------------------------------
 
 func TestCleanArtifacts_AllArtifactsExist_AC001(t *testing.T) { //nolint:cyclop // multiple sequential artifact-presence assertions; splitting adds no clarity
@@ -157,7 +157,7 @@ func TestCleanArtifacts_AllArtifactsExist_AC001(t *testing.T) { //nolint:cyclop 
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: idempotent — no artifacts exist, no errors
+// idempotent — no artifacts exist, no errors
 // ---------------------------------------------------------------------------
 
 func TestCleanArtifacts_NoArtifacts_Idempotent_AC002(t *testing.T) {
@@ -188,7 +188,7 @@ func TestCleanArtifacts_NoArtifacts_Idempotent_AC002(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: without --clean flag, collision still aborts the run
+// without --clean flag, collision still aborts the run
 // ---------------------------------------------------------------------------
 
 func TestRun_WithoutCleanFlag_CollisionAborts_AC003(t *testing.T) {
@@ -219,7 +219,7 @@ func TestRun_WithoutCleanFlag_CollisionAborts_AC003(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-004: cleanup is scoped to target issue — commands never reference other issues
+// cleanup is scoped to target issue — commands never reference other issues
 // ---------------------------------------------------------------------------
 
 func TestCleanArtifacts_ScopedToTargetIssue_AC004(t *testing.T) {
@@ -259,7 +259,7 @@ func TestCleanArtifacts_ScopedToTargetIssue_AC004(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-005: cleanup failure aborts before dev phase starts
+// cleanup failure aborts before dev phase starts
 // ---------------------------------------------------------------------------
 
 func TestRun_CleanFailure_AbortsBeforeDevPhase_AC005(t *testing.T) { //nolint:gocognit,cyclop,funlen // inline executor with multiple gh/git branches; complexity is in the test fixture, not the logic

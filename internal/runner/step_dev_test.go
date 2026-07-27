@@ -114,7 +114,7 @@ func TestRunDevTurn_ThreeGateRejections_DevFailed_AC3(t *testing.T) {
 	}
 }
 
-// TestStepRunDev_SingleInvocation_NeverLoops_AC3b verifies BR-3: stepRunDev performs
+// TestStepRunDev_SingleInvocation_NeverLoops_AC3b verifies stepRunDev performs
 // exactly one agent invocation per call.
 func TestStepRunDev_SingleInvocation_NeverLoops_AC3b(t *testing.T) {
 	exec := pingPongExecutor(false, nil)

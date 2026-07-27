@@ -13,7 +13,7 @@ import (
 )
 
 // buildHeaderRunner creates a Runner with all fields set as they would be after
-// a successful issue load (PS-004), using the given homeDir.
+// a successful issue load, using the given homeDir.
 func buildHeaderRunner(t *testing.T, homeDir string) *Runner {
 	t.Helper()
 	project := "hdr-project"
@@ -34,7 +34,7 @@ func buildHeaderRunner(t *testing.T, homeDir string) *Runner {
 	return r
 }
 
-// TestWriteRunHeader_AllFieldsPresent covers AC-001: all RM-001 fields appear on stderr.
+// TestWriteRunHeader_AllFieldsPresent covers all RM-001 fields appear on stderr.
 func TestWriteRunHeader_AllFieldsPresent(t *testing.T) {
 	homeDir := t.TempDir()
 	r := buildHeaderRunner(t, homeDir)
@@ -77,7 +77,7 @@ func TestWriteRunHeader_AllFieldsPresent(t *testing.T) {
 	}
 }
 
-// TestWriteRunHeader_AbsolutePaths verifies BR-004: all paths are absolute.
+// TestWriteRunHeader_AbsolutePaths verifies all paths are absolute.
 func TestWriteRunHeader_AbsolutePaths(t *testing.T) {
 	homeDir := t.TempDir()
 	r := buildHeaderRunner(t, homeDir)
@@ -97,7 +97,7 @@ func TestWriteRunHeader_AbsolutePaths(t *testing.T) {
 	}
 }
 
-// TestWriteRunHeader_NoANSI verifies BR-004: no ANSI escape sequences.
+// TestWriteRunHeader_NoANSI verifies no ANSI escape sequences.
 func TestWriteRunHeader_NoANSI(t *testing.T) {
 	homeDir := t.TempDir()
 	r := buildHeaderRunner(t, homeDir)
@@ -111,7 +111,7 @@ func TestWriteRunHeader_NoANSI(t *testing.T) {
 	}
 }
 
-// TestWriteRunHeader_TrailingBlankLine verifies BR-004: block ends with a trailing blank line.
+// TestWriteRunHeader_TrailingBlankLine verifies block ends with a trailing blank line.
 func TestWriteRunHeader_TrailingBlankLine(t *testing.T) {
 	homeDir := t.TempDir()
 	r := buildHeaderRunner(t, homeDir)
@@ -142,13 +142,13 @@ func TestWriteRunHeader_TimeoutSeconds(t *testing.T) {
 	}
 }
 
-// TestRun_HeaderOnStderr_AC001 covers AC-001 at the Run() level: header reaches
+// TestRun_HeaderOnStderr_AC001 covers at the Run() level: header reaches
 // stderr after a successful issue load (collision aborts so no real git ops needed).
 func TestRun_HeaderOnStderr_AC001(t *testing.T) {
 	homeDir, repoRoot, _ := setupRunnerTest(t)
 	exec := setupHappyExecutor(repoRoot)
 
-	// Pre-create worktree dir to trigger a collision abort (AC-003 scenario).
+	// Pre-create worktree dir to trigger a collision abort.
 	project := "test-project"
 	worktreeDir := filepath.Join(homeDir, ".golemic", project, "worktrees", "issue-42")
 	if err := os.MkdirAll(worktreeDir, 0755); err != nil {
@@ -176,13 +176,13 @@ func TestRun_HeaderOnStderr_AC001(t *testing.T) {
 	if !strings.Contains(errOut, "events.jsonl") {
 		t.Errorf("header missing event log path in stderr:\n%s", errOut)
 	}
-	// Collision message should also be present (AC-003)
+	// Collision message should also be present.
 	if !strings.Contains(errOut, "Worktree exists at") {
 		t.Errorf("collision message missing from stderr:\n%s", errOut)
 	}
 }
 
-// TestRun_HeaderNotOnStdout_AC002 covers AC-002: stdout must not contain header content.
+// TestRun_HeaderNotOnStdout_AC002 covers stdout must not contain header content.
 func TestRun_HeaderNotOnStdout_AC002(t *testing.T) {
 	homeDir, repoRoot, _ := setupRunnerTest(t)
 	exec := setupHappyExecutor(repoRoot)
@@ -210,7 +210,7 @@ func TestRun_HeaderNotOnStdout_AC002(t *testing.T) {
 	}
 }
 
-// TestRun_NoHeaderOnFailureBeforeIssueLoad_AC004 covers AC-004: no header when
+// TestRun_NoHeaderOnFailureBeforeIssueLoad_AC004 covers no header when
 // failure occurs before issue load (config not found).
 func TestRun_NoHeaderOnFailureBeforeIssueLoad_AC004(t *testing.T) {
 	homeDir := t.TempDir()
@@ -271,7 +271,7 @@ func setupCollisionRun(t *testing.T, quiet bool) (*bytes.Buffer, *bytes.Buffer, 
 	return &stdout, &stderr, r.Run()
 }
 
-// TestRun_QuietSuppressesHeader_AC001 covers AC-001: --quiet suppresses the header.
+// TestRun_QuietSuppressesHeader_AC001 covers --quiet suppresses the header.
 func TestRun_QuietSuppressesHeader_AC001(t *testing.T) {
 	_, stderr, exitCode := setupCollisionRun(t, true)
 	if exitCode != 1 {
@@ -283,13 +283,13 @@ func TestRun_QuietSuppressesHeader_AC001(t *testing.T) {
 			t.Errorf("header label %q found in stderr under --quiet; stderr: %q", label, errOut)
 		}
 	}
-	// Collision message must still appear (BR-003)
+	// Collision message must still appear.
 	if !strings.Contains(errOut, "Worktree exists at") {
 		t.Errorf("collision message missing from stderr under --quiet; stderr: %q", errOut)
 	}
 }
 
-// TestRun_NoQuietRendersHeader_AC002 covers AC-002: without --quiet the header appears.
+// TestRun_NoQuietRendersHeader_AC002 covers without --quiet the header appears.
 func TestRun_NoQuietRendersHeader_AC002(t *testing.T) {
 	_, stderr, exitCode := setupCollisionRun(t, false)
 	if exitCode != 1 {
@@ -301,7 +301,7 @@ func TestRun_NoQuietRendersHeader_AC002(t *testing.T) {
 	}
 }
 
-// TestRun_QuietStdoutUnchanged_AC003 covers AC-003: stdout carries only the runID line.
+// TestRun_QuietStdoutUnchanged_AC003 covers stdout carries only the runID line.
 func TestRun_QuietStdoutUnchanged_AC003(t *testing.T) {
 	stdout, _, exitCode := setupCollisionRun(t, true)
 	if exitCode != 1 {

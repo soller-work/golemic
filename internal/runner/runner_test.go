@@ -236,7 +236,7 @@ func mustRun(t *testing.T, dir, name string, args ...string) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: Worktree collision aborts with cleanup command
+// Worktree collision aborts with cleanup command
 // ---------------------------------------------------------------------------
 
 func TestRun_WorktreeCollision_AC002(t *testing.T) {
@@ -318,7 +318,7 @@ func assertRunFinishedAborted(t *testing.T, homeDir, project string) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: Local branch collision aborts with cleanup commands
+// Local branch collision aborts with cleanup commands
 // ---------------------------------------------------------------------------
 
 func TestRun_LocalBranchCollision_AC003(t *testing.T) {
@@ -371,7 +371,7 @@ func TestRun_LocalBranchCollision_AC003(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: Remote branch collision aborts with cleanup commands
+// Remote branch collision aborts with cleanup commands
 // ---------------------------------------------------------------------------
 
 func TestRun_RemoteBranchCollision_AC003(t *testing.T) {
@@ -419,7 +419,7 @@ func TestRun_RemoteBranchCollision_AC003(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-004: Open PR collision aborts with PR URL
+// Open PR collision aborts with PR URL
 // ---------------------------------------------------------------------------
 
 func TestRun_OpenPRCollision_AC004(t *testing.T) {
@@ -467,7 +467,7 @@ func TestRun_OpenPRCollision_AC004(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-005: Missing config aborts before GitHub access
+// Missing config aborts before GitHub access
 // ---------------------------------------------------------------------------
 
 func TestRun_MissingConfig_AC005(t *testing.T) {
@@ -520,7 +520,7 @@ func TestRun_MissingConfig_AC005(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Missing credentials aborts before GitHub access (also AC-005)
+// Missing credentials aborts before GitHub access
 // ---------------------------------------------------------------------------
 
 func TestRun_MissingCredentials_AC005(t *testing.T) {
@@ -1046,7 +1046,7 @@ func TestCheckPRCollision_GhFails(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: Failing Preflighter stub → exit 1, no run dir/event log/GitHub access
+// Failing Preflighter stub → exit 1, no run dir/event log/GitHub access
 // ---------------------------------------------------------------------------
 
 func TestRun_PreflightGate_FailClosed_AC001(t *testing.T) {
@@ -1091,7 +1091,7 @@ func TestRun_PreflightGate_FailClosed_AC001(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: Passing Preflighter stub → run proceeds (run_started + run dir created)
+// Passing Preflighter stub → run proceeds (run_started + run dir created)
 // ---------------------------------------------------------------------------
 
 func TestRun_PreflightGate_PassProceedsNormally_AC003(t *testing.T) {
@@ -1136,7 +1136,7 @@ func TestRun_PreflightGate_PassProceedsNormally_AC003(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-001/AC-002/AC-003: Role-specific guidelines path selection
+// Role-specific guidelines path selection
 // ---------------------------------------------------------------------------
 
 // TestDevGuidelinesPath_AC001 verifies that the dev role reads its guidelines
@@ -1236,8 +1236,8 @@ func TestRunDevAgent_MissingGuidelines_AC003(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: SystemPromptFile is resolved from .golemic/agents/, not binary dir
-// AC-002: Missing agent file → fail-closed with agent file path in error
+// SystemPromptFile is resolved from .golemic/agents/, not binary dir
+// Missing agent file → fail-closed with agent file path in error
 // ---------------------------------------------------------------------------
 
 // setupDevRunner builds a minimal Runner for runDevAgent unit tests with valid
@@ -1406,7 +1406,7 @@ func loadTestCreds(t *testing.T, homeDir, project string) *credentials.Credentia
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: checkBranchCollision and checkPRCollision pin calls to repoRoot
+// checkBranchCollision and checkPRCollision pin calls to repoRoot
 // ---------------------------------------------------------------------------
 
 func TestCheckBranchCollision_PinnedToRepoRoot_AC001(t *testing.T) {
@@ -1465,7 +1465,7 @@ func TestCheckPRCollision_PinnedToRepoRoot_AC001(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: loadIssue pins gh issue view to repoRoot
+// loadIssue pins gh issue view to repoRoot
 // ---------------------------------------------------------------------------
 
 func TestLoadIssue_PinnedToRepoRoot_AC002(t *testing.T) {

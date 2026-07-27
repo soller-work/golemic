@@ -54,7 +54,7 @@ func writeReviewSubmittedEventWithID(t *testing.T, logPath, verdict, reviewID st
 	}
 }
 
-// Unit: latestReviewID returns id from latest review_submitted event (AC-001 trace).
+// Unit: latestReviewID returns id from latest review_submitted event.
 func TestLatestReviewID_ReturnsID(t *testing.T) {
 	r := &Runner{}
 	logPath := newLogPath(t)
@@ -135,7 +135,7 @@ func TestLatestReviewID_NoEventReturnsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// FindingsJSON marshaller tests (AC-002 trace)
+// FindingsJSON marshaller tests
 // ---------------------------------------------------------------------------
 
 // Unit: loadInlineComments transforms REST response into FindingsJSON shape (golden).
@@ -227,7 +227,7 @@ func TestLoadInlineComments_EmptyResponse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Integration: pre-round sweep (AC-001 traces)
+// Integration: pre-round sweep
 // ---------------------------------------------------------------------------
 
 // Integration: sweep calls delete when a pending review is discovered.
@@ -301,7 +301,7 @@ func TestSweepPendingReviews_NoPendingNoop_AC001(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Integration: FindingsJSON injection (AC-002 trace)
+// Integration: FindingsJSON injection
 // ---------------------------------------------------------------------------
 
 // Integration: buildFindingsJSON returns JSON array of correct length and fields.

@@ -354,7 +354,7 @@ func runOrchestrate(t *testing.T, r *Runner, logPath string) string {
 }
 
 // ---------------------------------------------------------------------------
-// AC-001: Approved in round 1 ends as success
+// Approved in round 1 ends as success
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_ApprovedRound1(t *testing.T) {
@@ -377,7 +377,7 @@ func TestMachineFlow_ApprovedRound1(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-002: Changes requested then approved in round 2 ends as success
+// Changes requested then approved in round 2 ends as success
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_ChangesRequestedThenApproved(t *testing.T) {
@@ -411,7 +411,7 @@ func TestMachineFlow_ChangesRequestedThenApproved(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-203: Normal ping-pong still cleans reviewer worktrees between rounds.
+// Normal ping-pong still cleans reviewer worktrees between rounds.
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_ChangesRequestedThenApproved_CleansReviewerWorktreeBetweenRounds(t *testing.T) {
@@ -449,7 +449,7 @@ func TestMachineFlow_ChangesRequestedThenApproved_CleansReviewerWorktreeBetweenR
 	}
 }
 
-// assertEscalationComment checks that the comment contains required fields (BR-007).
+// assertEscalationComment checks that the comment contains required fields.
 func assertEscalationComment(t *testing.T, comment string, issueNum, prNum, roundCount int) {
 	t.Helper()
 	for _, want := range []string{fmt.Sprintf("%d", issueNum), fmt.Sprintf("%d", prNum), fmt.Sprintf("%d", roundCount)} {
@@ -466,7 +466,7 @@ func assertEscalationComment(t *testing.T, comment string, issueNum, prNum, roun
 }
 
 // ---------------------------------------------------------------------------
-// AC-003: Three unsatisfied rounds escalate with PR comment
+// Three unsatisfied rounds escalate with PR comment
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_ThreeChangesRequestedEscalates(t *testing.T) {
@@ -500,7 +500,7 @@ func TestMachineFlow_ThreeChangesRequestedEscalates(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-004: Dev failure inside a retry round terminates as dev_failed
+// Dev failure inside a retry round terminates as dev_failed
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_DevFailureInRetryRound(t *testing.T) {
@@ -524,7 +524,7 @@ func TestMachineFlow_DevFailureInRetryRound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-005: Reviewer timeout inside a retry round terminates as timeout
+// Reviewer timeout inside a retry round terminates as timeout
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_ReviewerTimeoutInRetryRound(t *testing.T) {
@@ -549,7 +549,7 @@ func TestMachineFlow_ReviewerTimeoutInRetryRound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-006: Dev and Reviewer stall detection → outcome "stalled" + diagnostic
+// Dev and Reviewer stall detection → outcome "stalled" + diagnostic
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_DevStallDetection(t *testing.T) {
@@ -614,7 +614,7 @@ func TestMachineFlow_DevRetryStallDetection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-007: Empty findings body terminates review_failed
+// Empty findings body terminates review_failed
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_EmptyFindings(t *testing.T) {
@@ -637,7 +637,7 @@ func TestMachineFlow_EmptyFindings(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AC-203: Active reviewer-turn dirtiness still fails the current run.
+// Active reviewer-turn dirtiness still fails the current run.
 // ---------------------------------------------------------------------------
 
 func TestMachineFlow_ReviewerTurnDirtyCheckFails(t *testing.T) {
@@ -715,7 +715,7 @@ func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Escalation comment is deterministic (BR-007)
+// Escalation comment is deterministic.
 // ---------------------------------------------------------------------------
 
 func TestPostEscalationComment_Deterministic(t *testing.T) {
