@@ -96,9 +96,9 @@ func TestRunDevTurn_ThreeGateRejections_DevFailed_AC3(t *testing.T) {
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	logPath := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID, "events.jsonl")
-	ctx := &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}
+	ctx := &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial}
 
-	outcome := r.runDevTurn(ctx, DevModeInitial)
+	outcome := r.runMachineFrom(loop.StepRunDev, ctx)
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed after 3 gate rejections, got %q", outcome)
 	}

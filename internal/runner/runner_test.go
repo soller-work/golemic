@@ -13,6 +13,7 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 	"golemic/internal/preflight"
 	"golemic/internal/prompt"
 )
@@ -1216,7 +1217,7 @@ func TestRunDevAgent_MissingGuidelines_AC003(t *testing.T) {
 	var stderr bytes.Buffer
 	r.SetStderr(&stderr)
 
-	outcome := r.runDevTurn(&RunContext{GolemicDir: filepath.Join(repoRoot, ".golemic"), EventLogPath: "/tmp/events.jsonl", Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	outcome := r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: filepath.Join(repoRoot, ".golemic"), EventLogPath: "/tmp/events.jsonl", Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	if outcome != outcomeDevFailed {
 		t.Errorf("expected %q, got %q", outcomeDevFailed, outcome)
@@ -1282,7 +1283,7 @@ func setupDevRunner(t *testing.T) (r *Runner, golemicDir string, stderr *bytes.B
 func TestRunDevAgent_SystemPromptFromAgentsDir_AC001(t *testing.T) {
 	r, golemicDir, stderr := setupDevRunner(t)
 	agentFilePath := filepath.Join(r.repoRoot, ".golemic", "agents", "dev.md")
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: "/tmp/events.jsonl", Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: "/tmp/events.jsonl", Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	// System prompt was found: error must NOT mention the agent file as missing.
 	if strings.Contains(stderr.String(), agentFilePath+": open") {
@@ -1319,7 +1320,7 @@ func TestRunDevAgent_MissingAgentFile_AC002(t *testing.T) {
 	var buf bytes.Buffer
 	runner.SetStderr(&buf)
 
-	runner.runDevTurn(&RunContext{GolemicDir: filepath.Join(repoRoot, ".golemic"), EventLogPath: "/tmp/events.jsonl", Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	runner.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: filepath.Join(repoRoot, ".golemic"), EventLogPath: "/tmp/events.jsonl", Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	// A missing override file must not produce an agent-file-not-found error.
 	agentFilePath := filepath.Join(repoRoot, ".golemic", "agents", "dev.md")

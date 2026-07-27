@@ -151,7 +151,7 @@ func TestRunDevAgent_GateRejected_RedTree_EmitsStateErrorRed_SM015(t *testing.T)
 	// Agent calls gm_dev_done without a prior gm_project_check → gate rejects (red).
 	r.SetRunAgentFn(gateTestAgent(t, nil, false, true))
 
-	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
+	outcome := r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial})
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
@@ -192,7 +192,7 @@ func TestRunDevAgent_MissingDevDone_EmitsStateError_BoundedRetry_SM016(t *testin
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
+	outcome := r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial})
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
 	}
