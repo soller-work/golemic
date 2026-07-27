@@ -210,16 +210,9 @@ func (r *Runner) reviewerVerdictEvent(ctx *RunContext, roundHeadSHA string) loop
 	}
 }
 
-// reviewerAgentOutcomeToEvent maps legacy outcome strings to loop events.
 func reviewerAgentOutcomeToEvent(outcome string) loop.EventKey {
-	switch outcome {
-	case outcomeTimeout:
-		return loop.EventAgentTimedOut
-	case outcomeStalled:
-		return loop.EventAgentStalled
-	case outcomeAborted:
-		return loop.EventAgentAborted
-	default:
-		return loop.EventReviewFailed
+	if ev, ok := agentFailureEvent(outcome); ok {
+		return ev
 	}
+	return loop.EventReviewFailed
 }

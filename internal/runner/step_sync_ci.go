@@ -24,21 +24,12 @@ func (r *Runner) stepSyncCI(ctx *RunContext) loop.EventKey {
 	return mapSyncCIOutcome(outcome)
 }
 
-// mapSyncCIOutcome converts a runPreReviewSyncGate outcome string to a loop event.
-// Possible outcomes from runPreReviewSyncGate: outcomeSuccess, outcomeDevFailed,
-// outcomeStalled, outcomeAborted. outcomeTimeout is never returned but mapped
-// defensively to EventAgentTimedOut.
 func mapSyncCIOutcome(outcome string) loop.EventKey {
-	switch outcome {
-	case outcomeSuccess:
-		return loop.EventCIGreen
-	case outcomeTimeout:
-		return loop.EventAgentTimedOut
-	case outcomeStalled:
-		return loop.EventAgentStalled
-	case outcomeAborted:
-		return loop.EventAgentAborted
-	default:
-		return loop.EventCIFailed
+	if ev, ok := agentFailureEvent(outcome); ok {
+		return ev
 	}
+	if outcome == outcomeSuccess {
+		return loop.EventCIGreen
+	}
+	return loop.EventCIFailed
 }

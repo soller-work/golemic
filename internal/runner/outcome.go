@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 )
 
 const (
@@ -19,6 +20,22 @@ const (
 	outcomeSkipped      = "skipped"
 	branchPrefix        = "golemic/issue-"
 )
+
+// agentFailureEvent maps the shared agent-failure outcome strings
+// (timeout/stalled/aborted) to their loop event. ok is false when the
+// outcome is not one of those three, so callers can apply their own default.
+func agentFailureEvent(outcome string) (loop.EventKey, bool) {
+	switch outcome {
+	case outcomeTimeout:
+		return loop.EventAgentTimedOut, true
+	case outcomeStalled:
+		return loop.EventAgentStalled, true
+	case outcomeAborted:
+		return loop.EventAgentAborted, true
+	default:
+		return "", false
+	}
+}
 
 // countReviewSubmittedEvents counts the number of review_submitted events in the log.
 func (r *Runner) countReviewSubmittedEvents(eventLogPath string) int {
