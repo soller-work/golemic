@@ -7,13 +7,20 @@ import (
 )
 
 // stepMergePR wraps runMergePhase and maps its outcome string to a loop event.
-// runMergePhase only returns outcomeSuccess or outcomeMergeFailed today;
-// any unexpected string is routed to EventMergeFailed with a stderr note.
+// When a merge-time rebase conflict is resolved, sets ctx.InMergeReReview = true
+// and routes to RUN_REVIEWER for a fresh verdict before merging.
 func (r *Runner) stepMergePR(ctx *RunContext) loop.EventKey {
 	if ctx.PRState == "MERGED" {
 		return loop.EventMerged
 	}
 	outcome := r.runMergePhase(ctx.Writer, ctx.EventLogPath)
+	switch outcome {
+	case outcomeConflictResolved:
+		ctx.InMergeReReview = true
+		return loop.EventConflictResolved
+	case outcomeConflictUnresolved:
+		return loop.EventConflictUnresolved
+	}
 	return mapMergePROutcome(r, outcome)
 }
 

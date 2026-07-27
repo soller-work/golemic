@@ -8,17 +8,23 @@ import (
 	"golemic/internal/loop"
 )
 
+// maxMergeReReviewRounds is the bounded budget for reviewer re-checks after a
+// merge-time rebase conflict is resolved. Independent of MaxReviewRounds.
+const maxMergeReReviewRounds = 2
+
 const (
-	outcomeSuccess      = "success"
-	outcomeDevFailed    = "dev_failed"
-	outcomeReviewFailed = "review_failed"
-	outcomeEscalated    = "escalated"
-	outcomeTimeout      = "timeout"
-	outcomeStalled      = "stalled"
-	outcomeAborted      = "aborted"
-	outcomeMergeFailed  = "merge_failed"
-	outcomeSkipped      = "skipped"
-	branchPrefix        = "golemic/issue-"
+	outcomeSuccess            = "success"
+	outcomeDevFailed          = "dev_failed"
+	outcomeReviewFailed       = "review_failed"
+	outcomeEscalated          = "escalated"
+	outcomeTimeout            = "timeout"
+	outcomeStalled            = "stalled"
+	outcomeAborted            = "aborted"
+	outcomeMergeFailed        = "merge_failed"
+	outcomeSkipped            = "skipped"
+	outcomeConflictResolved   = "conflict_resolved"
+	outcomeConflictUnresolved = "conflict_unresolved"
+	branchPrefix              = "golemic/issue-"
 )
 
 // agentFailureEvent maps the shared agent-failure outcome strings

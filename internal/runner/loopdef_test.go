@@ -61,21 +61,29 @@ func TestTerminalOutcome_UnknownStepPanics(t *testing.T) {
 var guardFixtures = func() []RunContext {
 	var fixtures []RunContext
 	maxRounds := 3
+	maxMergeRR := 2
 	for _, devAttempt := range []int{0, 2, 3, 4} {
 		for _, round := range []int{0, maxRounds - 1, maxRounds} {
 			for _, resume := range []bool{false, true} {
 				for _, verdict := range []string{"", "approved", "changes_requested"} {
 					for _, wtFailed := range []bool{false, true} {
 						for _, failKind := range []string{"", "dev_failed", "review_failed", "escalated"} {
-							fixtures = append(fixtures, RunContext{
-								DevAttempt:           devAttempt,
-								Round:                round,
-								MaxRounds:            maxRounds,
-								Resume:               resume,
-								ResumeVerdict:        verdict,
-								WorktreeCreateFailed: wtFailed,
-								PrepareFailKind:      failKind,
-							})
+							for _, inMergeRR := range []bool{false, true} {
+								for _, mergeRRRound := range []int{0, maxMergeRR - 1, maxMergeRR} {
+									fixtures = append(fixtures, RunContext{
+										DevAttempt:             devAttempt,
+										Round:                  round,
+										MaxRounds:              maxRounds,
+										Resume:                 resume,
+										ResumeVerdict:          verdict,
+										WorktreeCreateFailed:   wtFailed,
+										PrepareFailKind:        failKind,
+										InMergeReReview:        inMergeRR,
+										MergeReReviewRound:     mergeRRRound,
+										MaxMergeReReviewRounds: maxMergeRR,
+									})
+								}
+							}
 						}
 					}
 				}

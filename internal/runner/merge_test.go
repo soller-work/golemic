@@ -1837,9 +1837,10 @@ func makeConflictRetryRunner(t *testing.T, exec *fakeExecutor) (*Runner, string,
 		project:  project,
 		issue:    &issueData{Labels: []issueLabel{{Name: "risk:medium"}}},
 		cfg: &config.Config{
-			Project:        project,
-			VerifyCommand:  "go test ./...",
-			TimeoutMinutes: 30,
+			Project:                       project,
+			VerifyCommand:                 "go test ./...",
+			TimeoutMinutes:                30,
+			MaxConflictResolutionAttempts: 1,
 		},
 		creds:      creds,
 		branchName: "golemic/issue-65",
@@ -2000,14 +2001,16 @@ func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nol
 	})
 
 	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
-	if outcome != outcomeSuccess {
-		t.Errorf("outcome: got %q, want %q (AC-001)", outcome, outcomeSuccess)
+	// Conflict resolved routes to re-review; runMergePhase returns outcomeConflictResolved
+	// instead of merging directly, so the state machine can dispatch to RUN_REVIEWER.
+	if outcome != outcomeConflictResolved {
+		t.Errorf("outcome: got %q, want %q (AC-001)", outcome, outcomeConflictResolved)
 	}
 	if !agentCalled {
 		t.Error("dev agent must be invoked for conflict resolution (AC-001)")
 	}
 
-	var conflictRetryFound, prMergedFound bool
+	var conflictRetryFound bool
 	for _, ev := range *eventsPtr {
 		if ev.Type == eventlog.EventAutomergeConflictRetry {
 			conflictRetryFound = true
@@ -2026,14 +2029,11 @@ func TestRunMergePhase_ConflictResolved_SquashMerges_AC001(t *testing.T) { //nol
 			}
 		}
 		if ev.Type == eventlog.EventPRMerged {
-			prMergedFound = true
+			t.Error("pr_merged must not be written before re-review (AC-001)")
 		}
 	}
 	if !conflictRetryFound {
 		t.Error("automerge_conflict_retry event not written (AC-001)")
-	}
-	if !prMergedFound {
-		t.Error("pr_merged event not written (AC-001)")
 	}
 }
 
@@ -2063,11 +2063,13 @@ func TestRunMergePhase_ConflictResolved_CIFails_AC002(t *testing.T) { //nolint:c
 	})
 
 	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
-	if outcome != outcomeMergeFailed {
-		t.Errorf("outcome: got %q, want %q (AC-002)", outcome, outcomeMergeFailed)
+	// Conflict resolved: CI check is deferred to the reviewer precheck after re-review routing.
+	// runMergePhase returns outcomeConflictResolved immediately after push.
+	if outcome != outcomeConflictResolved {
+		t.Errorf("outcome: got %q, want %q (AC-002)", outcome, outcomeConflictResolved)
 	}
 
-	var retryFound, failFound bool
+	var retryFound bool
 	for _, ev := range *eventsPtr {
 		if ev.Type == eventlog.EventAutomergeConflictRetry {
 			retryFound = true
@@ -2079,15 +2081,9 @@ func TestRunMergePhase_ConflictResolved_CIFails_AC002(t *testing.T) { //nolint:c
 				t.Errorf("retry result: got %q, want resolved (AC-002)", p.Result)
 			}
 		}
-		if ev.Type == eventlog.EventAutomergeFailed {
-			failFound = true
-		}
 	}
 	if !retryFound {
 		t.Error("automerge_conflict_retry event not written (AC-002)")
-	}
-	if !failFound {
-		t.Error("automerge_failed event not written (AC-002)")
 	}
 }
 
@@ -2110,8 +2106,8 @@ func TestRunMergePhase_ConflictAgentNonZeroExit_AC003(t *testing.T) { //nolint:c
 	})
 
 	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
-	if outcome != outcomeMergeFailed {
-		t.Errorf("outcome: got %q, want %q (AC-003)", outcome, outcomeMergeFailed)
+	if outcome != outcomeConflictUnresolved {
+		t.Errorf("outcome: got %q, want %q (AC-003)", outcome, outcomeConflictUnresolved)
 	}
 
 	var retryFound bool
@@ -2153,8 +2149,8 @@ func TestRunMergePhase_ConflictPostVerificationFails_RebaseInProgress_AC004(t *t
 	})
 
 	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
-	if outcome != outcomeMergeFailed {
-		t.Errorf("outcome: got %q, want %q (AC-004)", outcome, outcomeMergeFailed)
+	if outcome != outcomeConflictUnresolved {
+		t.Errorf("outcome: got %q, want %q (AC-004)", outcome, outcomeConflictUnresolved)
 	}
 
 	var retryFound bool
@@ -2190,8 +2186,8 @@ func TestRunMergePhase_ConflictPostVerificationFails_TreeDirty_AC004b(t *testing
 	})
 
 	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
-	if outcome != outcomeMergeFailed {
-		t.Errorf("outcome: got %q, want %q (AC-004b)", outcome, outcomeMergeFailed)
+	if outcome != outcomeConflictUnresolved {
+		t.Errorf("outcome: got %q, want %q (AC-004b)", outcome, outcomeConflictUnresolved)
 	}
 
 	for _, ev := range *eventsPtr {
@@ -2223,8 +2219,8 @@ func TestRunMergePhase_ConflictPostVerificationFails_NotAncestor_AC004c(t *testi
 	})
 
 	outcome := r.runMergePhase(&recordingWriter{events: eventsPtr}, logPath)
-	if outcome != outcomeMergeFailed {
-		t.Errorf("outcome: got %q, want %q (AC-004c)", outcome, outcomeMergeFailed)
+	if outcome != outcomeConflictUnresolved {
+		t.Errorf("outcome: got %q, want %q (AC-004c)", outcome, outcomeConflictUnresolved)
 	}
 }
 

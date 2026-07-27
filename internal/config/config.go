@@ -11,17 +11,18 @@ import (
 
 // Config represents the structure of .golemic/config.json
 type Config struct {
-	Project                 string               `json:"project"`
-	VerifyCommand           string               `json:"verify_command"`
-	Label                   string               `json:"label"`
-	TimeoutMinutes          int                  `json:"timeout_minutes"`
-	TimeoutSeconds          int                  `json:"timeout_seconds,omitempty"`
-	CITimeoutMinutes        int                  `json:"ci_timeout_minutes,omitempty"`
-	AgentIdleTimeoutMinutes int                  `json:"agent_idle_timeout_minutes,omitempty"`
-	MaxReviewRounds         int                  `json:"max_review_rounds,omitempty"`
-	RequireCIChecks         bool                 `json:"require_ci_checks,omitempty"`
-	Telemetry               TelemetryConfig      `json:"telemetry"`
-	CodebaseMemory          CodebaseMemoryConfig `json:"codebase_memory"`
+	Project                       string               `json:"project"`
+	VerifyCommand                 string               `json:"verify_command"`
+	Label                         string               `json:"label"`
+	TimeoutMinutes                int                  `json:"timeout_minutes"`
+	TimeoutSeconds                int                  `json:"timeout_seconds,omitempty"`
+	CITimeoutMinutes              int                  `json:"ci_timeout_minutes,omitempty"`
+	AgentIdleTimeoutMinutes       int                  `json:"agent_idle_timeout_minutes,omitempty"`
+	MaxReviewRounds               int                  `json:"max_review_rounds,omitempty"`
+	MaxConflictResolutionAttempts int                  `json:"max_conflict_resolution_attempts,omitempty"`
+	RequireCIChecks               bool                 `json:"require_ci_checks,omitempty"`
+	Telemetry                     TelemetryConfig      `json:"telemetry"`
+	CodebaseMemory                CodebaseMemoryConfig `json:"codebase_memory"`
 }
 
 // TelemetryConfig controls span telemetry emission.
@@ -36,18 +37,19 @@ type CodebaseMemoryConfig struct {
 
 // configRaw is used for parsing to detect missing vs zero values
 type configRaw struct {
-	Project                 *string            `json:"project"`
-	VerifyCommand           *string            `json:"verify_command"`
-	Label                   *string            `json:"label"`
-	Models                  *json.RawMessage   `json:"models"` // silently ignored; models moved to .golemic/agents/
-	TimeoutMinutes          *int               `json:"timeout_minutes"`
-	TimeoutSeconds          *int               `json:"timeout_seconds"`
-	CITimeoutMinutes        *int               `json:"ci_timeout_minutes"`
-	AgentIdleTimeoutMinutes *int               `json:"agent_idle_timeout_minutes"`
-	MaxReviewRounds         *int               `json:"max_review_rounds"`
-	RequireCIChecks         *bool              `json:"require_ci_checks"`
-	Telemetry               *telemetryRaw      `json:"telemetry"`
-	CodebaseMemory          *codebaseMemoryRaw `json:"codebase_memory"`
+	Project                       *string            `json:"project"`
+	VerifyCommand                 *string            `json:"verify_command"`
+	Label                         *string            `json:"label"`
+	Models                        *json.RawMessage   `json:"models"` // silently ignored; models moved to .golemic/agents/
+	TimeoutMinutes                *int               `json:"timeout_minutes"`
+	TimeoutSeconds                *int               `json:"timeout_seconds"`
+	CITimeoutMinutes              *int               `json:"ci_timeout_minutes"`
+	AgentIdleTimeoutMinutes       *int               `json:"agent_idle_timeout_minutes"`
+	MaxReviewRounds               *int               `json:"max_review_rounds"`
+	MaxConflictResolutionAttempts *int               `json:"max_conflict_resolution_attempts"`
+	RequireCIChecks               *bool              `json:"require_ci_checks"`
+	Telemetry                     *telemetryRaw      `json:"telemetry"`
+	CodebaseMemory                *codebaseMemoryRaw `json:"codebase_memory"`
 }
 
 // telemetryRaw is used for parsing the telemetry config block.
@@ -65,15 +67,16 @@ type codebaseMemoryRaw struct {
 // and by preflight scaffolding.
 func DefaultConfig(project string) *Config {
 	return &Config{
-		Project:                 project,
-		VerifyCommand:           "",
-		Label:                   "ready-for-agent",
-		TimeoutMinutes:          30,
-		CITimeoutMinutes:        15,
-		AgentIdleTimeoutMinutes: 5,
-		MaxReviewRounds:         5,
-		Telemetry:               TelemetryConfig{Enabled: true},
-		CodebaseMemory:          CodebaseMemoryConfig{Enabled: true},
+		Project:                       project,
+		VerifyCommand:                 "",
+		Label:                         "ready-for-agent",
+		TimeoutMinutes:                30,
+		CITimeoutMinutes:              15,
+		AgentIdleTimeoutMinutes:       5,
+		MaxReviewRounds:               5,
+		MaxConflictResolutionAttempts: 2,
+		Telemetry:                     TelemetryConfig{Enabled: true},
+		CodebaseMemory:                CodebaseMemoryConfig{Enabled: true},
 	}
 }
 
@@ -219,6 +222,17 @@ func Load(repoRoot string) (*Config, error) {
 		}
 	} else {
 		config.MaxReviewRounds = 5
+	}
+
+	// Extract max_conflict_resolution_attempts (optional; default 2)
+	if raw.MaxConflictResolutionAttempts != nil {
+		config.MaxConflictResolutionAttempts = *raw.MaxConflictResolutionAttempts
+		if config.MaxConflictResolutionAttempts <= 0 {
+			return nil, fmt.Errorf("field 'max_conflict_resolution_attempts' must be > 0, got %d in config file %s",
+				config.MaxConflictResolutionAttempts, configPath)
+		}
+	} else {
+		config.MaxConflictResolutionAttempts = 2
 	}
 
 	return config, nil

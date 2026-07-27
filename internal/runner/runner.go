@@ -270,14 +270,15 @@ func (r *Runner) Run() int {
 		timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 	}
 	loopCtx := &RunContext{
-		GolemicDir:   golemicDir,
-		EventLogPath: eventLogPath,
-		Timeout:      timeoutDuration,
-		ParentSpanID: runSpanID,
-		Round:        1,
-		MaxRounds:    r.cfg.MaxReviewRounds,
-		Writer:       ew,
-		DevMode:      DevModeInitial,
+		GolemicDir:             golemicDir,
+		EventLogPath:           eventLogPath,
+		Timeout:                timeoutDuration,
+		ParentSpanID:           runSpanID,
+		Round:                  1,
+		MaxRounds:              r.cfg.MaxReviewRounds,
+		MaxMergeReReviewRounds: maxMergeReReviewRounds,
+		Writer:                 ew,
+		DevMode:                DevModeInitial,
 	}
 	r.applyRunMode(loopCtx)
 	r.loopCtx = loopCtx

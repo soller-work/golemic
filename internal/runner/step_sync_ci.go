@@ -28,8 +28,12 @@ func mapSyncCIOutcome(outcome string) loop.EventKey {
 	if ev, ok := agentFailureEvent(outcome); ok {
 		return ev
 	}
-	if outcome == outcomeSuccess {
+	switch outcome {
+	case outcomeSuccess:
 		return loop.EventCIGreen
+	case outcomeConflictUnresolved:
+		return loop.EventConflictUnresolved
+	default:
+		return loop.EventCIFailed
 	}
-	return loop.EventCIFailed
 }

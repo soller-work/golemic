@@ -138,8 +138,8 @@ func (r *Runner) rebaseBranch(devWT string) error {
 
 // writeAutomergeConflictRetry appends an automerge_conflict_retry event. SE-001: write
 // failure is warned to stderr; the merge phase continues regardless.
-func (r *Runner) writeAutomergeConflictRetry(writer worktree.EventWriter, conflictedFiles []string, result string, turnID int) {
-	payload, err := eventlog.MarshalAutomergeConflictRetryPayload(conflictedFiles, result, turnID)
+func (r *Runner) writeAutomergeConflictRetry(writer worktree.EventWriter, conflictedFiles []string, result string, turnID, attempt int) {
+	payload, err := eventlog.MarshalAutomergeConflictRetryPayload(conflictedFiles, result, turnID, attempt)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Warning: automerge_conflict_retry marshal failed: %v\n", err)
 		return
@@ -163,33 +163,26 @@ func (r *Runner) agentTimeout() time.Duration {
 	return time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 }
 
-// resolveRebaseConflictWithAgent invokes the dev agent once to resolve merge
-// conflicts left after git rebase origin/main failed. IF-001.
+// errConflictCapExhausted is returned by resolveRebaseConflictWithAgent when the
+// configured cap is exhausted without resolving the conflict. Callers can use
+// errors.Is to distinguish this from other failure kinds.
+var errConflictCapExhausted = errors.New("rebase conflict: cap exhausted")
+
+// resolveRebaseConflictWithAgent invokes the dev agent up to the configured
+// MaxConflictResolutionAttempts times to resolve merge conflicts left after
+// git rebase origin/main failed.
 //
-// Returns nil when the rebase was fully resolved and the worktree is clean;
-// the caller continues into verifyAndPush. Returns non-nil on any failure;
-// the caller should invoke failMerge with the returned error message.
+// The conflicted worktree is preserved between attempts; git rebase --abort
+// is run only after the cap is exhausted or on a non-conflict infrastructure
+// failure. Returns nil when resolved; returns a wrapped errConflictCapExhausted
+// when the cap is exhausted; returns a plain error on infrastructure failures.
 func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, devWT string, prNumber int, eventLogPath string) error {
-	conflictedFiles, err := r.collectConflictedFilesForRebase(devWT)
-	if err != nil {
-		return err
+	cap := r.cfg.MaxConflictResolutionAttempts
+	if cap <= 0 {
+		cap = 2
 	}
 
 	guidelinesPath := filepath.Join(r.repoRoot, ".golemic", "guidelines", "dev.md")
-	userPrompt, err := prompt.RenderDevRebaseConflictResolve(
-		prNumber,
-		r.branchName,
-		"origin/main",
-		conflictedFiles,
-		r.cfg.VerifyCommand,
-		guidelinesPath,
-	)
-	if err != nil {
-		_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
-		return fmt.Errorf("failed to render conflict resolve prompt: %w", err)
-	}
-
-	r.turnCounter++
 	golemicBinaryPath, _ := os.Executable()
 	runsDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs")
 
@@ -205,18 +198,43 @@ func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, dev
 		runFn = agent.RunRole
 	}
 
-	cfg := r.buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir)
-	exitCode, _, agentErr := runFn(context.Background(), cfg)
+	for attempt := 1; attempt <= cap; attempt++ {
+		conflictedFiles, err := r.collectConflictedFilesForRebase(devWT)
+		if err != nil {
+			// collectConflictedFilesForRebase already ran git rebase --abort.
+			return err
+		}
 
-	result, failReason := r.determineConflictResolutionResult(devWT, agentErr, exitCode)
+		userPrompt, err := prompt.RenderDevRebaseConflictResolve(
+			prNumber, r.branchName, "origin/main", conflictedFiles,
+			r.cfg.VerifyCommand, guidelinesPath,
+		)
+		if err != nil {
+			_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
+			return fmt.Errorf("failed to render conflict resolve prompt: %w", err)
+		}
 
-	r.writeAutomergeConflictRetry(writer, conflictedFiles, result, r.turnCounter)
+		r.turnCounter++
+		cfg := r.buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir)
+		exitCode, _, agentErr := runFn(context.Background(), cfg)
 
-	if result == "resolved" {
-		return nil
+		result, failReason := r.determineConflictResolutionResult(devWT, agentErr, exitCode)
+		r.writeAutomergeConflictRetry(writer, conflictedFiles, result, r.turnCounter, attempt)
+
+		if result == "resolved" {
+			return nil
+		}
+
+		if attempt >= cap {
+			_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
+			return fmt.Errorf("%w: %s", errConflictCapExhausted, failReason)
+		}
+		// Not the last attempt: leave the worktree in the conflicted state.
 	}
+
+	// Unreachable when cap >= 1, but satisfies the compiler.
 	_, _ = r.executor.RunInDir(devWT, "git", "rebase", "--abort")
-	return fmt.Errorf("%s", failReason)
+	return errConflictCapExhausted
 }
 
 // verifyRebaseComplete checks all four post-agent conditions required for a clean rebase:
@@ -337,18 +355,21 @@ func (r *Runner) deleteRemoteBranch(branchName string) {
 }
 
 // rebaseAndResolve rebases the dev worktree onto origin/main. On conflict it
-// invokes the dev agent once; returns nil only when the worktree is clean and
-// the rebase is complete.
-func (r *Runner) rebaseAndResolve(writer worktree.EventWriter, devWT string, prNumber int, eventLogPath string) error {
+// invokes the dev agent up to the configured cap. Returns (true, nil) when a
+// conflict was encountered and resolved; (false, nil) on a clean rebase;
+// (false, err) on any failure. Callers use errors.Is(err, errConflictCapExhausted)
+// to distinguish conflict-exhaustion from other failures.
+func (r *Runner) rebaseAndResolve(writer worktree.EventWriter, devWT string, prNumber int, eventLogPath string) (conflictResolved bool, err error) {
 	if err := r.rebaseBranch(devWT); err != nil {
 		if !errors.Is(err, errMergeConflict) {
-			return err
+			return false, err
 		}
 		if resolveErr := r.resolveRebaseConflictWithAgent(writer, devWT, prNumber, eventLogPath); resolveErr != nil {
-			return resolveErr
+			return false, resolveErr
 		}
+		return true, nil
 	}
-	return nil
+	return false, nil
 }
 
 // runPreReviewSyncGate ensures the dev branch is synchronized with origin/main and
@@ -385,10 +406,14 @@ func (r *Runner) runPreReviewSyncGate(
 	}
 
 	// Branch is behind or conflicting: rebase and resolve through the dev role.
-	if err := r.rebaseAndResolve(writer, devWT, prNumber, eventLogPath); err != nil {
-		msg := fmt.Sprintf("pre-review sync: %v", err)
+	_, rebaseErr := r.rebaseAndResolve(writer, devWT, prNumber, eventLogPath)
+	if rebaseErr != nil {
+		msg := fmt.Sprintf("pre-review sync: %v", rebaseErr)
 		fmt.Fprintf(r.stderr, "dev_failed: %s\n", msg)
 		r.postCIEscalationComment(prNumber, msg)
+		if errors.Is(rebaseErr, errConflictCapExhausted) {
+			return outcomeConflictUnresolved
+		}
 		return outcomeDevFailed
 	}
 	return r.preReviewPushAndCI(prNumber, devWT)
@@ -464,9 +489,21 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 		return r.mergeIfCIGreen(writer, prNumber, devWT)
 	}
 
-	// Rebase (and resolve conflicts if needed) then push
-	if err := r.rebaseAndResolve(writer, devWT, prNumber, eventLogPath); err != nil {
+	// Rebase (and resolve conflicts if needed).
+	// When a conflict was resolved, push and route back to the reviewer for a
+	// fresh verdict before merging (post-approval conflict must be re-reviewed).
+	conflictResolved, err := r.rebaseAndResolve(writer, devWT, prNumber, eventLogPath)
+	if err != nil {
+		if errors.Is(err, errConflictCapExhausted) {
+			return outcomeConflictUnresolved
+		}
 		return r.failMerge(writer, prNumber, err.Error())
+	}
+	if conflictResolved {
+		if err := r.forcePushBranch(devWT); err != nil {
+			return r.failMerge(writer, prNumber, fmt.Sprintf("conflict resolved push failed: %v", err))
+		}
+		return outcomeConflictResolved
 	}
 	return r.verifyAndPush(writer, prNumber, devWT)
 }

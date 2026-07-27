@@ -341,13 +341,14 @@ func runOrchestrate(t *testing.T, r *Runner, logPath string) string {
 		timeout = 30 * time.Minute
 	}
 	ctx := &RunContext{
-		GolemicDir:   golemicDir,
-		EventLogPath: logPath,
-		Timeout:      timeout,
-		Round:        1,
-		MaxRounds:    r.cfg.MaxReviewRounds,
-		Writer:       writer,
-		DevMode:      DevModeInitial,
+		GolemicDir:             golemicDir,
+		EventLogPath:           logPath,
+		Timeout:                timeout,
+		Round:                  1,
+		MaxRounds:              r.cfg.MaxReviewRounds,
+		MaxMergeReReviewRounds: maxMergeReReviewRounds,
+		Writer:                 writer,
+		DevMode:                DevModeInitial,
 	}
 	r.loopCtx = ctx
 	return r.runMachineFrom(loop.StepPrepare, ctx)
