@@ -9,8 +9,8 @@ import (
 )
 
 // cleanArtifacts removes all collision artifacts for the target issue before the
-// collision check runs. Each artifact is skipped silently when absent (BR-003).
-// Any removal failure aborts and returns a named error (BR-005).
+// collision check runs. Each artifact is skipped silently when absent.
+// Any removal failure aborts and returns a named error.
 //
 // Order: dev worktree, reviewer worktree, local branch, remote branch, open PR.
 func (r *Runner) cleanArtifacts() error {

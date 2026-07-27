@@ -140,7 +140,7 @@ func (r *Runner) fetchSubmittedGitHubReviews(prNumber int) ([]githubReview, erro
 	return reviews, nil
 }
 
-// countBotChangesRequestedReviews counts CHANGES_REQUESTED reviews authored by botLogin (BR-R5).
+// countBotChangesRequestedReviews counts CHANGES_REQUESTED reviews authored by botLogin.
 func countBotChangesRequestedReviews(reviews []githubReview, botLogin string) int {
 	n := 0
 	for _, rv := range reviews {
@@ -303,7 +303,7 @@ func (r *Runner) buildFindingsJSONForReview(prNumber int, reviewDatabaseID strin
 	return string(b), nil
 }
 
-// confidenceFromLabels infers confidence from PR labels (BR-R8).
+// confidenceFromLabels infers confidence from PR labels.
 func confidenceFromLabels(labels []string) string {
 	for _, l := range labels {
 		switch l {

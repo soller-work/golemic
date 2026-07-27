@@ -18,7 +18,7 @@ func (r *Runner) worktreeDir() string {
 	return filepath.Join(r.homeDir, ".golemic", r.project, "worktrees", fmt.Sprintf("issue-%d", r.issueNum))
 }
 
-// checkWorktreeCollision checks BR-004: worktree exists → abort.
+// checkWorktreeCollision checks whether the worktree exists and returns a collision if so.
 func (r *Runner) checkWorktreeCollision() *Collision {
 	wtDir := r.worktreeDir()
 	if _, err := os.Stat(wtDir); err == nil {
@@ -29,7 +29,7 @@ func (r *Runner) checkWorktreeCollision() *Collision {
 	return nil
 }
 
-// checkBranchCollision checks BR-005: local or remote branch exists → abort.
+// checkBranchCollision checks whether a local or remote branch exists and returns a collision if so.
 // Returns error on git command failure (fail-closed per IC-002).
 func (r *Runner) checkBranchCollision() (*Collision, error) {
 	// Local branch check
@@ -57,7 +57,7 @@ func (r *Runner) checkBranchCollision() (*Collision, error) {
 	return nil, nil
 }
 
-// checkPRCollision checks BR-006: open PR with head branch exists → abort.
+// checkPRCollision checks whether an open PR with the head branch exists and returns a collision if so.
 // Returns error on gh command or parse failure (fail-closed).
 func (r *Runner) checkPRCollision() (*Collision, error) {
 	out, err := r.executor.RunWithEnvInDir(
@@ -91,11 +91,9 @@ func (r *Runner) checkPRCollision() (*Collision, error) {
 // Order: worktree, local branch, remote branch, open PR (per DT-001).
 // Returns error if any check fails (fail-closed).
 func (r *Runner) checkAllCollisions() (*Collision, error) {
-	// BR-004
 	if c := r.checkWorktreeCollision(); c != nil {
 		return c, nil
 	}
-	// BR-005
 	c, err := r.checkBranchCollision()
 	if err != nil {
 		return nil, err
@@ -103,7 +101,6 @@ func (r *Runner) checkAllCollisions() (*Collision, error) {
 	if c != nil {
 		return c, nil
 	}
-	// BR-006
 	c, err = r.checkPRCollision()
 	if err != nil {
 		return nil, err

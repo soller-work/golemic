@@ -74,7 +74,7 @@ func (r *Runner) devWorktreePath() string {
 }
 
 // isBranchUpToDate returns true when origin/main is an ancestor of HEAD in the dev worktree.
-// This means the branch already contains all commits from origin/main (BR-003).
+// This means the branch already contains all commits from origin/main.
 func (r *Runner) isBranchUpToDate(devWT string) (bool, error) {
 	_, err := r.executor.RunInDir(
 		devWT,
@@ -96,7 +96,7 @@ func (r *Runner) isBranchUpToDate(devWT string) (bool, error) {
 var errMergeConflict = errors.New("merge conflict")
 
 // hasUnmergedPaths returns true if git status --porcelain reports any unmerged path
-// (any line with U in the X or Y position, or AA/DD). PS-001.
+// (any line with U in the X or Y position, or AA/DD).
 func (r *Runner) hasUnmergedPaths(devWT string) (bool, error) {
 	out, err := r.executor.RunInDir(devWT, "git", "status", "--porcelain")
 	if err != nil {
@@ -123,7 +123,7 @@ func (r *Runner) rebaseBranch(devWT string) error {
 		return fmt.Errorf("fetch origin: %w", err)
 	}
 	if _, err := r.executor.RunInDir(devWT, "git", "rebase", "origin/main"); err != nil {
-		// Check whether the failure is a merge conflict (BR-001, PS-001).
+		// Check whether the failure is a merge conflict.
 		isConflict, statusErr := r.hasUnmergedPaths(devWT)
 		if statusErr == nil && isConflict {
 			// Leave the worktree in the conflicted state for resolveRebaseConflictWithAgent.
@@ -219,7 +219,7 @@ func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, dev
 	return fmt.Errorf("%s", failReason)
 }
 
-// verifyRebaseComplete checks all four post-agent conditions required by BR-003:
+// verifyRebaseComplete checks all four post-agent conditions required for a clean rebase:
 // agent exit 0, rebase not in progress, tree clean, and origin/main is an ancestor of HEAD.
 // Returns (true, "") on success, or (false, reason) on failure.
 func (r *Runner) verifyRebaseComplete(devWT string) (bool, string) {
@@ -295,7 +295,7 @@ func (r *Runner) writeAutomergeOutOfDateRetry(writer worktree.EventWriter, attem
 	}
 }
 
-// squashMerge executes gh pr merge --squash with the reviewer token (BR-001).
+// squashMerge executes gh pr merge --squash with the reviewer token.
 func (r *Runner) squashMerge(prNumber int) (string, error) {
 	out, err := r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.ReviewerToken()},
@@ -308,9 +308,9 @@ func (r *Runner) squashMerge(prNumber int) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// deleteRemoteBranch removes the remote branch after a successful squash-merge (BR-002).
-// It is idempotent: if the branch is already gone, no push is issued (BR-003).
-// Any error is logged as a warning; the run outcome is not changed (BR-004).
+// deleteRemoteBranch removes the remote branch after a successful squash-merge.
+// It is idempotent: if the branch is already gone, no push is issued.
+// Any error is logged as a warning; the run outcome is not changed.
 func (r *Runner) deleteRemoteBranch(branchName string) {
 	out, err := r.executor.RunInDir(r.repoRoot, "git", "ls-remote", "--heads", "origin", branchName)
 	if err != nil {
@@ -318,7 +318,7 @@ func (r *Runner) deleteRemoteBranch(branchName string) {
 		return
 	}
 	if strings.TrimSpace(out) == "" {
-		return // already gone, nothing to do (BR-003)
+		return // already gone, nothing to do
 	}
 	_, err = r.executor.RunWithEnvInDir(
 		map[string]string{"GH_TOKEN": r.creds.DevToken()},
@@ -429,7 +429,7 @@ func (r *Runner) preReviewPushAndCI(prNumber int, devWT string) string {
 	return outcomeSuccess
 }
 
-// runMergePhase implements PS-001 through PS-006 (gate → fetch → freshness → CI gate / rebase → merge).
+// runMergePhase implements the merge phase (gate → fetch → freshness → CI gate / rebase → merge).
 // It is called by orchestrate() after the verdict is confirmed as "approved".
 // Returns outcomeSuccess (merged or skipped) or outcomeMergeFailed.
 func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string) string {
@@ -440,40 +440,40 @@ func (r *Runner) runMergePhase(writer worktree.EventWriter, eventLogPath string)
 		return outcomeMergeFailed
 	}
 
-	// PS-001: Gate evaluation (BR-001, BR-002)
+	// Gate evaluation
 	proceed, skipReason := r.evaluateAutoMergeGate(eventLogPath)
 	if !proceed {
 		r.writeAutomergeSkipped(writer, skipReason)
-		return outcomeSuccess // BR-008: skip is a successful run
+		return outcomeSuccess // skip is a successful run
 	}
 
 	devWT := r.devWorktreePath()
 
-	// PS-002: Fetch origin so isBranchUpToDate compares against a current ref (BR-001, BR-004)
+	// Fetch origin so isBranchUpToDate compares against a current ref
 	if _, err := r.executor.RunInDir(devWT, "git", "fetch", "origin"); err != nil {
 		return r.failMerge(writer, prNumber, fmt.Sprintf("git fetch origin failed: %v", err))
 	}
 
-	// PS-003: Freshness check
+	// Freshness check
 	upToDate, err := r.isBranchUpToDate(devWT)
 	if err != nil {
 		return r.failMerge(writer, prNumber, fmt.Sprintf("freshness check failed: %v", err))
 	}
 	if upToDate {
-		// PS-004: CI gate on up-to-date branch (BR-002, BR-003)
+		// CI gate on up-to-date branch
 		return r.mergeIfCIGreen(writer, prNumber, devWT)
 	}
 
-	// PS-005: Rebase (and resolve conflicts if needed) then push (BR-005)
+	// Rebase (and resolve conflicts if needed) then push
 	if err := r.rebaseAndResolve(writer, devWT, prNumber, eventLogPath); err != nil {
 		return r.failMerge(writer, prNumber, err.Error())
 	}
 	return r.verifyAndPush(writer, prNumber, devWT)
 }
 
-// mergeIfCIGreen runs the CI gate on an up-to-date branch (PS-004).
-// mergeWithOutOfDateRetry is only called when pollCIChecks returns green (BR-002).
-// no_checks is treated as merge_failed rather than falling back to a local verify_command (BR-003).
+// mergeIfCIGreen runs the CI gate on an up-to-date branch.
+// mergeWithOutOfDateRetry is only called when pollCIChecks returns green.
+// no_checks is treated as merge_failed rather than falling back to a local verify_command.
 func (r *Runner) mergeIfCIGreen(writer worktree.EventWriter, prNumber int, devWT string) string {
 	result, failedChecks, err := r.pollCIChecks(prNumber, r.ciTimeout())
 	if err != nil {
@@ -492,7 +492,7 @@ func (r *Runner) mergeIfCIGreen(writer worktree.EventWriter, prNumber int, devWT
 	}
 }
 
-// verifyAndPush handles PS-003: verify the rebased branch and push.
+// verifyAndPush verifies the rebased branch and pushes.
 func (r *Runner) verifyAndPush(writer worktree.EventWriter, prNumber int, devWT string) string {
 	ciTimeout := r.ciTimeout()
 

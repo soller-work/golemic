@@ -47,7 +47,7 @@ func (w *progressEventWriter) Write(event eventlog.Event) error {
 
 // emitAgentWrittenEvents reads events.jsonl from r.progressScanIndex onward,
 // emits progress lines for agent-written event types, and advances the index.
-// Non-fatal: errors in reading are silently ignored per BR-P3.
+// Non-fatal: errors in reading are silently ignored.
 func (r *Runner) emitAgentWrittenEvents(eventLogPath string) {
 	if r.progressRenderer == nil {
 		return
@@ -65,7 +65,7 @@ func (r *Runner) emitAgentWrittenEvents(eventLogPath string) {
 }
 
 // writeDevStarted appends a dev_started event to events.jsonl and emits a
-// progress line. Errors are silently dropped (non-fatal per BR-P3).
+// progress line. Errors are silently dropped (non-fatal).
 func (r *Runner) writeDevStarted(eventLogPath string) {
 	w, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
