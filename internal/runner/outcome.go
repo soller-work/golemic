@@ -18,11 +18,6 @@ const (
 	outcomeMergeFailed  = "merge_failed"
 	outcomeSkipped      = "skipped"
 	branchPrefix        = "golemic/issue-"
-
-	// outcomePrecheckDevRetryDone is an internal signal (never written to the event log)
-	// returned when a precheck-!ok round completes a deterministic dev-retry and the
-	// ping-pong loop should advance to the next reviewer round.
-	outcomePrecheckDevRetryDone = "precheck_dev_retry_done"
 )
 
 // countReviewSubmittedEvents counts the number of review_submitted events in the log.
