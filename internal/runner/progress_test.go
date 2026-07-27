@@ -246,7 +246,7 @@ func TestProgress_HappyPath(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestProgress_Quiet: --quiet suppresses all progress
+// TestProgress_Quiet: renderer disabled -> no lifecycle progress
 // ---------------------------------------------------------------------------
 
 func TestProgress_Quiet(t *testing.T) {
@@ -354,6 +354,41 @@ func TestEmitAgentContext_BlockContainsRoleModelRound(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("context block missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestEmitAgentContext_QuietStillEmitsAndPersistsPrompt_AC004(t *testing.T) {
+	var stderr bytes.Buffer
+	r := &Runner{quiet: true, progressRenderer: progress.New(&stderr)}
+
+	runsDir := t.TempDir()
+	cfg := agent.RoleConfig{
+		Role:       "dev",
+		Model:      "test/model",
+		Round:      1,
+		Attempt:    0,
+		UserPrompt: "line 1\nline 2",
+		RunsDir:    runsDir,
+		RunID:      "issue-99-test",
+	}
+
+	r.emitAgentContext(cfg)
+
+	out := stderr.String()
+	if !strings.Contains(out, "dev · test/model · r1/a0") {
+		t.Fatalf("quiet must still emit the dev agent context block; stderr:\n%s", out)
+	}
+	if strings.Contains(out, "Run ID:") || strings.Contains(out, "▶") {
+		t.Errorf("quiet must not emit run header or lifecycle lines; stderr:\n%s", out)
+	}
+
+	promptFile := filepath.Join(runsDir, "issue-99-test", "dev-r1-a0.prompt.md")
+	data, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatalf("prompt file not created: %v", err)
+	}
+	if string(data) != cfg.UserPrompt {
+		t.Errorf("prompt file content mismatch: got %q", string(data))
 	}
 }
 

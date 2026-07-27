@@ -53,7 +53,7 @@ type Runner struct {
 	verbose bool
 	resume  bool
 
-	// Progress rendering (nil when --quiet)
+	// Progress rendering (always available for agent-context emission).
 	progressRenderer  *progress.Renderer
 	progressScanIndex int // next events.jsonl index to scan in emitAgentWrittenEvents
 
@@ -210,10 +210,10 @@ func (r *Runner) Run() int {
 	}
 	defer writer.Close()
 
-	// Wrap writer with progress renderer when not quiet.
+	// Keep a progress renderer available for agent-context blocks even when quiet.
+	r.progressRenderer = progress.New(r.stderr)
 	var ew worktree.EventWriter = writer
 	if !r.quiet {
-		r.progressRenderer = progress.New(r.stderr)
 		ew = &progressEventWriter{inner: writer, renderer: r.progressRenderer}
 	}
 
@@ -413,7 +413,7 @@ func (r *Runner) writeAgentCompleted(eventLogPath, role string, exitCode int, ac
 		TurnID:  r.turnCounter,
 		Payload: payload,
 	}
-	if w.Write(ev) == nil && r.progressRenderer != nil {
+	if w.Write(ev) == nil && !r.quiet && r.progressRenderer != nil {
 		r.progressRenderer.EmitLifecycle(ev)
 	}
 }

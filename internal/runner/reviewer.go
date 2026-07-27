@@ -214,7 +214,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	_, endSpan := telemetry.StartSpan(r.sink, r.traceID, parentSpanID, telemetry.SpanAgentTurn,
 		map[string]any{"run_id": r.runID, "issue": r.issueNum, "role": "reviewer", "round": round, "model": model})
 	activityPath := filepath.Join(runsDir, r.runID, fmt.Sprintf("reviewer-r%d-a%d.activity.jsonl", round, attempt))
-	stopFollow := followActivity(r.progressRenderer, "reviewer", activityPath)
+	stopFollow := followActivity(r.lifecycleProgressRenderer(), "reviewer", activityPath)
 
 	runFn := r.runAgentFn
 	if runFn == nil {

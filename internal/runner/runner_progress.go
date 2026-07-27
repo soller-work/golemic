@@ -19,6 +19,13 @@ func followActivity(renderer *progress.Renderer, role, path string) func() {
 	return progress.FollowActivityJSONL(role, path, renderer)
 }
 
+func (r *Runner) lifecycleProgressRenderer() *progress.Renderer {
+	if r.quiet {
+		return nil
+	}
+	return r.progressRenderer
+}
+
 // agentWrittenTypes are event types written by agent subprocesses (not the runner).
 // emitAgentWrittenEvents filters to only these when scanning events.jsonl.
 var agentWrittenTypes = map[string]bool{
@@ -75,7 +82,7 @@ func (r *Runner) emitAgentContext(cfg agent.RoleConfig) {
 // emits progress lines for agent-written event types, and advances the index.
 // Non-fatal: errors in reading are silently ignored.
 func (r *Runner) emitAgentWrittenEvents(eventLogPath string) {
-	if r.progressRenderer == nil {
+	if r.lifecycleProgressRenderer() == nil {
 		return
 	}
 	events, err := eventlog.Reader{}.Read(eventLogPath)

@@ -334,7 +334,7 @@ func (r *Runner) writeCIWaitFinished(eventLogPath, result string, round int) {
 		TurnID:  r.turnCounter,
 		Payload: payload,
 	}
-	if w.Write(ev) == nil && r.progressRenderer != nil {
+	if w.Write(ev) == nil && !r.quiet && r.progressRenderer != nil {
 		r.progressRenderer.EmitLifecycle(ev)
 	}
 }
