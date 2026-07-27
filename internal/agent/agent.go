@@ -365,7 +365,7 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 		var attemptErr error
 		exitCode, attemptErr = runModelAttempt(ctx, cfg, model, sessionID, golemicPiDir, stdoutPath, stderrPath)
 
-		// Wall-clock timeout is always terminal (BR-9).
+		// Wall-clock timeout is always terminal.
 		if errors.Is(attemptErr, ErrTimeout) {
 			return 0, paths, attemptErr
 		}
@@ -388,19 +388,19 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 			continue
 		}
 
-		// Terminal failure: propagate as-is (BR-6, BR-9).
+		// Terminal failure: propagate as-is.
 		if attemptErr != nil {
 			return 0, paths, attemptErr
 		}
 		// Semantic failure (stopReason:error|aborted) at exit 0 — not fallback-eligible,
-		// but still a real failure; return non-zero so the runner doesn't treat it as success (BR-4).
+		// but still a real failure; return non-zero so the runner doesn't treat it as success.
 		if tr.SemanticFailed {
 			return 1, paths, nil
 		}
 		return exitCode, paths, nil
 	}
 
-	// All models in chain exhausted with fallback-eligible failures (BR-7).
+	// All models in chain exhausted with fallback-eligible failures.
 	return 1, paths, &ModelChainExhaustedError{Role: cfg.Role, Attempts: chainAttempts}
 }
 

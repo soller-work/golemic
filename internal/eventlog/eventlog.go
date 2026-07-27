@@ -282,7 +282,7 @@ type reviewSubmittedData struct {
 
 // ValidateReviewSubmittedPayload checks that payload decodes to an object with
 // verdict ∈ {approved, changes_requested}, confidence ∈ {high, medium, low},
-// non-empty reviewId, and non-negative inlineCommentCount (BR-006).
+// non-empty reviewId, and non-negative inlineCommentCount.
 func ValidateReviewSubmittedPayload(raw json.RawMessage) error {
 	if len(raw) == 0 {
 		return fmt.Errorf("review_submitted payload is empty")

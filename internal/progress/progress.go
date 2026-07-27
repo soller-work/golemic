@@ -4,7 +4,7 @@
 //  1. Lifecycle lines — one per eventlog.Event written to events.jsonl.
 //  2. Tool-call lines — one per tool_execution_start entry in role.activity.jsonl.
 //
-// All rendering is non-fatal per BR-P3: errors do not propagate to the caller.
+// All rendering is non-fatal: errors do not propagate to the caller.
 package progress
 
 import (
@@ -70,7 +70,7 @@ var lifecycleFormatters = map[string]func(json.RawMessage) string{
 }
 
 // FormatLifecycleLine returns a deterministic one-line string for event.
-// Unknown event types fall back to "▶ <event_type>" per BR-P4.
+// Unknown event types fall back to "▶ <event_type>".
 func FormatLifecycleLine(event eventlog.Event) string {
 	if fn, ok := lifecycleFormatters[event.Type]; ok {
 		return fn(event.Payload)
@@ -215,7 +215,7 @@ func fmtRunFinished(p json.RawMessage) string {
 // Tool-call formatter
 // ---------------------------------------------------------------------------
 
-// FormatToolCallLine returns a one-line string for a tool call per BR-P5.
+// FormatToolCallLine returns a one-line string for a tool call.
 // The args preview is capped at maxArgsPreview characters, with newlines normalized.
 func FormatToolCallLine(role, toolName string, argsRaw json.RawMessage) string {
 	preview := argsPreview(toolName, argsRaw)
@@ -249,7 +249,7 @@ func extractString(raw json.RawMessage) string {
 	return s
 }
 
-// trimPreview normalizes newlines and trims to maxArgsPreview per BR-P5.
+// trimPreview normalizes newlines and trims to maxArgsPreview.
 func trimPreview(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")

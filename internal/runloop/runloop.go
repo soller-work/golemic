@@ -76,7 +76,7 @@ func New(executor Executor, golemicBin, homeDir, repoRoot, project string, stder
 func (l *Loop) Run(ctx context.Context) {
 	fmt.Fprintln(l.stderr, "run-loop started") //nolint:errcheck
 
-	// First tick fires immediately per PS-001 -> PS-002.
+	// First tick fires immediately.
 	l.tick(ctx)
 
 	for {

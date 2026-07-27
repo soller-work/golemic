@@ -1,5 +1,5 @@
 // Package claim implements the race-safe exclusive lock on a GitHub issue
-// for the autonomous golemic runner (BR-001 through BR-003).
+// for the autonomous golemic runner.
 package claim
 
 import (
@@ -93,9 +93,9 @@ func viewIssue(executor preflight.Executor, devToken string, number int) (*issue
 
 // Release removes the exclusive lock on GitHub issue number.
 //
-// Idempotent if in-progress label is absent (BR-002). Exits with
+// Idempotent if in-progress label is absent. Exits with
 // ReleaseResultForeignClaim if in-progress is present but the dev-bot is not
-// an assignee (BR-003). On success: removes in-progress, clears assignees, and
+// an assignee. On success: removes in-progress, clears assignees, and
 // applies reason-specific labels per DT-001 (done=none, failed=needs-human,
 // abandoned=ready-for-agent).
 func Release(executor preflight.Executor, number int, devLogin, devToken, reason string) (ReleaseResult, error) {
@@ -107,12 +107,12 @@ func Release(executor preflight.Executor, number int, devLogin, devToken, reason
 		return ReleaseResultError, err
 	}
 
-	// BR-002: idempotent — in-progress absent means already released.
+	// idempotent — in-progress absent means already released.
 	if !pre.hasLabel("in-progress") {
 		return ReleaseResultIdempotent, nil
 	}
 
-	// BR-003: foreign ownership — in-progress present but dev-bot not an assignee.
+	// foreign ownership — in-progress present but dev-bot not an assignee.
 	if !pre.hasAssignee(devLogin) {
 		return ReleaseResultForeignClaim, fmt.Errorf("issue #%d is claimed by %v, not %s",
 			number, pre.assigneeLogins(), devLogin)
@@ -150,12 +150,12 @@ func Claim(executor preflight.Executor, number int, devLogin, devToken string) (
 		return ResultError, err
 	}
 
-	// BR-002: idempotent — issue already in claimed state for this bot.
+	// idempotent — issue already in claimed state for this bot.
 	if pre.isClaimedBy(devLogin) {
 		return ResultIdempotent, nil
 	}
 
-	// BR-003: not takeable — ready-for-agent label absent and not already owned.
+	// not takeable — ready-for-agent label absent and not already owned.
 	if !pre.hasLabel("ready-for-agent") {
 		return ResultNotTakeable, nil
 	}
@@ -168,7 +168,7 @@ func Claim(executor preflight.Executor, number int, devLogin, devToken string) (
 		return ResultError, fmt.Errorf("gh issue edit %d: %w", number, err)
 	}
 
-	// Post-verify (BR-001).
+	// Post-verify.
 	post, err := viewIssue(executor, devToken, number)
 	if err != nil {
 		return ResultError, fmt.Errorf("post-verify: %w", err)

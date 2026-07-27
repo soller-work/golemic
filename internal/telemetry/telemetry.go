@@ -27,7 +27,7 @@ const (
 	StatusKilled = "killed"
 )
 
-// Span name constants (low-cardinality set per BR-006).
+// Span name constants (low-cardinality set).
 const (
 	SpanRun               = "run"
 	SpanWorktreeCreate    = "worktree.create"
@@ -53,12 +53,12 @@ type Record struct {
 }
 
 // Sink receives telemetry records. Implementations must be safe for concurrent use.
-// Emit errors are returned to the caller but must be swallowed at the call site (BR-002).
+// Emit errors are returned to the caller but must be swallowed at the call site.
 type Sink interface {
 	Emit(r Record) error
 }
 
-// NoopSink discards all records. Used when telemetry.enabled is false (BR-003).
+// NoopSink discards all records. Used when telemetry.enabled is false.
 type NoopSink struct{}
 
 // Emit implements Sink and does nothing.
@@ -116,7 +116,7 @@ func (s *FileSink) Close() error {
 }
 
 // TraceID derives a deterministic 32-hex-character (128-bit) OTel-compatible
-// trace ID from runID using SHA-256 truncated to 16 bytes (BR-004).
+// trace ID from runID using SHA-256 truncated to 16 bytes.
 func TraceID(runID string) string {
 	h := sha256.Sum256([]byte(runID))
 	return hex.EncodeToString(h[:16])
@@ -133,7 +133,7 @@ func NewSpanID() string {
 // an end function. Calling the end function emits the matching span.end record
 // with the given status and optional end attributes.
 //
-// Errors from Emit are swallowed (BR-002): StartSpan always returns a valid
+// Errors from Emit are swallowed: StartSpan always returns a valid
 // spanID and endFunc regardless of sink health.
 func StartSpan(sink Sink, traceID, parentSpanID, name string, attrs map[string]any) (spanID string, end func(status string, endAttrs map[string]any)) {
 	spanID = NewSpanID()
