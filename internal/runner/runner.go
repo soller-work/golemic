@@ -257,78 +257,7 @@ func (r *Runner) Run() int {
 		r.writeRunHeader(r.stderr)
 	}
 
-	// ---- PS-004b: Skip guard — abort if issue is not OPEN ----
-	if issue.State != "OPEN" {
-		fmt.Fprintf(r.stderr, "skipped: issue #%d has state=%q (expected OPEN)\n", r.issueNum, issue.State)
-		for _, lbl := range issue.Labels {
-			if lbl.Name == "ready-for-agent" {
-				fmt.Fprintf(r.stderr, "warning: issue #%d is not OPEN but still carries label \"ready-for-agent\" — please remove it manually\n", r.issueNum)
-				break
-			}
-		}
-		finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeSkipped})
-		_ = ew.Write(eventlog.Event{
-			Type:    eventlog.EventRunFinished,
-			Ts:      time.Now().Format(time.RFC3339),
-			RunID:   r.runID,
-			TurnID:  r.turnCounter,
-			Payload: finishedPayload,
-		})
-		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID) //nolint:errcheck
-		return 0
-	}
-
-	// ---- Pre-collision cleanup (--clean) ----
-	if r.clean {
-		if err := r.cleanArtifacts(); err != nil {
-			fmt.Fprintln(r.stderr, err.Error()) //nolint:errcheck
-			finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-			_ = ew.Write(eventlog.Event{
-				Type:    eventlog.EventRunFinished,
-				Ts:      time.Now().Format(time.RFC3339),
-				RunID:   r.runID,
-				TurnID:  r.turnCounter,
-				Payload: finishedPayload,
-			})
-			fmt.Fprintf(r.stdout, "runs/%s\n", r.runID) //nolint:errcheck
-			return 1
-		}
-	}
-
-	// ---- PS-005: Collision check (skipped in resume mode) ----
-	if !r.resume {
-		collision, err := r.checkAllCollisions()
-		if err != nil {
-			fmt.Fprintln(r.stderr, err.Error())
-			// Write run_finished with outcome aborted
-			finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-			_ = ew.Write(eventlog.Event{
-				Type:    eventlog.EventRunFinished,
-				Ts:      time.Now().Format(time.RFC3339),
-				RunID:   r.runID,
-				TurnID:  r.turnCounter,
-				Payload: finishedPayload,
-			})
-			fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
-			return 1
-		}
-		if collision != nil {
-			fmt.Fprintln(r.stderr, collision.Message)
-			// Write run_finished with outcome aborted
-			finishedPayload, _ := json.Marshal(runFinishedPayload{Outcome: outcomeAborted})
-			_ = ew.Write(eventlog.Event{
-				Type:    eventlog.EventRunFinished,
-				Ts:      time.Now().Format(time.RFC3339),
-				RunID:   r.runID,
-				TurnID:  r.turnCounter,
-				Payload: finishedPayload,
-			})
-			fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
-			return 1
-		}
-	}
-
-	// ---- Telemetry sink setup ----
+	// ---- Telemetry sink setup (before PREPARE so worktree.create spans are captured) ----
 	r.traceID = telemetry.TraceID(r.runID)
 	runDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID)
 	if !r.sinkOverride {
@@ -351,10 +280,54 @@ func (r *Runner) Run() int {
 	})
 
 	var finalOutcome string
+	var exitCode int
 	if r.resume {
+		// Resume path unchanged until Slice 6.
 		finalOutcome = r.resumeOrchestrate(ew, eventLogPath, runSpanID)
+		if finalOutcome == outcomeSuccess {
+			exitCode = 0
+		} else {
+			exitCode = 1
+		}
 	} else {
-		finalOutcome = r.orchestrate(ew, eventLogPath, runSpanID)
+		// Fresh run: drive the full lifecycle through the step machine from PREPARE.
+		golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+		var timeoutDuration time.Duration
+		if r.cfg.TimeoutSeconds > 0 {
+			timeoutDuration = time.Duration(r.cfg.TimeoutSeconds) * time.Second
+		} else {
+			timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+		}
+		loopCtx := &RunContext{
+			GolemicDir:   golemicDir,
+			EventLogPath: eventLogPath,
+			Timeout:      timeoutDuration,
+			ParentSpanID: runSpanID,
+			Round:        1,
+			MaxRounds:    r.cfg.MaxReviewRounds,
+			Writer:       ew,
+			DevMode:      DevModeInitial,
+			Resume:       r.resume,
+		}
+		r.loopCtx = loopCtx
+		m := &loop.Machine[RunContext]{
+			Transitions: loopTransitions(),
+			Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
+				loop.StepPrepare:     r.stepPrepare,
+				loop.StepRunDev:      r.stepRunDev,
+				loop.StepSyncCI:      r.stepSyncCI,
+				loop.StepRunReviewer: r.stepRunReviewer,
+				loop.StepMergePR:     r.stepMergePR,
+			},
+			Start:     loop.StepPrepare,
+			Terminals: loopTerminals(),
+		}
+		final, machineErr := m.Run(loopCtx)
+		if machineErr != nil {
+			fmt.Fprintf(r.stderr, "%v\n", machineErr)
+			final = loop.StepTerminalDevFailed
+		}
+		finalOutcome, exitCode = terminalOutcome(final)
 	}
 
 	// Worktree cleanup spans (children of run span, only on success)
@@ -406,14 +379,13 @@ func (r *Runner) Run() int {
 		Payload: finishedPayload,
 	})
 
-	// BR-007: Exit 0 only for success; exit != 0 otherwise
+	// Stdout line and exit: success gets bare run ID, all other outcomes get runs/<id>.
 	if finalOutcome == outcomeSuccess {
 		fmt.Fprintln(r.stdout, r.runID)
-		return 0
+	} else {
+		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
 	}
-
-	fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
-	return 1
+	return exitCode
 }
 
 // writeAgentCompleted appends an agent_completed event to the event log and
@@ -541,50 +513,14 @@ func (r *Runner) postModelChainExhaustedComment(prNumber int, chainErr *agent.Mo
 	}
 }
 
-// orchestrate implements the bounded dev→reviewer ping-pong loop after collision check passes.
-// runSpanID is the parent telemetry span ID for all phases within orchestration.
-// Returns final outcome.
-// orchestrate creates the dev worktree and then drives the run via the loop machine.
-func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, runSpanID string) string {
-	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	var timeoutDuration time.Duration
-	if r.cfg.TimeoutSeconds > 0 {
-		timeoutDuration = time.Duration(r.cfg.TimeoutSeconds) * time.Second
-	} else {
-		timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
-	}
-
-	// Create dev worktree (turn 1: initial dev)
-	r.turnCounter++
-	_, endCreateDevWT := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCreate,
-		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
-	if err := worktree.Create(r.repoRoot, golemicDir, r.runID, r.issueNum, "golemic-dev", r.executor, writer, r.turnCounter); err != nil {
-		endCreateDevWT(telemetry.StatusError, nil)
-		fmt.Fprintf(r.stderr, "Failed to create dev worktree: %v\n", err)
-		return outcomeDevFailed
-	}
-	endCreateDevWT(telemetry.StatusOK, nil)
-
-	ctx := &RunContext{
-		GolemicDir:   golemicDir,
-		EventLogPath: eventLogPath,
-		Timeout:      timeoutDuration,
-		ParentSpanID: runSpanID,
-		Round:        1,
-		MaxRounds:    r.cfg.MaxReviewRounds,
-		Writer:       writer,
-		DevMode:      DevModeInitial,
-	}
-	r.loopCtx = ctx
-	return r.runMachineFrom(loop.StepRunDev, ctx)
-}
-
 // runMachineFrom runs the loop machine starting at start, walking to a terminal.
 // A StateError from the machine is printed to stderr and yields outcomeDevFailed.
+// Tests that bypass PREPARE call this directly from StepRunDev.
 func (r *Runner) runMachineFrom(start loop.StepKey, ctx *RunContext) string {
 	m := &loop.Machine[RunContext]{
 		Transitions: loopTransitions(),
 		Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
+			loop.StepPrepare:     r.stepPrepare,
 			loop.StepRunDev:      r.stepRunDev,
 			loop.StepSyncCI:      r.stepSyncCI,
 			loop.StepRunReviewer: r.stepRunReviewer,

@@ -73,7 +73,8 @@ Unconditional edges have no guard. Guarded edges are mutually exclusive within e
 | From | Event | To | Guard |
 |---|---|---|---|
 | `PREPARE` | `NOT_ELIGIBLE` | `TERMINAL_SKIPPED` | — |
-| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_ABORTED` | — |
+| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_DEV_FAILED` | `WorktreeCreateFailed` |
+| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_ABORTED` | `!WorktreeCreateFailed` |
 | `PREPARE` | `READY` | `RUN_DEV` | `!Resume \|\| ResumeVerdict != "approved"` |
 | `PREPARE` | `READY` | `RUN_REVIEWER` | `Resume && ResumeVerdict == "approved"` |
 | `RUN_DEV` | `DEV_DONE` | `SYNC_CI` | — |
@@ -117,6 +118,10 @@ Unconditional edges have no guard. Guarded edges are mutually exclusive within e
 | `TERMINAL_STALLED` | `stalled` | 1 |
 | `TERMINAL_ABORTED` | `aborted` | 1 |
 
+## Boundary: Preflight Before the Event Log
+
+The preflight gate (`r.preflighter.Check()`) runs **before** the event-log writer is created. Because there is nothing to audit without a log, preflight failures are handled imperatively in `Run()` and are outside the machine. Everything from `run_started` onward is machine-driven.
+
 ## Guard Invariants
 
 For every `(From, Event)` group with more than one edge:
@@ -129,6 +134,8 @@ The test `TestLoopTransitions_AC6_GuardDisjointness` in `internal/runner/loopdef
 ## Implementation Notes
 
 - `internal/loop` is dependency-free (stdlib only, no import of `internal/runner`).
-- `internal/runner/loopdef.go` defines `RunContext`, `loopTransitions()`, `terminalOutcome()`, and `loopTerminals()`. Nothing in the current run flow calls them yet; wiring happens in later slices.
-- `DevAttempt < 2` allows gate retries at attempts 0 and 1 (3 total invocations). At attempt 2 the machine transitions to `TERMINAL_DEV_FAILED`.
-- `Round` starts at 0 and is incremented after each `RUN_REVIEWER` turn. The escalation boundary is `Round >= MaxRounds` (default `MaxRounds = 5`).
+- `internal/runner/loopdef.go` defines `RunContext`, `loopTransitions()`, `terminalOutcome()`, and `loopTerminals()`.
+- `internal/runner/step_prepare.go` implements `stepPrepare`: skip check → `--clean` cleanup → collision check (skipped in resume mode) → dev worktree creation.
+- Fresh runs in `Run()` start the machine at `PREPARE`; the resume fork (Slice 6) still bypasses `PREPARE` via `resumeOrchestrate`.
+- `DevAttempt < 3` allows gate retries at attempts 0, 1, and 2 (3 total invocations). At attempt 3 the machine transitions to `TERMINAL_DEV_FAILED`.
+- `Round` starts at 1 and is incremented after each `RUN_REVIEWER` turn. The escalation boundary is `Round >= MaxRounds` (default `MaxRounds = 5`).

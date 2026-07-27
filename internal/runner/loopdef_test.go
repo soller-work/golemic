@@ -65,13 +65,16 @@ var guardFixtures = func() []RunContext {
 		for _, round := range []int{0, maxRounds - 1, maxRounds} {
 			for _, resume := range []bool{false, true} {
 				for _, verdict := range []string{"", "approved", "changes_requested"} {
-					fixtures = append(fixtures, RunContext{
-						DevAttempt:    devAttempt,
-						Round:         round,
-						MaxRounds:     maxRounds,
-						Resume:        resume,
-						ResumeVerdict: verdict,
-					})
+					for _, wtFailed := range []bool{false, true} {
+						fixtures = append(fixtures, RunContext{
+							DevAttempt:           devAttempt,
+							Round:                round,
+							MaxRounds:            maxRounds,
+							Resume:               resume,
+							ResumeVerdict:        verdict,
+							WorktreeCreateFailed: wtFailed,
+						})
+					}
 				}
 			}
 		}
@@ -110,6 +113,45 @@ func TestLoopTransitions_AC6_GuardDisjointness(t *testing.T) {
 					k.from, k.event, i, rc, matches)
 			}
 		}
+	}
+}
+
+// computeReachable returns the set of steps reachable from seed via transitions.
+func computeReachable(seed loop.StepKey, transitions []loop.Transition[RunContext]) map[loop.StepKey]bool {
+	reachable := map[loop.StepKey]bool{seed: true}
+	for changed := true; changed; {
+		changed = false
+		for _, tr := range transitions {
+			if reachable[tr.From] && !reachable[tr.To] {
+				reachable[tr.To] = true
+				changed = true
+			}
+		}
+	}
+	return reachable
+}
+
+// AC-5 (slice 5): fresh-run machine starts at StepPrepare and all non-terminal
+// steps are reachable from PREPARE.
+func TestLoopTransitions_AC5_PrepareIsUniqueEntry(t *testing.T) {
+	transitions := loopTransitions()
+	terminals := loopTerminals()
+	reachable := computeReachable(loop.StepPrepare, transitions)
+
+	for _, tr := range transitions {
+		if !terminals[tr.To] && !reachable[tr.To] {
+			t.Errorf("non-terminal step %s is unreachable from PREPARE", tr.To)
+		}
+	}
+
+	var prepareOuts int
+	for _, tr := range transitions {
+		if tr.From == loop.StepPrepare {
+			prepareOuts++
+		}
+	}
+	if prepareOuts == 0 {
+		t.Error("PREPARE has no outgoing transitions")
 	}
 }
 

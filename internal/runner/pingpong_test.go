@@ -15,6 +15,7 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 	"golemic/internal/prompt"
 )
 
@@ -229,7 +230,7 @@ func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *by
 		TimeoutMinutes:  30,
 		MaxReviewRounds: 5,
 	}
-	r.issue = &issueData{Number: 42, Title: "Test Issue"}
+	r.issue = &issueData{Number: 42, Title: "Test Issue", State: "OPEN"}
 	// Inject no-op precheck so tests don't need a real git repo in the reviewer worktree.
 	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
 
@@ -326,14 +327,30 @@ func runOrchestrate(t *testing.T, r *Runner, logPath string) string {
 	})
 	w.Close() //nolint:errcheck
 
-	// Reopen for orchestrate's writer
 	writer, err := eventlog.NewWriter(logPath)
 	if err != nil {
-		t.Fatalf("open orchestrate writer: %v", err)
+		t.Fatalf("open writer: %v", err)
 	}
 	defer writer.Close() //nolint:errcheck
 
-	return r.orchestrate(writer, logPath, "")
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	var timeout time.Duration
+	if r.cfg != nil && r.cfg.TimeoutMinutes > 0 {
+		timeout = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+	} else {
+		timeout = 30 * time.Minute
+	}
+	ctx := &RunContext{
+		GolemicDir:   golemicDir,
+		EventLogPath: logPath,
+		Timeout:      timeout,
+		Round:        1,
+		MaxRounds:    r.cfg.MaxReviewRounds,
+		Writer:       writer,
+		DevMode:      DevModeInitial,
+	}
+	r.loopCtx = ctx
+	return r.runMachineFrom(loop.StepPrepare, ctx)
 }
 
 // ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 	"golemic/internal/progress"
 	"golemic/internal/worktree"
 )
@@ -113,7 +114,7 @@ func runOrchestrateWithProgress(t *testing.T, r *Runner, logPath string) string 
 
 	writer, err := eventlog.NewWriter(logPath)
 	if err != nil {
-		t.Fatalf("open orchestrate writer: %v", err)
+		t.Fatalf("open writer: %v", err)
 	}
 	defer writer.Close() //nolint:errcheck
 
@@ -122,7 +123,25 @@ func runOrchestrateWithProgress(t *testing.T, r *Runner, logPath string) string 
 	if r.progressRenderer != nil {
 		ew = &progressEventWriter{inner: writer, renderer: r.progressRenderer}
 	}
-	return r.orchestrate(ew, logPath, "")
+
+	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
+	var timeout time.Duration
+	if r.cfg != nil && r.cfg.TimeoutMinutes > 0 {
+		timeout = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
+	} else {
+		timeout = 30 * time.Minute
+	}
+	ctx := &RunContext{
+		GolemicDir:   golemicDir,
+		EventLogPath: logPath,
+		Timeout:      timeout,
+		Round:        1,
+		MaxRounds:    r.cfg.MaxReviewRounds,
+		Writer:       ew,
+		DevMode:      DevModeInitial,
+	}
+	r.loopCtx = ctx
+	return r.runMachineFrom(loop.StepPrepare, ctx)
 }
 
 // ---------------------------------------------------------------------------
