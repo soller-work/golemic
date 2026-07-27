@@ -48,6 +48,13 @@ type RunContext struct {
 	// fails, routing PREPARE_FAILED to TERMINAL_DEV_FAILED instead of TERMINAL_ABORTED.
 	WorktreeCreateFailed bool
 
+	// PrepareFailKind disambiguates non-worktree PREPARE_FAILED outcomes.
+	// Valid values: "" (abort), "dev_failed", "review_failed", "escalated".
+	PrepareFailKind string
+
+	// PRState carries the resume PR state needed by MERGE_PR fast paths.
+	PRState string
+
 	// GateReason is the rejection reason from the last §10 gate rejection.
 	GateReason string
 
@@ -112,14 +119,21 @@ func loopTransitions() []loop.Transition[RunContext] {
 		// PREPARE: route based on eligibility and resume state.
 		{From: loop.StepPrepare, Event: loop.EventNotEligible, To: loop.StepTerminalSkipped},
 		{From: loop.StepPrepare, Event: loop.EventPrepareFailed, To: loop.StepTerminalDevFailed,
-			Guard: func(rc *RunContext) bool { return rc.WorktreeCreateFailed }},
+			Guard: func(rc *RunContext) bool {
+				return rc.PrepareFailKind == "dev_failed" || (rc.WorktreeCreateFailed && rc.PrepareFailKind == "")
+			}},
+		{From: loop.StepPrepare, Event: loop.EventPrepareFailed, To: loop.StepTerminalReviewFailed,
+			Guard: func(rc *RunContext) bool { return rc.PrepareFailKind == "review_failed" }},
+		{From: loop.StepPrepare, Event: loop.EventPrepareFailed, To: loop.StepTerminalEscalated,
+			Guard: func(rc *RunContext) bool { return rc.PrepareFailKind == "escalated" }},
 		{From: loop.StepPrepare, Event: loop.EventPrepareFailed, To: loop.StepTerminalAborted,
-			Guard: func(rc *RunContext) bool { return !rc.WorktreeCreateFailed }},
-		// EventReady with no prior approval → run dev (initial or retry).
+			Guard: func(rc *RunContext) bool { return !rc.WorktreeCreateFailed && rc.PrepareFailKind == "" }},
+		// EventReady routes based on resume hydration.
 		{From: loop.StepPrepare, Event: loop.EventReady, To: loop.StepRunDev,
-			Guard: func(rc *RunContext) bool { return !rc.Resume || rc.ResumeVerdict != "approved" }},
-		// EventReady with a prior approval on resume → go straight to reviewer.
+			Guard: func(rc *RunContext) bool { return !rc.Resume || rc.ResumeVerdict == "changes_requested" }},
 		{From: loop.StepPrepare, Event: loop.EventReady, To: loop.StepRunReviewer,
+			Guard: func(rc *RunContext) bool { return rc.Resume && rc.ResumeVerdict == "" }},
+		{From: loop.StepPrepare, Event: loop.EventReady, To: loop.StepMergePR,
 			Guard: func(rc *RunContext) bool { return rc.Resume && rc.ResumeVerdict == "approved" }},
 
 		// RUN_DEV: success → wait for CI; gate retry while attempts remain.

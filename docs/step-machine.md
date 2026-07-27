@@ -61,6 +61,10 @@ type RunContext struct {
     // Valid values: "" (none / fresh), "approved", "changes_requested".
     ResumeVerdict string
 
+    // PrepareFailKind disambiguates PREPARE_FAILED outcomes.
+    // Valid values: "" (abort), "dev_failed", "review_failed", "escalated".
+    PrepareFailKind string
+
     // DevMode indicates whether RUN_DEV should use an initial or retry-with-findings prompt.
     DevMode DevMode
 }
@@ -73,10 +77,13 @@ Unconditional edges have no guard. Guarded edges are mutually exclusive within e
 | From | Event | To | Guard |
 |---|---|---|---|
 | `PREPARE` | `NOT_ELIGIBLE` | `TERMINAL_SKIPPED` | — |
-| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_DEV_FAILED` | `WorktreeCreateFailed` |
-| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_ABORTED` | `!WorktreeCreateFailed` |
-| `PREPARE` | `READY` | `RUN_DEV` | `!Resume \|\| ResumeVerdict != "approved"` |
-| `PREPARE` | `READY` | `RUN_REVIEWER` | `Resume && ResumeVerdict == "approved"` |
+| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_DEV_FAILED` | `PrepareFailKind == "dev_failed" || (WorktreeCreateFailed && PrepareFailKind == "")` |
+| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_REVIEW_FAILED` | `PrepareFailKind == "review_failed"` |
+| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_ESCALATED` | `PrepareFailKind == "escalated"` |
+| `PREPARE` | `PREPARE_FAILED` | `TERMINAL_ABORTED` | `!WorktreeCreateFailed && PrepareFailKind == ""` |
+| `PREPARE` | `READY` | `RUN_DEV` | `!Resume || ResumeVerdict == "changes_requested"` |
+| `PREPARE` | `READY` | `RUN_REVIEWER` | `Resume && ResumeVerdict == ""` |
+| `PREPARE` | `READY` | `MERGE_PR` | `Resume && ResumeVerdict == "approved"` |
 | `RUN_DEV` | `DEV_DONE` | `SYNC_CI` | — |
 | `RUN_DEV` | `DEV_FAILED` | `TERMINAL_DEV_FAILED` | — |
 | `RUN_DEV` | `DEV_GATE_REJECTED` | `RUN_DEV` | `DevAttempt < 2` |
@@ -135,7 +142,7 @@ The test `TestLoopTransitions_AC6_GuardDisjointness` in `internal/runner/loopdef
 
 - `internal/loop` is dependency-free (stdlib only, no import of `internal/runner`).
 - `internal/runner/loopdef.go` defines `RunContext`, `loopTransitions()`, `terminalOutcome()`, and `loopTerminals()`.
-- `internal/runner/step_prepare.go` implements `stepPrepare`: skip check → `--clean` cleanup → collision check (skipped in resume mode) → dev worktree creation.
-- Fresh runs in `Run()` start the machine at `PREPARE`; the resume fork (Slice 6) still bypasses `PREPARE` via `resumeOrchestrate`.
+- `internal/runner/step_prepare.go` implements `stepPrepare`: skip check → `--clean` cleanup → collision check (skipped in resume mode) → resume hydration or dev worktree creation.
+- `Run()` starts the machine at `PREPARE` for both fresh and resume runs.
 - `DevAttempt < 3` allows gate retries at attempts 0, 1, and 2 (3 total invocations). At attempt 3 the machine transitions to `TERMINAL_DEV_FAILED`.
 - `Round` starts at 1 and is incremented after each `RUN_REVIEWER` turn. The escalation boundary is `Round >= MaxRounds` (default `MaxRounds = 5`).
