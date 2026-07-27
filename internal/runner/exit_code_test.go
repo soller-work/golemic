@@ -15,6 +15,7 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 	"golemic/internal/prompt"
 )
 
@@ -146,7 +147,7 @@ func TestRunDevAgent_NonZeroExit_ReturnsDevFailed_AC002(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	outcome := r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	if outcome != outcomeDevFailed {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeDevFailed)
@@ -173,7 +174,7 @@ func TestRunDevAgent_NonZeroExit_ReviewerNotCalled_AC002(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	outcome := r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	outcome := r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	if outcome != outcomeDevFailed {
 		t.Fatalf("expected dev_failed, got %q", outcome)
@@ -233,7 +234,7 @@ func TestRunDevAgent_ExitCodeRecordedInEventLog_AC003(t *testing.T) {
 			})
 
 			golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-			r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+			r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 			// Zero-exit agents that skip gm_dev_done are retried up to 3 times;
 			// non-zero exits abort immediately and write exactly 1 event.
@@ -328,7 +329,7 @@ func TestRunDevAgent_NonZeroExit_DiagnosticNoStderrContent_AC005(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	msg := stderr.String()
 	if strings.Contains(msg, secret) {

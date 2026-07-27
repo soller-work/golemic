@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"golemic/internal/eventlog"
+	"golemic/internal/loop"
 	"golemic/internal/worktree"
 )
 
@@ -359,17 +360,17 @@ func (r *Runner) resumeOrchestrate(writer worktree.EventWriter, eventLogPath str
 		return outcomeAborted
 	}
 
-	return r.resumeHandleReviews(writer, eventLogPath, golemicDir, pr, botLogin, allReviews, timeout, runSpanID)
+	return r.resumeHandleReviews(writer, eventLogPath, pr, botLogin, allReviews, timeout, runSpanID)
 }
 
 // resumeHandleReviews chooses the next resume step based on the fetched review list.
-func (r *Runner) resumeHandleReviews(writer worktree.EventWriter, eventLogPath, golemicDir string, pr *prInfo, botLogin string, allReviews []githubReview, timeout time.Duration, runSpanID string) string {
+func (r *Runner) resumeHandleReviews(writer worktree.EventWriter, eventLogPath string, pr *prInfo, botLogin string, allReviews []githubReview, timeout time.Duration, runSpanID string) string {
 	submittedReviews := filterDecisionReviews(allReviews)
 	if len(submittedReviews) == 0 {
 		if o := r.runCIGate(pr.Number, eventLogPath, timeout); o != outcomeSuccess {
 			return o
 		}
-		return r.resumeStartReviewerTurn(writer, eventLogPath, golemicDir, pr.Number, botLogin, timeout, runSpanID)
+		return r.resumeStartReviewerTurn(pr.Number, botLogin)
 	}
 
 	lastReview := submittedReviews[len(submittedReviews)-1]
@@ -377,7 +378,7 @@ func (r *Runner) resumeHandleReviews(writer worktree.EventWriter, eventLogPath, 
 
 	switch lastReview.State {
 	case "CHANGES_REQUESTED":
-		return r.resumeHandleChangesRequested(writer, eventLogPath, golemicDir, pr.Number, submittedReviews, lastReview, botLogin, botRounds, timeout, runSpanID)
+		return r.resumeHandleChangesRequested(writer, eventLogPath, pr.Number, submittedReviews, lastReview, botLogin, botRounds, runSpanID)
 	case "APPROVED":
 		return r.resumeHandleApproved(writer, eventLogPath, pr, lastReview)
 	default:
@@ -387,12 +388,13 @@ func (r *Runner) resumeHandleReviews(writer worktree.EventWriter, eventLogPath, 
 }
 
 // resumeStartReviewerTurn proves pending review state and then starts the reviewer loop.
-func (r *Runner) resumeStartReviewerTurn(writer worktree.EventWriter, eventLogPath, golemicDir string, prNumber int, botLogin string, timeout time.Duration, runSpanID string) string {
+func (r *Runner) resumeStartReviewerTurn(prNumber int, botLogin string) string {
 	if err := r.resumePrepareReviewerTurn(prNumber, botLogin); err != nil {
 		fmt.Fprintf(r.stderr, "%v\n", err)
 		return outcomeAborted
 	}
-	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeout, runSpanID, true)
+	r.loopCtx.ReviewerWorktreeExists = true
+	return r.runMachineFrom(loop.StepRunReviewer, r.loopCtx)
 }
 
 // resumeCheckPRState validates the PR state for the resume path.
@@ -489,13 +491,12 @@ func (r *Runner) resumeSynthesizeBotCREvents(writer worktree.EventWriter, prNumb
 // resumeHandleChangesRequested handles the CHANGES_REQUESTED resume path.
 func (r *Runner) resumeHandleChangesRequested(
 	writer worktree.EventWriter,
-	eventLogPath, golemicDir string,
+	eventLogPath string,
 	prNumber int,
 	submittedReviews []githubReview,
 	lastReview githubReview,
 	botLogin string,
 	botRounds int,
-	timeout time.Duration,
 	runSpanID string,
 ) string {
 	if err := r.resumeSynthesizeBotCREvents(writer, prNumber, submittedReviews, botLogin); err != nil {
@@ -526,21 +527,13 @@ func (r *Runner) resumeHandleChangesRequested(
 		findings = "See inline review comments"
 	}
 
-	r.turnCounter++
 	r.loopCtx.Round = botRounds + 1
 	r.loopCtx.Findings = findings
 	r.loopCtx.FindingsJSON = findingsJSON
-	if o := r.runDevTurn(r.loopCtx, DevModeRetryWithFindings); o != outcomeSuccess {
-		return o
-	}
-
-	// Pre-review sync gate: ensure the dev branch is up to date with origin/main
-	// and CI is green before creating the reviewer worktree.
-	if o := r.runPreReviewSyncGate(writer, prNumber, eventLogPath, timeout); o != outcomeSuccess {
-		return o
-	}
-
-	return r.resumeStartReviewerTurn(writer, eventLogPath, golemicDir, prNumber, botLogin, timeout, runSpanID)
+	r.loopCtx.DevMode = DevModeRetryWithFindings
+	r.loopCtx.DevAttempt = 0
+	r.loopCtx.ReviewerWorktreeExists = true
+	return r.runMachineFrom(loop.StepRunDev, r.loopCtx)
 }
 
 // resumeHandleApproved handles the APPROVED resume path.
@@ -550,5 +543,5 @@ func (r *Runner) resumeHandleApproved(writer worktree.EventWriter, eventLogPath 
 		fmt.Fprintf(r.stderr, "resume: failed to write review_submitted event: %v\n", synthErr)
 		return outcomeAborted
 	}
-	return r.runMergePhase(writer, eventLogPath)
+	return r.runMachineFrom(loop.StepMergePR, r.loopCtx)
 }

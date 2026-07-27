@@ -15,6 +15,7 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/gmbroker"
+	"golemic/internal/loop"
 )
 
 // setupGMRunner creates a minimal runner for GM broker tests.
@@ -109,7 +110,7 @@ func TestGMToolsInAllowlist(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial})
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")
@@ -142,7 +143,7 @@ func TestGMSockEnvInjected(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial})
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")
@@ -186,7 +187,7 @@ func TestGMBrokerSocketCleanup(t *testing.T) {
 		return 0, agent.TranscriptPaths{}, nil
 	})
 
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial})
 
 	if capturedSock == "" {
 		t.Fatal("startGMBrokerFn was not called")
@@ -396,7 +397,7 @@ func TestGMCodeTools_PresentWhenCBMEnabled(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial})
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")
@@ -431,7 +432,7 @@ func TestGMCodeTools_AbsentWhenCBMDisabled(t *testing.T) {
 		captured = append(captured, cfg)
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: filepath.Join(runsDir, r.runID, "events.jsonl"), Timeout: 30 * time.Second, Round: 1, DevMode: DevModeInitial})
 
 	if len(captured) == 0 {
 		t.Fatal("agent was not called")

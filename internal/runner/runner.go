@@ -544,6 +544,7 @@ func (r *Runner) postModelChainExhaustedComment(prNumber int, chainErr *agent.Mo
 // orchestrate implements the bounded dev→reviewer ping-pong loop after collision check passes.
 // runSpanID is the parent telemetry span ID for all phases within orchestration.
 // Returns final outcome.
+// orchestrate creates the dev worktree and then drives the run via the loop machine.
 func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, runSpanID string) string {
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
 	var timeoutDuration time.Duration
@@ -564,8 +565,7 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 	}
 	endCreateDevWT(telemetry.StatusOK, nil)
 
-	// Round 1 dev
-	r.loopCtx = &RunContext{
+	ctx := &RunContext{
 		GolemicDir:   golemicDir,
 		EventLogPath: eventLogPath,
 		Timeout:      timeoutDuration,
@@ -573,67 +573,33 @@ func (r *Runner) orchestrate(writer worktree.EventWriter, eventLogPath string, r
 		Round:        1,
 		MaxRounds:    r.cfg.MaxReviewRounds,
 		Writer:       writer,
+		DevMode:      DevModeInitial,
 	}
-	devOutcome := r.runDevTurn(r.loopCtx, DevModeInitial)
-	if devOutcome != outcomeSuccess {
-		return devOutcome
-	}
-
-	if !r.hasPROpenedEvent(eventLogPath) {
-		fmt.Fprintf(r.stderr, "dev_failed: pr_opened event missing or invalid\n")
-		return outcomeDevFailed
-	}
-
-	// Pre-review sync gate: ensure the dev branch is up to date with origin/main
-	// and CI is green before allowing the reviewer to start.
-	prNumber, err := r.getPRNumber(eventLogPath)
-	if err != nil {
-		fmt.Fprintf(r.stderr, "dev_failed: failed to get PR number for pre-review sync gate: %v\n", err) //nolint:errcheck
-		return outcomeDevFailed
-	}
-	if o := r.runPreReviewSyncGate(writer, prNumber, eventLogPath, timeoutDuration); o != outcomeSuccess {
-		return o
-	}
-
-	return r.pingPongLoop(golemicDir, eventLogPath, writer, timeoutDuration, runSpanID, false)
+	r.loopCtx = ctx
+	return r.runMachineFrom(loop.StepRunDev, ctx)
 }
 
-// pingPongLoop is a thin adapter around stepRunReviewer; deleted in Slice 4.
-func (r *Runner) pingPongLoop(golemicDir, eventLogPath string, writer worktree.EventWriter, timeout time.Duration, runSpanID string, cleanupBeforeFirstReviewerRound bool) string {
-	ctx := r.loopCtx
-	ctx.Writer = writer
-	ctx.ReviewerWorktreeExists = cleanupBeforeFirstReviewerRound
-	for {
-		switch ev := r.stepRunReviewer(ctx); ev {
-		case loop.EventReviewApproved:
-			return r.runMergePhase(writer, eventLogPath)
-		case loop.EventChangesRequested, loop.EventPrecheckFailed:
-			if ctx.Round >= ctx.MaxRounds {
-				return outcomeEscalated
-			}
-			ctx.Round++ // advance to next round before dev-retry
-			r.turnCounter++
-			if o := r.runDevTurn(ctx, DevModeRetryWithFindings); o != outcomeSuccess {
-				return o
-			}
-			prNumber, prErr := r.getPRNumber(ctx.EventLogPath)
-			if prErr != nil {
-				fmt.Fprintf(r.stderr, "dev_failed: pre-review sync: get PR number: %v\n", prErr) //nolint:errcheck
-				return outcomeDevFailed
-			}
-			if o := r.runPreReviewSyncGate(writer, prNumber, ctx.EventLogPath, ctx.Timeout); o != outcomeSuccess {
-				return o
-			}
-		case loop.EventReviewFailed:
-			return outcomeReviewFailed
-		case loop.EventAgentTimedOut:
-			return outcomeTimeout
-		case loop.EventAgentStalled:
-			return outcomeStalled
-		case loop.EventAgentAborted:
-			return outcomeAborted
-		}
+// runMachineFrom runs the loop machine starting at start, walking to a terminal.
+// A StateError from the machine is printed to stderr and yields outcomeDevFailed.
+func (r *Runner) runMachineFrom(start loop.StepKey, ctx *RunContext) string {
+	m := &loop.Machine[RunContext]{
+		Transitions: loopTransitions(),
+		Handlers: map[loop.StepKey]func(*RunContext) loop.EventKey{
+			loop.StepRunDev:      r.stepRunDev,
+			loop.StepSyncCI:      r.stepSyncCI,
+			loop.StepRunReviewer: r.stepRunReviewer,
+			loop.StepMergePR:     r.stepMergePR,
+		},
+		Start:     start,
+		Terminals: loopTerminals(),
 	}
+	final, err := m.Run(ctx)
+	if err != nil {
+		fmt.Fprintf(r.stderr, "%v\n", err) //nolint:errcheck
+		return outcomeDevFailed
+	}
+	outcome, _ := terminalOutcome(final)
+	return outcome
 }
 
 func (r *Runner) prepareReviewerWorktree(golemicDir string, writer worktree.EventWriter, runSpanID string, cleanupBeforeFirstReviewerRound bool) (string, string) {

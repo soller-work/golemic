@@ -24,6 +24,10 @@ import (
 //	agent thinking-loop            → loop.EventAgentAborted
 //	anything else                  → loop.EventDevFailed
 func (r *Runner) stepRunDev(ctx *RunContext) loop.EventKey {
+	if ctx.DevAttempt == 0 && ctx.DevMode == DevModeRetryWithFindings {
+		r.turnCounter++
+		ctx.Round++
+	}
 	systemPromptFile, model, cleanupPrompt, err := r.resolveAgentFile("dev")
 	if err != nil {
 		fmt.Fprintf(r.stderr, "dev_failed: %v\n", err) //nolint:errcheck
@@ -60,6 +64,9 @@ func (r *Runner) stepRunDev(ctx *RunContext) loop.EventKey {
 	case loop.EventDevGateRejected:
 		ctx.GateReason = gateReason
 		ctx.DevAttempt++
+		if ctx.DevAttempt >= 3 {
+			fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", ctx.GateReason) //nolint:errcheck
+		}
 		return loop.EventDevGateRejected
 	default:
 		return ev
@@ -78,31 +85,4 @@ func (r *Runner) renderDevPrompt(ctx *RunContext, cbmEnabled bool) (string, erro
 		return prompt.RenderDevRetry(ctx.Findings, ctx.FindingsJSON, issue, r.branchName, r.cfg.VerifyCommand, guidelinesPath, cbmEnabled)
 	}
 	return prompt.RenderDev(issue, r.branchName, r.cfg.VerifyCommand, guidelinesPath, cbmEnabled)
-}
-
-// runDevTurn drives stepRunDev through the bounded gate-retry budget (3
-// invocations) and converts the final event back to a legacy outcome string.
-// This adapter is deleted in Slice 4 when the machine owns the self-loop.
-func (r *Runner) runDevTurn(ctx *RunContext, mode DevMode) string {
-	ctx.DevMode, ctx.DevAttempt = mode, 0
-	for {
-		ev := r.stepRunDev(ctx)
-		switch ev {
-		case loop.EventDevDone:
-			return outcomeSuccess
-		case loop.EventDevGateRejected:
-			if ctx.DevAttempt >= 3 {
-				fmt.Fprintf(r.stderr, "dev_failed: dev did not complete gm_dev_done after 3 invocations: %s\n", ctx.GateReason) //nolint:errcheck
-				return outcomeDevFailed
-			}
-		case loop.EventAgentTimedOut:
-			return outcomeTimeout
-		case loop.EventAgentStalled:
-			return outcomeStalled
-		case loop.EventAgentAborted:
-			return outcomeAborted
-		default:
-			return outcomeDevFailed
-		}
-	}
 }

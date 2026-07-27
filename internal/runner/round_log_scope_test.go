@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"golemic/internal/agent"
+	"golemic/internal/loop"
 )
 
 // TestRoundLogScope_ConfigCarriesRoundAndAttempt verifies that buildDevAgentConfig
@@ -78,9 +79,9 @@ func TestRoundLogScope_TwoAttemptsProduceDistinctFiles(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	// All attempts will produce EventDevGateRejected so runDevTurn returns outcomeDevFailed,
+	// All attempts will produce EventDevGateRejected so the machine terminates at TERMINAL_DEV_FAILED,
 	// but no git operations are needed.
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	if callCount < 2 {
 		t.Fatalf("expected at least 2 agent invocations (attempt 0 and 1), got %d", callCount)
@@ -127,7 +128,7 @@ func TestRoundLogScope_AgentCompletedEventHasPaths(t *testing.T) {
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	r.runDevTurn(&RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1}, DevModeInitial)
+	r.runMachineFrom(loop.StepRunDev, &RunContext{GolemicDir: golemicDir, EventLogPath: logPath, Timeout: 5 * time.Minute, Round: 1, DevMode: DevModeInitial})
 
 	events := readAgentCompletedEvents(t, logPath)
 	if len(events) == 0 {
