@@ -327,7 +327,7 @@ func TestRunMergePhase_RebaseConflict_AutomergeFailed_AC006(t *testing.T) { //no
 				return "", fmt.Errorf("fatal: cannot rebase")
 			}
 			if name == "git" && args[0] == "status" && len(args) >= 2 && args[1] == "--porcelain" {
-				return "", nil // no U-status entries → not a merge conflict (AC-005)
+				return "", nil // no U-status entries → not a merge conflict
 			}
 			if name == "git" && args[0] == "rebase" && len(args) >= 2 && args[1] == "--abort" {
 				abortCalled = true
