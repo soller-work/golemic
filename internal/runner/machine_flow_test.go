@@ -357,7 +357,7 @@ func runOrchestrate(t *testing.T, r *Runner, logPath string) string {
 // AC-001: Approved in round 1 ends as success
 // ---------------------------------------------------------------------------
 
-func TestPingPong_ApprovedRound1_AC001(t *testing.T) {
+func TestMachineFlow_ApprovedRound1(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -380,7 +380,7 @@ func TestPingPong_ApprovedRound1_AC001(t *testing.T) {
 // AC-002: Changes requested then approved in round 2 ends as success
 // ---------------------------------------------------------------------------
 
-func TestPingPong_ChangesRequestedThenApproved_AC002(t *testing.T) {
+func TestMachineFlow_ChangesRequestedThenApproved(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 	capture := &promptCapture{}
@@ -414,7 +414,7 @@ func TestPingPong_ChangesRequestedThenApproved_AC002(t *testing.T) {
 // AC-203: Normal ping-pong still cleans reviewer worktrees between rounds.
 // ---------------------------------------------------------------------------
 
-func TestPingPong_ChangesRequestedThenApproved_CleansReviewerWorktreeBetweenRounds_AC203(t *testing.T) {
+func TestMachineFlow_ChangesRequestedThenApproved_CleansReviewerWorktreeBetweenRounds(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 	capture := &promptCapture{}
@@ -469,7 +469,7 @@ func assertEscalationComment(t *testing.T, comment string, issueNum, prNum, roun
 // AC-003: Three unsatisfied rounds escalate with PR comment
 // ---------------------------------------------------------------------------
 
-func TestPingPong_ThreeChangesRequestedEscalates_AC003(t *testing.T) {
+func TestMachineFlow_ThreeChangesRequestedEscalates(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 	capture := &promptCapture{}
@@ -503,7 +503,7 @@ func TestPingPong_ThreeChangesRequestedEscalates_AC003(t *testing.T) {
 // AC-004: Dev failure inside a retry round terminates as dev_failed
 // ---------------------------------------------------------------------------
 
-func TestPingPong_DevFailureInRetryRound_AC004(t *testing.T) {
+func TestMachineFlow_DevFailureInRetryRound(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -527,7 +527,7 @@ func TestPingPong_DevFailureInRetryRound_AC004(t *testing.T) {
 // AC-005: Reviewer timeout inside a retry round terminates as timeout
 // ---------------------------------------------------------------------------
 
-func TestPingPong_ReviewerTimeoutInRetryRound_AC005(t *testing.T) {
+func TestMachineFlow_ReviewerTimeoutInRetryRound(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -552,7 +552,7 @@ func TestPingPong_ReviewerTimeoutInRetryRound_AC005(t *testing.T) {
 // AC-006: Dev and Reviewer stall detection → outcome "stalled" + diagnostic
 // ---------------------------------------------------------------------------
 
-func TestPingPong_DevStallDetection_AC006a(t *testing.T) {
+func TestMachineFlow_DevStallDetection(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -570,7 +570,7 @@ func TestPingPong_DevStallDetection_AC006a(t *testing.T) {
 	}
 }
 
-func TestPingPong_ReviewerStallDetection_AC006b(t *testing.T) {
+func TestMachineFlow_ReviewerStallDetection(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -593,7 +593,7 @@ func TestPingPong_ReviewerStallDetection_AC006b(t *testing.T) {
 // P2-1: Dev-retry stall detection → outcome "stalled" + diagnostic
 // ---------------------------------------------------------------------------
 
-func TestPingPong_DevRetryStallDetection_P2_1a(t *testing.T) {
+func TestMachineFlow_DevRetryStallDetection(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -617,7 +617,7 @@ func TestPingPong_DevRetryStallDetection_P2_1a(t *testing.T) {
 // AC-007: Empty findings body terminates review_failed
 // ---------------------------------------------------------------------------
 
-func TestPingPong_EmptyFindings_AC007(t *testing.T) {
+func TestMachineFlow_EmptyFindings(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -640,7 +640,7 @@ func TestPingPong_EmptyFindings_AC007(t *testing.T) {
 // AC-203: Active reviewer-turn dirtiness still fails the current run.
 // ---------------------------------------------------------------------------
 
-func TestPingPong_ReviewerTurnDirtyCheckFails_AC203(t *testing.T) {
+func TestMachineFlow_ReviewerTurnDirtyCheckFails(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 	r, logPath, stderr := setupPingPongRunner(t, exec)
@@ -801,7 +801,7 @@ func TestLatestReviewBody(t *testing.T) {
 // Issue-148: max_review_rounds configurable, default 5
 // ---------------------------------------------------------------------------
 
-func TestPingPong_FiveChangesRequestedEscalates_Default(t *testing.T) {
+func TestMachineFlow_FiveChangesRequestedEscalates_Default(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 	capture := &promptCapture{}
@@ -836,7 +836,7 @@ func TestPingPong_FiveChangesRequestedEscalates_Default(t *testing.T) {
 	assertEscalationComment(t, commentCalls[0], 42, 99, 5)
 }
 
-func TestPingPong_ExplicitMaxRounds2_Escalates(t *testing.T) {
+func TestMachineFlow_ExplicitMaxRounds2_Escalates(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -860,7 +860,7 @@ func TestPingPong_ExplicitMaxRounds2_Escalates(t *testing.T) {
 	assertEscalationComment(t, commentCalls[0], 42, 99, 2)
 }
 
-func TestPingPong_ApprovalBeforeLimit_NoEscalation(t *testing.T) {
+func TestMachineFlow_ApprovalBeforeLimit_NoEscalation(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
 
@@ -933,7 +933,7 @@ func countGitForcePushCalls(calls []callRecord) int {
 // TestPingPong_NoChangeDevRetry_SurvivesAndRereviews verifies that a dev-retry
 // that produces no working-tree changes does not crash with a commit error and
 // instead loops back to the reviewer for another round.
-func TestPingPong_NoChangeDevRetry_SurvivesAndRereviews(t *testing.T) {
+func TestMachineFlow_NoChangeDevRetry_SurvivesAndRereviews(t *testing.T) {
 	var commentCalls []string
 	exec := noChangePingPongExecutor(&commentCalls)
 
@@ -965,7 +965,7 @@ func TestPingPong_NoChangeDevRetry_SurvivesAndRereviews(t *testing.T) {
 
 // TestPingPong_NonEmptyDevRetry_StillCommitsAndPushes verifies that a dev-retry
 // that DOES produce working-tree changes still stages, commits, and force-pushes.
-func TestPingPong_NonEmptyDevRetry_StillCommitsAndPushes(t *testing.T) {
+func TestMachineFlow_NonEmptyDevRetry_StillCommitsAndPushes(t *testing.T) {
 	var commentCalls []string
 	// Use the standard executor: git diff --cached --quiet is not mocked, so it
 	// returns an error, which the fix interprets as "has staged changes".
@@ -996,7 +996,7 @@ func TestPingPong_NonEmptyDevRetry_StillCommitsAndPushes(t *testing.T) {
 // TestPingPong_RepeatedNoChangeRetries_BoundedByMaxRounds verifies that repeated
 // no-change dev-retries are bounded by MaxReviewRounds and escalate rather than
 // looping indefinitely.
-func TestPingPong_RepeatedNoChangeRetries_BoundedByMaxRounds(t *testing.T) {
+func TestMachineFlow_RepeatedNoChangeRetries_BoundedByMaxRounds(t *testing.T) {
 	var commentCalls []string
 	exec := noChangePingPongExecutor(&commentCalls)
 
