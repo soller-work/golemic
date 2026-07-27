@@ -19,23 +19,25 @@ const (
 )
 
 const (
-	EventReady            EventKey = "READY"
-	EventNotEligible      EventKey = "NOT_ELIGIBLE"
-	EventPrepareFailed    EventKey = "PREPARE_FAILED"
-	EventDevDone          EventKey = "DEV_DONE"
-	EventDevGateRejected  EventKey = "DEV_GATE_REJECTED"
-	EventDevFailed        EventKey = "DEV_FAILED"
-	EventCIGreen          EventKey = "CI_GREEN"
-	EventCIFailed         EventKey = "CI_FAILED"
-	EventReviewApproved   EventKey = "REVIEW_APPROVED"
-	EventChangesRequested EventKey = "CHANGES_REQUESTED"
-	EventPrecheckFailed   EventKey = "PRECHECK_FAILED"
-	EventReviewFailed     EventKey = "REVIEW_FAILED"
-	EventMerged           EventKey = "MERGED"
-	EventMergeFailed      EventKey = "MERGE_FAILED"
-	EventAgentTimedOut    EventKey = "AGENT_TIMED_OUT"
-	EventAgentStalled     EventKey = "AGENT_STALLED"
-	EventAgentAborted     EventKey = "AGENT_ABORTED"
+	EventReady              EventKey = "READY"
+	EventNotEligible        EventKey = "NOT_ELIGIBLE"
+	EventPrepareFailed      EventKey = "PREPARE_FAILED"
+	EventDevDone            EventKey = "DEV_DONE"
+	EventDevGateRejected    EventKey = "DEV_GATE_REJECTED"
+	EventDevFailed          EventKey = "DEV_FAILED"
+	EventCIGreen            EventKey = "CI_GREEN"
+	EventCIFailed           EventKey = "CI_FAILED"
+	EventReviewApproved     EventKey = "REVIEW_APPROVED"
+	EventChangesRequested   EventKey = "CHANGES_REQUESTED"
+	EventPrecheckFailed     EventKey = "PRECHECK_FAILED"
+	EventReviewFailed       EventKey = "REVIEW_FAILED"
+	EventMerged             EventKey = "MERGED"
+	EventMergeFailed        EventKey = "MERGE_FAILED"
+	EventConflictResolved   EventKey = "CONFLICT_RESOLVED"
+	EventConflictUnresolved EventKey = "CONFLICT_UNRESOLVED"
+	EventAgentTimedOut      EventKey = "AGENT_TIMED_OUT"
+	EventAgentStalled       EventKey = "AGENT_STALLED"
+	EventAgentAborted       EventKey = "AGENT_ABORTED"
 )
 
 // AllSteps returns every declared StepKey. A new step must be added here.
@@ -55,6 +57,7 @@ func AllEvents() []EventKey {
 		EventDevGateRejected, EventDevFailed, EventCIGreen, EventCIFailed,
 		EventReviewApproved, EventChangesRequested, EventPrecheckFailed,
 		EventReviewFailed, EventMerged, EventMergeFailed,
+		EventConflictResolved, EventConflictUnresolved,
 		EventAgentTimedOut, EventAgentStalled, EventAgentAborted,
 	}
 }

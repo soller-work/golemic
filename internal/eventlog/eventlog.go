@@ -152,6 +152,7 @@ type automergeConflictRetryData struct {
 	ConflictedFiles []string `json:"conflictedFiles"`
 	Result          string   `json:"result"`
 	TurnID          int      `json:"turnId"`
+	Attempt         int      `json:"attempt"`
 }
 
 // ValidateAutomergeConflictRetryPayload checks that the payload has non-empty conflictedFiles
@@ -176,8 +177,8 @@ func ValidateAutomergeConflictRetryPayload(raw json.RawMessage) error {
 }
 
 // MarshalAutomergeConflictRetryPayload encodes an automerge_conflict_retry payload.
-func MarshalAutomergeConflictRetryPayload(conflictedFiles []string, result string, turnID int) (json.RawMessage, error) {
-	return json.Marshal(automergeConflictRetryData{ConflictedFiles: conflictedFiles, Result: result, TurnID: turnID})
+func MarshalAutomergeConflictRetryPayload(conflictedFiles []string, result string, turnID, attempt int) (json.RawMessage, error) {
+	return json.Marshal(automergeConflictRetryData{ConflictedFiles: conflictedFiles, Result: result, TurnID: turnID, Attempt: attempt})
 }
 
 // agentCompletedData is the payload shape for agent_completed events.

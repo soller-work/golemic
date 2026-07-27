@@ -201,6 +201,8 @@ func TestPreReviewSync_InitialPath_StaleBranch_ConflictFailsClosed(t *testing.T)
 	exec := stalePingPongExecutorWithConflict(&commentCalls)
 
 	r, logPath, stderr := setupPingPongRunner(t, exec)
+	// Cap=1 reproduces the single-attempt behavior: one failed resolution → dev_failed.
+	r.cfg.MaxConflictResolutionAttempts = 1
 	// dev agent exits 0 for initial dev, then exits 1 for conflict resolution.
 	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
 		{role: "dev", exitCode: 0},

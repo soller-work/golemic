@@ -68,6 +68,17 @@ type RunContext struct {
 	// ReviewerWorktreeExists tracks whether a reviewer worktree was already
 	// created in this session so subsequent rounds clean it up first.
 	ReviewerWorktreeExists bool
+
+	// InMergeReReview is true when the machine is in a post-merge-conflict
+	// re-review cycle (MERGE_PR resolved a conflict and routed to RUN_REVIEWER).
+	InMergeReReview bool
+
+	// MergeReReviewRound counts reviewer turns taken during the merge re-review
+	// phase, independent of Round/MaxRounds.
+	MergeReReviewRound int
+
+	// MaxMergeReReviewRounds caps the merge re-review budget.
+	MaxMergeReReviewRounds int
 }
 
 // loopTerminals returns the set of terminal steps.
@@ -147,31 +158,51 @@ func loopTransitions() []loop.Transition[RunContext] {
 		{From: loop.StepRunDev, Event: loop.EventAgentStalled, To: loop.StepTerminalStalled},
 		{From: loop.StepRunDev, Event: loop.EventAgentAborted, To: loop.StepTerminalAborted},
 
-		// SYNC_CI: green → reviewer; failure → dev failed.
+		// SYNC_CI: green → reviewer; conflict unresolved or other failure → dev failed.
 		{From: loop.StepSyncCI, Event: loop.EventCIGreen, To: loop.StepRunReviewer},
 		{From: loop.StepSyncCI, Event: loop.EventCIFailed, To: loop.StepTerminalDevFailed},
+		{From: loop.StepSyncCI, Event: loop.EventConflictUnresolved, To: loop.StepTerminalDevFailed},
 		{From: loop.StepSyncCI, Event: loop.EventAgentTimedOut, To: loop.StepTerminalTimeout},
 		{From: loop.StepSyncCI, Event: loop.EventAgentStalled, To: loop.StepTerminalStalled},
 		{From: loop.StepSyncCI, Event: loop.EventAgentAborted, To: loop.StepTerminalAborted},
 
 		// RUN_REVIEWER: approved → merge; changes/precheck → retry dev or escalate.
+		// Pre-approval path uses Round/MaxRounds; merge re-review uses MergeReReviewRound/MaxMergeReReviewRounds.
 		{From: loop.StepRunReviewer, Event: loop.EventReviewApproved, To: loop.StepMergePR},
 		{From: loop.StepRunReviewer, Event: loop.EventReviewFailed, To: loop.StepTerminalReviewFailed},
 		{From: loop.StepRunReviewer, Event: loop.EventChangesRequested, To: loop.StepRunDev,
-			Guard: func(rc *RunContext) bool { return rc.Round < rc.MaxRounds }},
+			Guard: func(rc *RunContext) bool { return !rc.InMergeReReview && rc.Round < rc.MaxRounds }},
 		{From: loop.StepRunReviewer, Event: loop.EventChangesRequested, To: loop.StepTerminalEscalated,
-			Guard: func(rc *RunContext) bool { return rc.Round >= rc.MaxRounds }},
+			Guard: func(rc *RunContext) bool { return !rc.InMergeReReview && rc.Round >= rc.MaxRounds }},
+		{From: loop.StepRunReviewer, Event: loop.EventChangesRequested, To: loop.StepRunDev,
+			Guard: func(rc *RunContext) bool {
+				return rc.InMergeReReview && rc.MergeReReviewRound < rc.MaxMergeReReviewRounds
+			}},
+		{From: loop.StepRunReviewer, Event: loop.EventChangesRequested, To: loop.StepTerminalEscalated,
+			Guard: func(rc *RunContext) bool {
+				return rc.InMergeReReview && rc.MergeReReviewRound >= rc.MaxMergeReReviewRounds
+			}},
 		{From: loop.StepRunReviewer, Event: loop.EventPrecheckFailed, To: loop.StepRunDev,
-			Guard: func(rc *RunContext) bool { return rc.Round < rc.MaxRounds }},
+			Guard: func(rc *RunContext) bool { return !rc.InMergeReReview && rc.Round < rc.MaxRounds }},
 		{From: loop.StepRunReviewer, Event: loop.EventPrecheckFailed, To: loop.StepTerminalEscalated,
-			Guard: func(rc *RunContext) bool { return rc.Round >= rc.MaxRounds }},
+			Guard: func(rc *RunContext) bool { return !rc.InMergeReReview && rc.Round >= rc.MaxRounds }},
+		{From: loop.StepRunReviewer, Event: loop.EventPrecheckFailed, To: loop.StepRunDev,
+			Guard: func(rc *RunContext) bool {
+				return rc.InMergeReReview && rc.MergeReReviewRound < rc.MaxMergeReReviewRounds
+			}},
+		{From: loop.StepRunReviewer, Event: loop.EventPrecheckFailed, To: loop.StepTerminalEscalated,
+			Guard: func(rc *RunContext) bool {
+				return rc.InMergeReReview && rc.MergeReReviewRound >= rc.MaxMergeReReviewRounds
+			}},
 		{From: loop.StepRunReviewer, Event: loop.EventAgentTimedOut, To: loop.StepTerminalTimeout},
 		{From: loop.StepRunReviewer, Event: loop.EventAgentStalled, To: loop.StepTerminalStalled},
 		{From: loop.StepRunReviewer, Event: loop.EventAgentAborted, To: loop.StepTerminalAborted},
 
-		// MERGE_PR: merged → success; otherwise terminal.
+		// MERGE_PR: merged → success; conflict resolved → re-review; conflict unresolved → dev failed.
 		{From: loop.StepMergePR, Event: loop.EventMerged, To: loop.StepTerminalSuccess},
 		{From: loop.StepMergePR, Event: loop.EventMergeFailed, To: loop.StepTerminalMergeFailed},
+		{From: loop.StepMergePR, Event: loop.EventConflictResolved, To: loop.StepRunReviewer},
+		{From: loop.StepMergePR, Event: loop.EventConflictUnresolved, To: loop.StepTerminalDevFailed},
 		{From: loop.StepMergePR, Event: loop.EventAgentTimedOut, To: loop.StepTerminalTimeout},
 		{From: loop.StepMergePR, Event: loop.EventAgentStalled, To: loop.StepTerminalStalled},
 		{From: loop.StepMergePR, Event: loop.EventAgentAborted, To: loop.StepTerminalAborted},

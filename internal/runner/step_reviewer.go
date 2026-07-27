@@ -79,6 +79,9 @@ func (r *Runner) stepRunReviewer(ctx *RunContext) loop.EventKey {
 	}
 
 	ctx.Round = r.countReviewSubmittedEvents(ctx.EventLogPath)
+	if ctx.InMergeReReview {
+		ctx.MergeReReviewRound++
+	}
 	return r.reviewerVerdictEvent(ctx, rnd.roundHeadSHA)
 }
 
@@ -155,14 +158,22 @@ func (r *Runner) runReviewerAttemptLoop(ctx *RunContext, reviewerWT string, prNu
 }
 
 // reviewerPrecheckEvent handles a !ok precheck: writes a synthetic review_submitted event,
-// updates ctx.Round, then escalates or configures findings for a dev-retry.
+// updates ctx.Round (and MergeReReviewRound when in merge re-review), then escalates
+// or configures findings for a dev-retry.
 func (r *Runner) reviewerPrecheckEvent(ctx *RunContext, currentRound int, res *reviewerPrecheckResult) loop.EventKey {
 	if err := r.writePrecheckReviewSubmittedEvent(ctx.EventLogPath, currentRound); err != nil {
 		fmt.Fprintf(r.stderr, "review_failed: write precheck review_submitted: %v\n", err) //nolint:errcheck
 		return loop.EventReviewFailed
 	}
 	ctx.Round = r.countReviewSubmittedEvents(ctx.EventLogPath)
-	if ctx.Round >= ctx.MaxRounds {
+	var escalate bool
+	if ctx.InMergeReReview {
+		ctx.MergeReReviewRound++
+		escalate = ctx.MergeReReviewRound >= ctx.MaxMergeReReviewRounds
+	} else {
+		escalate = ctx.Round >= ctx.MaxRounds
+	}
+	if escalate {
 		r.postEscalationCommentWithSpan(ctx.EventLogPath, ctx.ParentSpanID, ctx.Round)
 		return loop.EventPrecheckFailed
 	}
@@ -185,7 +196,13 @@ func (r *Runner) reviewerVerdictEvent(ctx *RunContext, roundHeadSHA string) loop
 	case "approved":
 		return loop.EventReviewApproved
 	case "changes_requested":
-		if ctx.Round >= ctx.MaxRounds {
+		var escalate bool
+		if ctx.InMergeReReview {
+			escalate = ctx.MergeReReviewRound >= ctx.MaxMergeReReviewRounds
+		} else {
+			escalate = ctx.Round >= ctx.MaxRounds
+		}
+		if escalate {
 			r.postEscalationCommentWithSpan(ctx.EventLogPath, ctx.ParentSpanID, ctx.Round)
 			return loop.EventChangesRequested
 		}

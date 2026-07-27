@@ -681,35 +681,35 @@ func searchString(s, substr string) bool {
 // ---------------------------------------------------------------------------
 
 func TestValidateAutomergeConflictRetryPayload_ValidResolved(t *testing.T) {
-	payload, _ := MarshalAutomergeConflictRetryPayload([]string{"foo.go"}, "resolved", 1)
+	payload, _ := MarshalAutomergeConflictRetryPayload([]string{"foo.go"}, "resolved", 1, 1)
 	if err := ValidateAutomergeConflictRetryPayload(payload); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
 
 func TestValidateAutomergeConflictRetryPayload_ValidUnresolved(t *testing.T) {
-	payload, _ := MarshalAutomergeConflictRetryPayload([]string{"foo.go", "bar.go"}, "unresolved", 2)
+	payload, _ := MarshalAutomergeConflictRetryPayload([]string{"foo.go", "bar.go"}, "unresolved", 2, 1)
 	if err := ValidateAutomergeConflictRetryPayload(payload); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
 
 func TestValidateAutomergeConflictRetryPayload_EmptyConflictedFiles(t *testing.T) {
-	payload, _ := MarshalAutomergeConflictRetryPayload([]string{}, "resolved", 1)
+	payload, _ := MarshalAutomergeConflictRetryPayload([]string{}, "resolved", 1, 1)
 	if err := ValidateAutomergeConflictRetryPayload(payload); err == nil {
 		t.Error("expected error for empty conflictedFiles, got nil")
 	}
 }
 
 func TestValidateAutomergeConflictRetryPayload_NilConflictedFiles(t *testing.T) {
-	payload, _ := MarshalAutomergeConflictRetryPayload(nil, "resolved", 1)
+	payload, _ := MarshalAutomergeConflictRetryPayload(nil, "resolved", 1, 1)
 	if err := ValidateAutomergeConflictRetryPayload(payload); err == nil {
 		t.Error("expected error for nil conflictedFiles, got nil")
 	}
 }
 
 func TestValidateAutomergeConflictRetryPayload_InvalidResult(t *testing.T) {
-	payload, _ := MarshalAutomergeConflictRetryPayload([]string{"foo.go"}, "pending", 1)
+	payload, _ := MarshalAutomergeConflictRetryPayload([]string{"foo.go"}, "pending", 1, 1)
 	if err := ValidateAutomergeConflictRetryPayload(payload); err == nil {
 		t.Error("expected error for invalid result, got nil")
 	}
@@ -731,7 +731,7 @@ func TestWriteAutomergeConflictRetry_RejectsInvalidPayload(t *testing.T) {
 	defer w.Close() //nolint:errcheck
 
 	// empty conflictedFiles → invalid
-	payload, _ := MarshalAutomergeConflictRetryPayload([]string{}, "resolved", 1)
+	payload, _ := MarshalAutomergeConflictRetryPayload([]string{}, "resolved", 1, 1)
 	if err := w.Write(Event{
 		Type:    EventAutomergeConflictRetry,
 		Ts:      "2024-01-01T00:00:00Z",
@@ -749,7 +749,7 @@ func TestWriteAutomergeConflictRetry_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, err := MarshalAutomergeConflictRetryPayload([]string{"foo.go", "bar.go"}, "resolved", 3)
+	payload, err := MarshalAutomergeConflictRetryPayload([]string{"foo.go", "bar.go"}, "resolved", 3, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
