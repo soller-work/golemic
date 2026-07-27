@@ -36,49 +36,53 @@ func (r *Runner) countReviewSubmittedEvents(eventLogPath string) int {
 	return count
 }
 
-// latestReviewID reads the reviewId field from the most recent review_submitted event.
-func (r *Runner) latestReviewID(eventLogPath string) (string, error) {
+// lastReviewSubmittedPayload returns the JSON payload of the most recent
+// review_submitted event, or a NO_VALID_REVIEW error if none exists.
+func (r *Runner) lastReviewSubmittedPayload(eventLogPath string) ([]byte, error) {
 	reader := eventlog.Reader{}
 	events, err := reader.Read(eventLogPath)
 	if err != nil {
-		return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
+		return nil, fmt.Errorf("NO_VALID_REVIEW: %w", err)
 	}
 	for i := len(events) - 1; i >= 0; i-- {
 		if events[i].Type == eventlog.EventReviewSubmitted {
-			var d struct {
-				ReviewID string `json:"reviewId"`
-			}
-			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
-				return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
-			}
-			if d.ReviewID == "" {
-				return "", fmt.Errorf("NO_VALID_REVIEW: reviewId is empty in review_submitted event")
-			}
-			return d.ReviewID, nil
+			return events[i].Payload, nil
 		}
 	}
-	return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")
+	return nil, fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")
+}
+
+// latestReviewID reads the reviewId field from the most recent review_submitted event.
+func (r *Runner) latestReviewID(eventLogPath string) (string, error) {
+	payload, err := r.lastReviewSubmittedPayload(eventLogPath)
+	if err != nil {
+		return "", err
+	}
+	var d struct {
+		ReviewID string `json:"reviewId"`
+	}
+	if err := json.Unmarshal(payload, &d); err != nil {
+		return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
+	}
+	if d.ReviewID == "" {
+		return "", fmt.Errorf("NO_VALID_REVIEW: reviewId is empty in review_submitted event")
+	}
+	return d.ReviewID, nil
 }
 
 // latestReviewBody reads the body field from the most recent review_submitted event.
 func (r *Runner) latestReviewBody(eventLogPath string) (string, error) {
-	reader := eventlog.Reader{}
-	events, err := reader.Read(eventLogPath)
+	payload, err := r.lastReviewSubmittedPayload(eventLogPath)
 	if err != nil {
+		return "", err
+	}
+	var d struct {
+		Body string `json:"body"`
+	}
+	if err := json.Unmarshal(payload, &d); err != nil {
 		return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
 	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type == eventlog.EventReviewSubmitted {
-			var d struct {
-				Body string `json:"body"`
-			}
-			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
-				return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
-			}
-			return d.Body, nil
-		}
-	}
-	return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")
+	return d.Body, nil
 }
 
 // hasPROpenedEvent checks if a valid pr_opened event exists in the log.
@@ -102,23 +106,17 @@ func (r *Runner) hasPROpenedEvent(eventLogPath string) bool {
 
 // latestConfidence reads the confidence field from the most recent review_submitted event.
 func (r *Runner) latestConfidence(eventLogPath string) (string, error) {
-	reader := eventlog.Reader{}
-	events, err := reader.Read(eventLogPath)
+	payload, err := r.lastReviewSubmittedPayload(eventLogPath)
 	if err != nil {
+		return "", err
+	}
+	var d struct {
+		Confidence string `json:"confidence"`
+	}
+	if err := json.Unmarshal(payload, &d); err != nil {
 		return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
 	}
-	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type == eventlog.EventReviewSubmitted {
-			var d struct {
-				Confidence string `json:"confidence"`
-			}
-			if err := json.Unmarshal(events[i].Payload, &d); err != nil {
-				return "", fmt.Errorf("NO_VALID_REVIEW: %w", err)
-			}
-			return d.Confidence, nil
-		}
-	}
-	return "", fmt.Errorf("NO_VALID_REVIEW: no review_submitted event found")
+	return d.Confidence, nil
 }
 
 // reviewEventMatchesCriteria returns false when the event payload does not match
