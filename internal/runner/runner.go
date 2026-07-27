@@ -48,9 +48,10 @@ type Runner struct {
 	runAgentFn         func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error)
 	reviewerPrecheckFn func(worktreePath, eventLogPath string) (string, error)
 
-	clean  bool
-	quiet  bool
-	resume bool
+	clean   bool
+	quiet   bool
+	verbose bool
+	resume  bool
 
 	// Progress rendering (nil when --quiet)
 	progressRenderer  *progress.Renderer
@@ -130,6 +131,9 @@ func (r *Runner) SetCITimeout(d time.Duration) { r.ciTimeoutOverride = d }
 
 // SetQuiet suppresses the run-setup header when set to true.
 func (r *Runner) SetQuiet(quiet bool) { r.quiet = quiet }
+
+// SetVerbose enables full inline prompt rendering in agent context blocks.
+func (r *Runner) SetVerbose(verbose bool) { r.verbose = verbose }
 
 // SetResume enables resume mode: the collision check is skipped and orchestration
 // starts from an existing open PR for the issue branch.

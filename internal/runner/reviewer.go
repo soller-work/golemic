@@ -221,6 +221,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 		runFn = agent.RunRole
 	}
 	cfg := r.buildReviewerRoleConfig(systemPromptFile, userPrompt, reviewerWorktreePath, golemicBinaryPath, model, eventLogPath, runsDir, timeout, round, attempt, brokerEnv)
+	r.emitAgentContext(cfg)
 	exitCode, paths, runErr := runFn(context.Background(), cfg)
 	stopFollow()
 

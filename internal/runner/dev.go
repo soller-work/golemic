@@ -82,6 +82,7 @@ func (r *Runner) executeDevAgentCfg(gmb *gmbroker.Broker, devWorktreePath, event
 		runFn = agent.RunRole
 	}
 
+	r.emitAgentContext(cfg)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 	stopFollow()
 

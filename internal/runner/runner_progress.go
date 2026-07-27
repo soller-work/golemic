@@ -1,6 +1,11 @@
 package runner
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"golemic/internal/agent"
 	"golemic/internal/eventlog"
 	"golemic/internal/progress"
 )
@@ -41,6 +46,29 @@ func (w *progressEventWriter) Write(event eventlog.Event) error {
 		w.renderer.EmitLifecycle(event)
 	}
 	return err
+}
+
+// emitAgentContext persists the full user prompt to disk and emits a framed
+// context block on the progress stream. Non-fatal: errors are ignored.
+func (r *Runner) emitAgentContext(cfg agent.RoleConfig) {
+	if r.progressRenderer == nil {
+		return
+	}
+	promptFile := filepath.Join(cfg.RunsDir, cfg.RunID,
+		fmt.Sprintf("%s-r%d-a%d.prompt.md", cfg.Role, cfg.Round, cfg.Attempt))
+	// Write prompt to disk (non-fatal).
+	if err := os.MkdirAll(filepath.Dir(promptFile), 0o755); err == nil {
+		_ = os.WriteFile(promptFile, []byte(cfg.UserPrompt), 0o644)
+	}
+	r.progressRenderer.EmitAgentContext(progress.AgentContextParams{
+		Role:       cfg.Role,
+		Model:      cfg.Model,
+		Round:      cfg.Round,
+		Attempt:    cfg.Attempt,
+		UserPrompt: cfg.UserPrompt,
+		PromptFile: promptFile,
+		Verbose:    r.verbose,
+	})
 }
 
 // emitAgentWrittenEvents reads events.jsonl from r.progressScanIndex onward,

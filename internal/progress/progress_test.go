@@ -195,3 +195,105 @@ func TestArgsPreviewNewlines(t *testing.T) {
 		t.Errorf("tool-call line must not contain newlines, got: %q", line)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FormatAgentContext tests
+// ---------------------------------------------------------------------------
+
+func buildPrompt(n int) string {
+	var lines []string
+	for i := 0; i < n; i++ {
+		lines = append(lines, strings.Repeat("line ", 1)+string(rune('A'+i%26)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestFormatAgentContext_HeaderContainsRoleModelRoundAttempt(t *testing.T) {
+	p := AgentContextParams{
+		Role: "dev", Model: "claude-opus-4-7", Round: 1, Attempt: 0,
+		UserPrompt: "hello", PromptFile: "/tmp/dev-r1-a0.prompt.md",
+	}
+	out := FormatAgentContext(p)
+	for _, want := range []string{"dev", "claude-opus-4-7", "r1/a0"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("header missing %q in:\n%s", want, out)
+		}
+	}
+}
+
+func TestFormatAgentContext_CompactShowsPreviewAndTruncation(t *testing.T) {
+	prompt := buildPrompt(agentContextPreviewLines + 5)
+	p := AgentContextParams{
+		Role: "dev", Model: "m", Round: 1, Attempt: 0,
+		UserPrompt: prompt, PromptFile: "/runs/dev-r1-a0.prompt.md",
+		Verbose: false,
+	}
+	out := FormatAgentContext(p)
+	lines := strings.Split(out, "\n")
+	// Count body lines (those starting with │) that are not the path or truncation marker.
+	promptLines := 0
+	truncLine := false
+	hasPath := false
+	for _, l := range lines {
+		if strings.HasPrefix(l, "│ ") && !strings.Contains(l, "more lines omitted") && !strings.Contains(l, "→") {
+			promptLines++
+		}
+		if strings.Contains(l, "more lines omitted") {
+			truncLine = true
+		}
+		if strings.Contains(l, "/runs/dev-r1-a0.prompt.md") {
+			hasPath = true
+		}
+	}
+	if promptLines != agentContextPreviewLines {
+		t.Errorf("compact: expected %d prompt lines, got %d", agentContextPreviewLines, promptLines)
+	}
+	if !truncLine {
+		t.Errorf("compact: missing truncation marker")
+	}
+	if !hasPath {
+		t.Errorf("compact: missing persisted file path")
+	}
+}
+
+func TestFormatAgentContext_CompactShortPromptNoTruncation(t *testing.T) {
+	prompt := buildPrompt(agentContextPreviewLines - 2)
+	p := AgentContextParams{
+		Role: "dev", Model: "m", Round: 1, Attempt: 0,
+		UserPrompt: prompt, PromptFile: "/runs/dev-r1-a0.prompt.md",
+		Verbose: false,
+	}
+	out := FormatAgentContext(p)
+	if strings.Contains(out, "more lines omitted") {
+		t.Errorf("compact with short prompt must not show truncation marker")
+	}
+	if !strings.Contains(out, "/runs/dev-r1-a0.prompt.md") {
+		t.Errorf("compact: missing persisted file path")
+	}
+}
+
+func TestFormatAgentContext_VerboseShowsFullPrompt(t *testing.T) {
+	prompt := buildPrompt(agentContextPreviewLines + 10)
+	p := AgentContextParams{
+		Role: "reviewer", Model: "m", Round: 2, Attempt: 1,
+		UserPrompt: prompt, PromptFile: "/runs/reviewer-r2-a1.prompt.md",
+		Verbose: true,
+	}
+	out := FormatAgentContext(p)
+	if strings.Contains(out, "more lines omitted") {
+		t.Errorf("verbose: must not show truncation marker")
+	}
+	promptLines := 0
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, "│ ") && !strings.Contains(l, "→") {
+			promptLines++
+		}
+	}
+	want := agentContextPreviewLines + 10
+	if promptLines != want {
+		t.Errorf("verbose: expected %d prompt lines, got %d", want, promptLines)
+	}
+	if !strings.Contains(out, "/runs/reviewer-r2-a1.prompt.md") {
+		t.Errorf("verbose: missing persisted file path")
+	}
+}

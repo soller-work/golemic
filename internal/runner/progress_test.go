@@ -294,6 +294,70 @@ type Renderer struct {
 }
 
 // ---------------------------------------------------------------------------
+// TestEmitAgentContext_PersistsPromptFile
+// ---------------------------------------------------------------------------
+
+func TestEmitAgentContext_PersistsPromptFile(t *testing.T) {
+	var buf bytes.Buffer
+	r := &Runner{progressRenderer: progress.New(&buf)}
+
+	runsDir := t.TempDir()
+	cfg := agent.RoleConfig{
+		Role:       "dev",
+		Model:      "claude-opus-4-7",
+		Round:      1,
+		Attempt:    0,
+		UserPrompt: "hello world prompt",
+		RunsDir:    runsDir,
+		RunID:      "issue-99-test",
+	}
+	r.emitAgentContext(cfg)
+
+	promptFile := filepath.Join(runsDir, "issue-99-test", "dev-r1-a0.prompt.md")
+	data, err := os.ReadFile(promptFile)
+	if err != nil {
+		t.Fatalf("prompt file not created: %v", err)
+	}
+	if string(data) != "hello world prompt" {
+		t.Errorf("prompt file content mismatch: got %q", string(data))
+	}
+	if !strings.Contains(buf.String(), "dev") {
+		t.Errorf("context block not emitted to renderer")
+	}
+}
+
+func TestEmitAgentContext_NilRenderer_NoOp(t *testing.T) {
+	r := &Runner{progressRenderer: nil}
+	// Must not panic and must not create any file.
+	cfg := agent.RoleConfig{Role: "dev", RunsDir: t.TempDir(), RunID: "x", Round: 1, Attempt: 0}
+	r.emitAgentContext(cfg) // should be a no-op
+}
+
+func TestEmitAgentContext_BlockContainsRoleModelRound(t *testing.T) {
+	var buf bytes.Buffer
+	r := &Runner{progressRenderer: progress.New(&buf)}
+
+	runsDir := t.TempDir()
+	cfg := agent.RoleConfig{
+		Role:       "reviewer",
+		Model:      "claude-sonnet-4-6",
+		Round:      2,
+		Attempt:    1,
+		UserPrompt: "review this please",
+		RunsDir:    runsDir,
+		RunID:      "issue-1-test",
+	}
+	r.emitAgentContext(cfg)
+
+	out := buf.String()
+	for _, want := range []string{"reviewer", "claude-sonnet-4-6", "r2/a1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("context block missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestProgress_FollowReaderError: run succeeds when activity.jsonl is missing
 // ---------------------------------------------------------------------------
 

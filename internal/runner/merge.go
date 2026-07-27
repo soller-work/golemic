@@ -216,6 +216,7 @@ func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, dev
 
 		r.turnCounter++
 		cfg := r.buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir)
+		r.emitAgentContext(cfg)
 		exitCode, _, agentErr := runFn(context.Background(), cfg)
 
 		result, failReason := r.determineConflictResolutionResult(devWT, agentErr, exitCode)

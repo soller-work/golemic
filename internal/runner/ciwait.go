@@ -418,6 +418,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 		runFn = agent.RunRole
 	}
 	cfg := r.buildCIRetryAgentConfig(systemPromptFile, userPrompt, devWorktreePath, eventLogPath, model, timeout, runsDir, fixRound, ciToolAllowlist, ciGMEnv)
+	r.emitAgentContext(cfg)
 	exitCode, paths, err := runFn(context.Background(), cfg)
 
 	if outcome := r.handleCIRetryAgentResult(eventLogPath, exitCode, paths.Stdout, paths.Stderr, err); outcome != "" {
