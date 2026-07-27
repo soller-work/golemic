@@ -142,7 +142,7 @@ func TestAC003_AC006_ConcurrentAppends(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for j := 0; j < eventsEach; j++ {
-			ev := testEvent(t, EventDevStarted, "run-c", "", nil)
+			ev := testEvent(t, EventRunStarted, "run-c", "", nil)
 			if err := w1.Write(ev); err != nil {
 				t.Errorf("w1 failed at event %d: %v", j, err)
 				return
@@ -152,7 +152,7 @@ func TestAC003_AC006_ConcurrentAppends(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for j := 0; j < eventsEach; j++ {
-			ev := testEvent(t, EventDevStarted, "run-c", "", nil)
+			ev := testEvent(t, EventRunStarted, "run-c", "", nil)
 			if err := w2.Write(ev); err != nil {
 				t.Errorf("w2 failed at event %d: %v", j, err)
 				return
@@ -173,7 +173,7 @@ func TestAC003_AC006_ConcurrentAppends(t *testing.T) {
 	}
 	// All should parse.
 	for i, ev := range events {
-		if ev.Type != EventDevStarted {
+		if ev.Type != EventRunStarted {
 			t.Errorf("event %d: unexpected type %q", i, ev.Type)
 		}
 		if ev.RunID != "run-c" {
@@ -208,7 +208,7 @@ func TestAC004_MissingBothEnvVars(t *testing.T) {
 func TestAC005_LastEventOfType(t *testing.T) {
 	events := []Event{
 		{Type: EventRunStarted, Ts: "t1"},
-		{Type: EventDevStarted, Ts: "t2"},
+		{Type: EventWorktreeCreated, Ts: "t2"},
 		{Type: EventRunStarted, Ts: "t3"},
 	}
 	got, err := LastEventOfType(events, EventRunStarted)
@@ -473,7 +473,7 @@ func TestResolveContext_EmptyProject(t *testing.T) {
 
 func TestAllEventTypes(t *testing.T) {
 	types := AllEventTypes()
-	if len(types) != 17 {
+	if len(types) != 16 {
 		t.Errorf("expected 17 event types, got %d", len(types))
 	}
 }
@@ -504,7 +504,7 @@ func TestReaderMidFileBlankLine(t *testing.T) {
 	path := filepath.Join(dir, "events.jsonl")
 	content := `{"type":"run_started","ts":"2024-01-01T00:00:00Z","runId":"r1"}
 
-{"type":"dev_started","ts":"2024-01-01T00:00:01Z","runId":"r1"}
+{"type":"worktree_created","ts":"2024-01-01T00:00:01Z","runId":"r1"}
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatal(err)
