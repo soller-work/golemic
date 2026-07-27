@@ -12,7 +12,6 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/gmbroker"
 	"golemic/internal/prompt"
@@ -74,28 +73,17 @@ func newReviewerGraphQLExecutor(commentJSON string) (*fakeExecutor, *reviewerGra
 
 func newReviewerSubmitRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatalf("load credentials: %v", err)
-	}
-
-	r := New(exec, homeDir, repoRoot, 42)
-	r.repoRoot = repoRoot
-	r.project = project
-	r.homeDir = homeDir
-	r.runID = "review-test-run"
-	r.branchName = "golemic/issue-42"
-	r.creds = creds
-	r.issue = &issueData{Number: 42, Title: "Test Issue"}
-	r.cfg = &config.Config{VerifyCommand: "go test", MaxReviewRounds: 5}
-
-	logPath := filepath.Join(homeDir, ".golemic", project, "runs", r.runID, "events.jsonl")
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withRunID("review-test-run"),
+		withBranchName("golemic/issue-42"),
+		withConfig(&config.Config{VerifyCommand: "go test", MaxReviewRounds: 5}),
+		withIssue(&issueData{Number: 42, Title: "Test Issue"}),
+	)
+	if err := os.MkdirAll(filepath.Dir(f.eventLogPath), 0755); err != nil {
 		t.Fatal(err)
 	}
-	return r, logPath, &bytes.Buffer{}
+	return f.r, f.eventLogPath, f.stderr
 }
 
 // writePROpenedEvent is provided by pingpong_test.go.

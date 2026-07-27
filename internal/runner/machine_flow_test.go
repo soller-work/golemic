@@ -13,7 +13,6 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/loop"
 	"golemic/internal/prompt"
@@ -181,64 +180,21 @@ const ppRunID = "r42"
 // §10 acceptance gate is exercised deterministically on all platforms.
 func setupPingPongRunner(t *testing.T, exec *fakeExecutor) (*Runner, string, *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatalf("load credentials: %v", err)
-	}
-
-	// Use /tmp-based short paths for socket files; clean up after the test.
-	t.Cleanup(func() { os.RemoveAll(filepath.Join(ppHome, ".golemic", ppProject)) }) //nolint:errcheck
-
 	// Inject fake GM broker so the gate is active and exercised on all platforms.
 	injectFakeGMBrokerPP(t)
-
-	// Write guidelines so RenderDev, RenderDevRetry, and RenderReviewer can read them.
-	golemicDir := filepath.Join(repoRoot, ".golemic")
-	guidelinesDir := filepath.Join(golemicDir, "guidelines")
-	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Write agent files so resolveAgentFile can read model+persona.
-	agentsDir := filepath.Join(golemicDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, role := range []string{"dev", "reviewer"} {
-		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	r := New(exec, ppHome, repoRoot, 42)
-	r.repoRoot = repoRoot
-	r.project = ppProject
-	r.runID = ppRunID
-	r.branchName = "golemic/issue-42"
-	r.creds = creds
-	r.cfg = &config.Config{
-		VerifyCommand:   "go test",
-		TimeoutMinutes:  30,
-		MaxReviewRounds: 5,
-	}
-	r.issue = &issueData{Number: 42, Title: "Test Issue", State: "OPEN"}
-	// Inject no-op precheck so tests don't need a real git repo in the reviewer worktree.
-	r.reviewerPrecheckFn = func(_, _ string) (string, error) { return "", nil }
-
-	var stderr bytes.Buffer
-	r.SetStderr(&stderr)
-
-	logPath := filepath.Join(ppHome, ".golemic", ppProject, "runs", ppRunID, "events.jsonl")
-	return r, logPath, &stderr
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withShortHome(ppProject, ppRunID),
+		withGuidelines("dev", "reviewer"),
+		withAgents("dev", "reviewer"),
+		withConfig(&config.Config{
+			VerifyCommand:   "go test",
+			TimeoutMinutes:  30,
+			MaxReviewRounds: 5,
+		}),
+		withNoopReviewerPrecheck(),
+	)
+	return f.r, f.eventLogPath, f.stderr
 }
 
 // makeOrchestrateFakeAgent returns a runAgentFn that simulates agent behavior.

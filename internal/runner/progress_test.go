@@ -456,29 +456,17 @@ func makeMinimalFakeAgent(t *testing.T) func(context.Context, agent.RoleConfig) 
 
 func setupStdoutContractRunner(t *testing.T) (*Runner, *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, _ := setupRunnerTest(t)
-	exec := setupHappyExecutor(repoRoot)
-
-	golemicDir := filepath.Join(repoRoot, ".golemic")
-	for _, dir := range []string{filepath.Join(golemicDir, "guidelines"), filepath.Join(golemicDir, "agents")} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, f := range []string{"dev.md", "reviewer.md"} {
-		_ = os.WriteFile(filepath.Join(golemicDir, "guidelines", f), []byte("# G"), 0644)
-		_ = os.WriteFile(filepath.Join(golemicDir, "agents", f), []byte("---\nmodel: test/model\n---\n"), 0644)
-	}
-
-	r := New(exec, homeDir, repoRoot, 99)
-	r.SetPreflighter(passingPreflighter{})
-	r.SetCIPollInterval(1 * time.Millisecond)
-	r.SetCITimeout(5 * time.Second)
-
-	var stdout bytes.Buffer
-	r.SetStdout(&stdout)
-	r.SetStderr(new(bytes.Buffer))
-	return r, &stdout
+	f := newRunnerFixture(t,
+		withExecutor(nil),
+		withIssueNum(99),
+		withGuidelines("dev", "reviewer"),
+		withAgents("dev", "reviewer"),
+		withPreflighter(passingPreflighter{}),
+		withCIPollInterval(1*time.Millisecond),
+		withCITimeout(5*time.Second),
+	)
+	f.r.executor = setupHappyExecutor(f.repoRoot)
+	return f.r, f.stdout
 }
 
 func TestProgress_StdoutContractIntact(t *testing.T) {

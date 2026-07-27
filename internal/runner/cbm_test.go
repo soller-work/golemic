@@ -17,7 +17,6 @@ import (
 	"golemic/internal/agent"
 	"golemic/internal/cbmbroker"
 	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/loop"
 )
@@ -35,72 +34,21 @@ func hasCBMEnv(env []string) bool {
 // setupCBMRunner creates a runner with the given CodebaseMemory.Enabled value for CBM tests.
 func setupCBMRunner(t *testing.T, exec *fakeExecutor, cbmEnabled bool) (*Runner, string) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatalf("load credentials: %v", err)
-	}
-
-	shortHome := "/tmp"
-	shortProject := "cbm"
-	shortRunID := "issue-42-cbm"
-	t.Cleanup(func() { os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) }) //nolint:errcheck
-
-	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":%v}}`, shortProject, cbmEnabled)
-	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
-	}
-	credDir := filepath.Join(shortHome, ".golemic", shortProject)
-	if err := os.MkdirAll(credDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	credJSON := fmt.Sprintf(`{"dev_token":%q,"reviewer_token":%q}`, creds.DevToken(), creds.ReviewerToken())
-	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	golemicCfgDir := filepath.Join(repoRoot, ".golemic")
-
-	guidelinesDir := filepath.Join(golemicCfgDir, "guidelines")
-	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "dev.md"), []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(guidelinesDir, "reviewer.md"), []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	agentsDir := filepath.Join(golemicCfgDir, "agents")
-	if err := os.MkdirAll(agentsDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, role := range []string{"dev", "reviewer"} {
-		if err := os.WriteFile(filepath.Join(agentsDir, role+".md"), []byte("---\nmodel: test/model\n---\npersona body\n"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	r := New(exec, shortHome, repoRoot, 42)
-	r.repoRoot = repoRoot
-	r.project = shortProject
-	r.homeDir = shortHome
-	r.runID = shortRunID
-	r.branchName = "golemic/issue-42"
-	r.creds = creds
-	r.cfg = &config.Config{
-		VerifyCommand:  "go test",
-		TimeoutMinutes: 30,
-		CodebaseMemory: config.CodebaseMemoryConfig{Enabled: cbmEnabled},
-	}
-	r.issue = &issueData{Number: 42, Title: "CBM test issue"}
-	r.turnCounter = 1
-
-	golemicDir := filepath.Join(homeDir, ".golemic", project)
-	return r, golemicDir
+	f := newRunnerFixture(t,
+		withExecutor(exec),
+		withShortHome("cbm", "issue-42-cbm"),
+		withGuidelines("dev", "reviewer"),
+		withAgents("dev", "reviewer"),
+		withConfigJSON(fmt.Sprintf(`{"project":"cbm","verify_command":"go test","codebase_memory":{"enabled":%v}}`, cbmEnabled)),
+		withConfig(&config.Config{
+			VerifyCommand:  "go test",
+			TimeoutMinutes: 30,
+			CodebaseMemory: config.CodebaseMemoryConfig{Enabled: cbmEnabled},
+		}),
+		withIssue(&issueData{Number: 42, Title: "CBM test issue"}),
+		withTurnCounter(1),
+	)
+	return f.r, filepath.Join(f.homeDir, ".golemic", f.project)
 }
 
 // injectNoopBroker overrides broker starters so no real child processes or

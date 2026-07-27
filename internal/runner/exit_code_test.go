@@ -13,7 +13,6 @@ import (
 
 	"golemic/internal/agent"
 	"golemic/internal/config"
-	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
 	"golemic/internal/loop"
 	"golemic/internal/prompt"
@@ -25,91 +24,35 @@ import (
 
 func setupExitCodeRunner(t *testing.T, role string) (r *Runner, eventLogPath string, stderr *bytes.Buffer) {
 	t.Helper()
-	homeDir, repoRoot, project := setupRunnerTest(t)
-
-	golemicDir := filepath.Join(repoRoot, ".golemic")
-
-	guidelinesDir := filepath.Join(golemicDir, "guidelines")
-	if err := os.MkdirAll(guidelinesDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{"dev.md", "reviewer.md"} {
-		if err := os.WriteFile(filepath.Join(guidelinesDir, f), []byte("# guidelines"), 0644); err != nil {
+	injectFakeGMBrokerPP(t)
+	f := newRunnerFixture(t,
+		withShortHome("excp", "issue-42-20240101T000000Z"),
+		withGuidelines("dev", "reviewer"),
+		withConfigJSON(`{"project":"excp","verify_command":"go test","codebase_memory":{"enabled":false}}`),
+		withConfig(&config.Config{
+			VerifyCommand:  "go test",
+			CodebaseMemory: config.CodebaseMemoryConfig{Enabled: false},
+		}),
+		withIssue(&issueData{Number: 42, Title: "t"}),
+		withSeedEventLog(),
+	)
+	if role == "reviewer" {
+		w, err := eventlog.NewWriter(f.eventLogPath)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(project)
-	if err != nil {
-		t.Fatalf("load credentials: %v", err)
-	}
-
-	shortHome := "/tmp"
-	shortProject := "excp"
-	shortRunID := "issue-42-20240101T000000Z"
-	t.Cleanup(func() { os.RemoveAll(filepath.Join(shortHome, ".golemic", shortProject)) }) //nolint:errcheck
-
-	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test","codebase_memory":{"enabled":false}}`, shortProject)
-	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
-		t.Fatal(err)
-	}
-	credDir := filepath.Join(shortHome, ".golemic", shortProject)
-	if err := os.MkdirAll(credDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	credJSON := fmt.Sprintf(`{"dev_token":%q,"reviewer_token":%q}`, creds.DevToken(), creds.ReviewerToken())
-	if err := os.WriteFile(filepath.Join(credDir, "credentials.json"), []byte(credJSON), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	logPath := filepath.Join(shortHome, ".golemic", shortProject, "runs", shortRunID, "events.jsonl")
-	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	w, err := eventlog.NewWriter(logPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	startPayload, _ := json.Marshal(map[string]interface{}{"issue": 42, "runId": shortRunID})
-	_ = w.Write(eventlog.Event{
-		Type:    eventlog.EventRunStarted,
-		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   shortRunID,
-		Payload: startPayload,
-	})
-	if role == "reviewer" {
 		prPayload, _ := json.Marshal(map[string]string{"prNumber": "99"})
 		_ = w.Write(eventlog.Event{
 			Type:    eventlog.EventPROpened,
 			Ts:      time.Now().Format(time.RFC3339),
-			RunID:   shortRunID,
+			RunID:   f.runID,
 			Payload: prPayload,
 		})
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	injectFakeGMBrokerPP(t)
-
-	runner := New(nil, shortHome, repoRoot, 42)
-	runner.repoRoot = repoRoot
-	runner.project = shortProject
-	runner.homeDir = shortHome
-	runner.runID = shortRunID
-	runner.creds = creds
-	runner.issue = &issueData{Number: 42, Title: "t"}
-	runner.cfg = &config.Config{
-		VerifyCommand:  "go test",
-		CodebaseMemory: config.CodebaseMemoryConfig{Enabled: false},
-	}
-	runner.branchName = "golemic/issue-42"
-
-	var buf bytes.Buffer
-	runner.SetStderr(&buf)
-	return runner, logPath, &buf
+	return f.r, f.eventLogPath, f.stderr
 }
 
 func fakeTranscriptPaths(dir, role string) agent.TranscriptPaths {
