@@ -952,7 +952,7 @@ func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 500 * time.Millisecond
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
 
 	ctx := context.Background()
@@ -1107,7 +1107,7 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 	stallLogWriter = &stallLog
 	t.Cleanup(func() { stallLogWriter = origWriter })
 
-	cfg.IdleTimeout = 500 * time.Millisecond
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1148,10 +1148,9 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 // before the wall-clock timeout, returning ErrStalled.
 func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	// idle=500ms, poll=250ms. lastProgress is anchored to process start (~t0).
-	// First poll at ~250ms: 250ms < 500ms → no stall.
-	// Second poll at ~500ms: ~500ms >= 500ms → stall.
-	// Wall-clock timeout=1000ms gives 500ms headroom beyond the stall point.
+	// idle=150ms, poll=250ms. lastProgress is anchored to process start (~t0).
+	// First poll at ~250ms: 250ms >= 150ms → stall fires immediately.
+	// Wall-clock timeout=1000ms gives plenty of headroom.
 	cfg.Timeout = 1000 * time.Millisecond
 
 	writeOnceThenHang := `printf 'hello'
@@ -1163,7 +1162,7 @@ while true; do sleep 3600; done`
 	pollInterval = 250 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 500 * time.Millisecond
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1194,7 +1193,7 @@ func TestRunRole_AllAttemptsStall_AC2(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 500 * time.Millisecond
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1780,7 +1779,7 @@ func TestStallDetection_HangRetriesThenStalled(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 500 * time.Millisecond
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
