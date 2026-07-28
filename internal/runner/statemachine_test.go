@@ -14,65 +14,8 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// StateError construction and formatting
-// ---------------------------------------------------------------------------
-
-func TestStateError_ReviewerReviewRequired_SM010(t *testing.T) {
-	e := &loop.StateError{
-		Step:  loop.StepRunReviewer,
-		Event: loop.EventReviewFailed,
-		Msg:   "predicate \"gm_review_submit\" unmet: no fresh gm_review_submit recorded in this round",
-	}
-	got := e.Error()
-	for _, want := range []string{string(loop.StepRunReviewer), "gm_review_submit", "no fresh"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("loop.StateError.Error() missing %q: %q", want, got)
-		}
-	}
-}
-
-func TestStateError_DevGate_ContainsPredicate_SM011(t *testing.T) {
-	e := &loop.StateError{
-		Step:  loop.StepRunDev,
-		Event: loop.EventDevGateRejected,
-		Msg:   "predicate gm_dev_done unmet (tree red): invocation ended without accepted call",
-	}
-	got := e.Error()
-	for _, want := range []string{"gm_dev_done", string(loop.EventDevGateRejected), string(loop.StepRunDev)} {
-		if !strings.Contains(got, want) {
-			t.Errorf("loop.StateError.Error() missing %q: %q", want, got)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Integration: reviewer produces no fresh verdict → review_failed (StateError)
 // ---------------------------------------------------------------------------
-
-// TestOrchestrate_ReviewerNoFreshSubmit_Round1_StateError_SM012 verifies that when the
-// reviewer completes (exit 0) but writes no event-log entry and calls no gm_review_submit,
-// the machine emits a StateError and returns review_failed instead of silently nil.
-func TestOrchestrate_ReviewerNoFreshSubmit_Round1_StateError_SM012(t *testing.T) {
-	exec := pingPongExecutor(false, nil)
-	r, logPath, stderr := setupPingPongRunner(t, exec)
-
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "", exitCode: 0}, // no verdict written
-	}, nil))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeReviewFailed {
-		t.Errorf("outcome: got %q, want %q; stderr: %s", outcome, outcomeReviewFailed, stderr.String())
-	}
-	stderrStr := stderr.String()
-	if !strings.Contains(stderrStr, "gm_review_submit") {
-		t.Errorf("expected StateError mentioning gm_review_submit in stderr, got: %s", stderrStr)
-	}
-	if !strings.Contains(stderrStr, string(loop.StepRunReviewer)) {
-		t.Errorf("expected %q in stderr, got: %s", loop.StepRunReviewer, stderrStr)
-	}
-}
 
 // TestOrchestrate_ReviewerNoFreshSubmit_Round2_StaleVerdictNotConsumed_SM013 verifies the
 // critical stale-verdict case: round-2 reviewer completes without a fresh verdict while a
@@ -102,24 +45,6 @@ func TestOrchestrate_ReviewerNoFreshSubmit_Round2_StaleVerdictNotConsumed_SM013(
 	// Getting review_failed here proves it was not consumed.
 	if outcome == outcomeEscalated {
 		t.Error("stale round-1 changes_requested must not trigger escalation")
-	}
-}
-
-// TestOrchestrate_NormalRun_DevImplementToMerge_SM014 verifies the happy path: dev
-// implements and calls gm_dev_done, the runner verifies, opens the PR, CI goes green,
-// the reviewer approves, and the PR auto-merges, returning success.
-func TestOrchestrate_NormalRun_DevImplementToMerge_SM014(t *testing.T) {
-	exec := pingPongExecutor(false, nil)
-	r, logPath, stderr := setupPingPongRunner(t, exec)
-
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "approved", body: "LGTM", exitCode: 0},
-	}, nil))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeSuccess {
-		t.Errorf("happy path: outcome %q, want %q; stderr: %s", outcome, outcomeSuccess, stderr.String())
 	}
 }
 

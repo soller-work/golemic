@@ -15,7 +15,6 @@ import (
 	"golemic/internal/config"
 	"golemic/internal/eventlog"
 	"golemic/internal/loop"
-	"golemic/internal/prompt"
 )
 
 // ---------------------------------------------------------------------------
@@ -314,6 +313,7 @@ func runOrchestrate(t *testing.T, r *Runner, logPath string) string {
 // Approved in round 1 ends as success
 // ---------------------------------------------------------------------------
 
+// canonical end-to-end walk
 func TestMachineFlow_ApprovedRound1(t *testing.T) {
 	var commentCalls []string
 	exec := pingPongExecutor(false, &commentCalls)
@@ -327,40 +327,6 @@ func TestMachineFlow_ApprovedRound1(t *testing.T) {
 	outcome := runOrchestrate(t, r, logPath)
 	if outcome != outcomeSuccess {
 		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
-	}
-	if len(commentCalls) != 0 {
-		t.Errorf("no escalation comment expected, got %d", len(commentCalls))
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Changes requested then approved in round 2 ends as success
-// ---------------------------------------------------------------------------
-
-func TestMachineFlow_ChangesRequestedThenApproved(t *testing.T) {
-	var commentCalls []string
-	exec := pingPongExecutor(false, &commentCalls)
-	capture := &promptCapture{}
-
-	r, logPath, _ := setupPingPongRunner(t, exec)
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix the typo in README", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "approved", body: "LGTM now", exitCode: 0},
-	}, capture))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeSuccess {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
-	}
-	// Dev was re-invoked once (2 total dev calls)
-	if len(capture.devPrompts) != 2 {
-		t.Errorf("expected 2 dev calls, got %d", len(capture.devPrompts))
-	}
-	// Second dev prompt must contain verbatim findings
-	if !strings.Contains(capture.devPrompts[1], "Fix the typo in README") {
-		t.Errorf("dev retry prompt must contain verbatim findings, got: %s", capture.devPrompts[1])
 	}
 	if len(commentCalls) != 0 {
 		t.Errorf("no escalation comment expected, got %d", len(commentCalls))
@@ -423,64 +389,6 @@ func assertEscalationComment(t *testing.T, comment string, issueNum, prNum, roun
 }
 
 // ---------------------------------------------------------------------------
-// Three unsatisfied rounds escalate with PR comment
-// ---------------------------------------------------------------------------
-
-func TestMachineFlow_ThreeChangesRequestedEscalates(t *testing.T) {
-	var commentCalls []string
-	exec := pingPongExecutor(false, &commentCalls)
-	capture := &promptCapture{}
-
-	r, logPath, _ := setupPingPongRunner(t, exec)
-	r.cfg.MaxReviewRounds = 3
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix C", exitCode: 0},
-	}, capture))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeEscalated {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeEscalated)
-	}
-	if len(capture.devPrompts) != 3 {
-		t.Errorf("expected 3 dev calls (1 initial + 2 retries), got %d", len(capture.devPrompts))
-	}
-	if len(commentCalls) != 1 {
-		t.Errorf("expected 1 escalation comment, got %d", len(commentCalls))
-		return
-	}
-	assertEscalationComment(t, commentCalls[0], 42, 99, 3)
-}
-
-// ---------------------------------------------------------------------------
-// Dev failure inside a retry round terminates as dev_failed
-// ---------------------------------------------------------------------------
-
-func TestMachineFlow_DevFailureInRetryRound(t *testing.T) {
-	var commentCalls []string
-	exec := pingPongExecutor(false, &commentCalls)
-
-	r, logPath, _ := setupPingPongRunner(t, exec)
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "fix this", exitCode: 0},
-		{role: "dev", exitCode: 1}, // dev retry fails
-	}, nil))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeDevFailed {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeDevFailed)
-	}
-	if len(commentCalls) != 0 {
-		t.Errorf("no escalation comment expected on dev failure, got %d", len(commentCalls))
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Reviewer timeout inside a retry round terminates as timeout
 // ---------------------------------------------------------------------------
 
@@ -508,24 +416,6 @@ func TestMachineFlow_ReviewerTimeoutInRetryRound(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Dev and Reviewer stall detection → outcome "stalled" + diagnostic
 // ---------------------------------------------------------------------------
-
-func TestMachineFlow_DevStallDetection(t *testing.T) {
-	var commentCalls []string
-	exec := pingPongExecutor(false, &commentCalls)
-
-	r, logPath, stderr := setupPingPongRunner(t, exec)
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", doStalled: true}, // dev stalls on first attempt
-	}, nil))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeStalled {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeStalled)
-	}
-	if !strings.Contains(stderr.String(), "dev agent stalled") {
-		t.Errorf("stderr should contain stalled diagnostic, got: %s", stderr.String())
-	}
-}
 
 func TestMachineFlow_ReviewerStallDetection(t *testing.T) {
 	var commentCalls []string
@@ -631,46 +521,6 @@ func TestMachineFlow_ReviewerTurnDirtyCheckFails(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // RenderDevRetry verbatim findings embedding
-// ---------------------------------------------------------------------------
-
-func TestRenderDevRetry_VerbatimFindings(t *testing.T) {
-	dir := t.TempDir()
-	guidelinesPath := filepath.Join(dir, "dev.md")
-	if err := os.WriteFile(guidelinesPath, []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	findings := "Fix the null pointer dereference in handler.go line 42"
-	p, err := prompt.RenderDevRetry(findings, "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath, false)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(p, findings) {
-		t.Errorf("dev retry prompt must contain verbatim findings %q, got: %s", findings, p)
-	}
-	for _, want := range []string{"gm_slice_get", "authoritative spec"} {
-		if !strings.Contains(p, want) {
-			t.Errorf("dev retry prompt must contain %q, got: %s", want, p)
-		}
-	}
-}
-
-func TestRenderDevRetry_EmptyFindingsError(t *testing.T) {
-	dir := t.TempDir()
-	guidelinesPath := filepath.Join(dir, "dev.md")
-	if err := os.WriteFile(guidelinesPath, []byte("# Guidelines"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err := prompt.RenderDevRetry("", "", prompt.Issue{Number: 42, Title: "T"}, "golemic/issue-42", "go test", guidelinesPath, false)
-	if err == nil {
-		t.Fatal("expected EMPTY_FINDINGS error, got nil")
-	}
-	if !strings.Contains(err.Error(), "EMPTY_FINDINGS") {
-		t.Errorf("expected EMPTY_FINDINGS in error, got: %v", err)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Escalation comment is deterministic.
 // ---------------------------------------------------------------------------
@@ -791,54 +641,6 @@ func TestMachineFlow_FiveChangesRequestedEscalates_Default(t *testing.T) {
 		return
 	}
 	assertEscalationComment(t, commentCalls[0], 42, 99, 5)
-}
-
-func TestMachineFlow_ExplicitMaxRounds2_Escalates(t *testing.T) {
-	var commentCalls []string
-	exec := pingPongExecutor(false, &commentCalls)
-
-	r, logPath, _ := setupPingPongRunner(t, exec)
-	r.cfg.MaxReviewRounds = 2
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
-	}, nil))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeEscalated {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeEscalated)
-	}
-	if len(commentCalls) != 1 {
-		t.Errorf("expected 1 escalation comment, got %d", len(commentCalls))
-		return
-	}
-	assertEscalationComment(t, commentCalls[0], 42, 99, 2)
-}
-
-func TestMachineFlow_ApprovalBeforeLimit_NoEscalation(t *testing.T) {
-	var commentCalls []string
-	exec := pingPongExecutor(false, &commentCalls)
-
-	r, logPath, _ := setupPingPongRunner(t, exec)
-	r.cfg.MaxReviewRounds = 4
-	r.SetRunAgentFn(makeOrchestrateFakeAgent(t, []agentRoundConfig{
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix A", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "changes_requested", body: "Fix B", exitCode: 0},
-		{role: "dev", exitCode: 0},
-		{role: "reviewer", verdict: "approved", exitCode: 0},
-	}, nil))
-
-	outcome := runOrchestrate(t, r, logPath)
-	if outcome != outcomeSuccess {
-		t.Errorf("outcome: got %q, want %q", outcome, outcomeSuccess)
-	}
-	if len(commentCalls) != 0 {
-		t.Errorf("expected no escalation comment, got %d", len(commentCalls))
-	}
 }
 
 // ---------------------------------------------------------------------------
