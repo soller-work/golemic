@@ -59,6 +59,18 @@ func runHelperSleepForever() {
 	}
 }
 
+func runHelperTerminalThenDelayedMutation(events ...string) {
+	for _, event := range events {
+		fmt.Println(event)
+	}
+	marker := os.Getenv("MUTATION_MARKER")
+	if marker != "" {
+		time.Sleep(100 * time.Millisecond)
+		_ = os.WriteFile(marker, []byte("mutated\n"), 0644)
+	}
+	runHelperSleepForever()
+}
+
 func runHelperRepeatedLines(count int, lines ...string) {
 	for i := 0; i < count; i++ {
 		for _, line := range lines {
@@ -103,6 +115,15 @@ var helperHandlers = map[string]func(*testing.T){
 		fmt.Println(`MARKER_ATTEMPT_TWO`)
 		fmt.Println("success")
 	},
+	"helper-marker-then-hang": func(*testing.T) {
+		// Write marker then a tool completion so lastStreamOffset advances past
+		// the marker, classifying the subsequent hang as "hang" (retryable) not
+		// "thinking_loop" (non-retryable).
+		fmt.Println(`MARKER_ATTEMPT_ONE`)
+		fmt.Println(`{"type":"tool_execution_start"}`)
+		fmt.Println(`{"type":"tool_execution_end"}`)
+		runHelperSleepForever()
+	},
 	"helper-limit-error":         func(*testing.T) { fmt.Print(limitErrorTranscript) },
 	"helper-stop":                func(*testing.T) { fmt.Print(stopTranscript) },
 	"helper-auto-retry-end-fail": func(*testing.T) { fmt.Print(autoRetryEndFailTranscript) },
@@ -117,24 +138,28 @@ var helperHandlers = map[string]func(*testing.T){
 	"helper-thinking-delta": func(*testing.T) { runHelperRepeatedLinesForever(`{"type":"thinking_delta","delta":"x"}`) },
 	"helper-composition":    func(*testing.T) { runHelperRepeatedLinesForever(`{"type":"toolcall_delta","delta":"x"}`) },
 	"helper-devdone-accepted": func(*testing.T) {
-		fmt.Println(`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`)
-		fmt.Println(`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}`)
-		runHelperSleepForever()
+		runHelperTerminalThenDelayedMutation(
+			`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`,
+			`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}`,
+		)
 	},
 	"helper-devdone-gate-rejected": func(*testing.T) {
-		fmt.Println(`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`)
-		fmt.Println(`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"DEV_GATE","message":"gm_dev_done: last gm_project_check was not green"}}`)
-		runHelperSleepForever()
+		runHelperTerminalThenDelayedMutation(
+			`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`,
+			`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"DEV_GATE","message":"gm_dev_done: last gm_project_check was not green"}}`,
+		)
 	},
 	"helper-devdone-schema-invalid": func(*testing.T) {
-		fmt.Println(`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`)
-		fmt.Println(`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"SCHEMA_INVALID","message":"gm_dev_done: prBody is required"}}`)
-		runHelperSleepForever()
+		runHelperTerminalThenDelayedMutation(
+			`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`,
+			`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"SCHEMA_INVALID","message":"gm_dev_done: prBody is required"}}`,
+		)
 	},
 	"helper-review-submit": func(*testing.T) {
-		fmt.Println(`{"type":"tool_execution_start","toolName":"gm_review_submit","args":{}}`)
-		fmt.Println(`{"type":"tool_execution_end","toolName":"gm_review_submit","result":{"ok":true,"accepted":true}}`)
-		runHelperSleepForever()
+		runHelperTerminalThenDelayedMutation(
+			`{"type":"tool_execution_start","toolName":"gm_review_submit","args":{}}`,
+			`{"type":"tool_execution_end","toolName":"gm_review_submit","result":{"ok":true,"accepted":true}}`,
+		)
 	},
 	"helper-write-once-hang": func(*testing.T) {
 		_, _ = os.Stdout.Write([]byte("hello"))
@@ -1312,8 +1337,8 @@ func TestRunRole_StallThenSuccess_AC3(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Attempt-aware helper: attempt 1 stalls, attempt 2 succeeds.
-	invocations := attemptAwareHelperFactory(t, []string{"helper-hang", "helper-success-marker"})
+	// Attempt-aware helper: attempt 1 writes its marker then stalls, attempt 2 succeeds.
+	invocations := attemptAwareHelperFactory(t, []string{"helper-marker-then-hang", "helper-success-marker"})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
