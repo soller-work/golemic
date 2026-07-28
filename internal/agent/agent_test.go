@@ -46,36 +46,33 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 	t.Fatalf("file %q did not appear within %v", path, timeout)
 }
 
-// fakeCommandFactory returns a CommandFactory function that runs the given
-// scriptPath as the "pi" binary. It also captures the full args (name + args)
-// into capturedArgs for later inspection.
-func fakeCommandFactory(t *testing.T, scriptPath string, capturedArgs *[]string) {
+// intPtr returns a pointer to n, used to set RoleConfig.MaxStallRetries.
+func intPtr(n int) *int { return &n }
+
+// fakeCommandFactory sets cfg.CommandFactory to a function that runs scriptPath
+// as the "pi" binary and captures full args into capturedArgs for inspection.
+func fakeCommandFactory(t *testing.T, cfg *RoleConfig, scriptPath string, capturedArgs *[]string) {
 	t.Helper()
 	*capturedArgs = nil
-	CommandFactory = func(name string, args ...string) *exec.Cmd {
+	cfg.CommandFactory = func(name string, args ...string) *exec.Cmd {
 		*capturedArgs = append([]string{name}, args...)
-		cmd := exec.Command(scriptPath, args...)
-		return cmd
+		return exec.Command(scriptPath, args...)
 	}
-	// P3-4: Restore CommandFactory on test teardown to avoid cross-test pollution.
-	t.Cleanup(func() { CommandFactory = exec.Command })
 }
 
-// attemptAwareFactory returns a CommandFactory that runs different scripts per invocation.
-// Invocation 0 runs script0, invocation 1 runs script1, etc. Returns *invocations for later assertion.
-func attemptAwareFactory(t *testing.T, scripts []string) *int {
+// attemptAwareFactory sets cfg.CommandFactory to run different scripts per invocation.
+// Invocation 0 runs scripts[0], invocation 1 runs scripts[1], etc.
+func attemptAwareFactory(t *testing.T, cfg *RoleConfig, scripts []string) *int {
 	t.Helper()
 	invocations := 0
-	CommandFactory = func(name string, args ...string) *exec.Cmd {
+	cfg.CommandFactory = func(name string, args ...string) *exec.Cmd {
 		idx := invocations
 		invocations++
 		if idx >= len(scripts) {
 			t.Fatalf("unexpected invocation %d (only %d scripts configured)", idx+1, len(scripts))
 		}
-		cmd := exec.Command(scripts[idx], args...)
-		return cmd
+		return exec.Command(scripts[idx], args...)
 	}
-	t.Cleanup(func() { CommandFactory = exec.Command })
 	return &invocations
 }
 
@@ -102,15 +99,7 @@ func defaultRoleConfig(t *testing.T, role string) RoleConfig {
 	if err := os.WriteFile(systemPromptFile, []byte("system prompt content"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// Fake local pi agent dir so preparePiAgentDir succeeds without a real pi install.
-	fakePiAgentDir := t.TempDir()
-	t.Setenv("PI_CODING_AGENT_DIR", fakePiAgentDir)
-	// Redirect HOME so preparePiAgentDir writes ~/.golemic/pi to a temp dir.
-	t.Setenv("HOME", t.TempDir())
-	// Seed parent credentials to prove the agent subprocess scrubs them.
-	t.Setenv("GH_TOKEN", "parent-gh-token")
-	t.Setenv("GOLEMIC_DEV_TOKEN", "parent-dev-token")
-	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "parent-reviewer-token")
+	// Inject a fake local pi agent dir and golemic home so no env vars are needed.
 	return RoleConfig{
 		Role:             role,
 		SystemPromptFile: systemPromptFile,
@@ -122,6 +111,8 @@ func defaultRoleConfig(t *testing.T, role string) RoleConfig {
 		Timeout:          30 * time.Second,
 		ToolAllowlist:    []string{"read", "bash", "write", "edit"},
 		RunsDir:          t.TempDir(),
+		LocalPiAgentDir:  t.TempDir(),
+		GolemicHomeDir:   t.TempDir(),
 	}
 }
 
@@ -130,13 +121,17 @@ func defaultRoleConfig(t *testing.T, role string) RoleConfig {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
+	// t.Setenv calls: serial — seeds parent tokens to prove subprocess scrubs them.
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.ToolAllowlist = []string{"read", "bash", "write", "edit"}
 	t.Setenv("PATH", "/base/bin")
+	t.Setenv("GH_TOKEN", "parent-gh-token")
+	t.Setenv("GOLEMIC_DEV_TOKEN", "parent-dev-token")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "parent-reviewer-token")
 
 	var capturedArgs []string
 	scriptPath := writeScript(t, captureEnvScript())
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, paths, err := RunRole(ctx, cfg)
@@ -240,13 +235,17 @@ func TestRunRole_DevArgsAndEnv_AC001(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_ReviewerToolAllowlist_AC004(t *testing.T) {
+	// t.Setenv(PATH): serial — verifies subprocess preserves PATH.
 	cfg := defaultRoleConfig(t, "reviewer")
 	cfg.ToolAllowlist = []string{"read", "bash"}
 	t.Setenv("PATH", "/base/bin")
+	t.Setenv("GH_TOKEN", "parent-gh-token")
+	t.Setenv("GOLEMIC_DEV_TOKEN", "parent-dev-token")
+	t.Setenv("GOLEMIC_REVIEWER_TOKEN", "parent-reviewer-token")
 
 	var capturedArgs []string
 	scriptPath := writeScript(t, captureEnvScript())
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, paths, err := RunRole(ctx, cfg)
@@ -299,6 +298,7 @@ func TestRunRole_ReviewerToolAllowlist_AC004(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Timeout_AC002(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	// Generous wall-clock timeout: the kill path is triggered deterministically by
 	// cancelling ctx once the marker proves partial execution, rather than racing a
@@ -318,7 +318,7 @@ func TestRunRole_Timeout_AC002(t *testing.T) {
 	scriptPath := writeScript(t, sleepForeverScript)
 
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -399,6 +399,7 @@ func TestRunRole_Timeout_AC002(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Transcripts_AC003(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 
 	// Script that writes specific content to stdout and stderr, then exits with code 42
@@ -407,7 +408,7 @@ func TestRunRole_Transcripts_AC003(t *testing.T) {
 exit 42`
 	scriptPath := writeScript(t, scriptContent)
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, paths, err := RunRole(ctx, cfg)
@@ -459,6 +460,7 @@ exit 42`
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_InvalidRole(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Role = "admin"
 
@@ -477,6 +479,7 @@ func TestRunRole_Validation_InvalidRole(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_EmptyRole(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Role = ""
 
@@ -495,6 +498,7 @@ func TestRunRole_Validation_EmptyRole(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_EmptyUserPrompt(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.UserPrompt = ""
 
@@ -513,6 +517,7 @@ func TestRunRole_Validation_EmptyUserPrompt(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_EmptyWorktreeDir(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.WorktreeDir = ""
 
@@ -531,6 +536,7 @@ func TestRunRole_Validation_EmptyWorktreeDir(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_ZeroTimeout(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 0
 
@@ -545,6 +551,7 @@ func TestRunRole_Validation_ZeroTimeout(t *testing.T) {
 }
 
 func TestRunRole_Validation_NegativeTimeout(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = -1 * time.Second
 
@@ -563,6 +570,7 @@ func TestRunRole_Validation_NegativeTimeout(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_EmptyRunsDir(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.RunsDir = ""
 
@@ -581,6 +589,7 @@ func TestRunRole_Validation_EmptyRunsDir(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_Validation_EmptyRunID(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.RunID = ""
 
@@ -599,13 +608,14 @@ func TestRunRole_Validation_EmptyRunID(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_ContextCancelled(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 30 * time.Second // longer than the test
 
 	sleepForeverScript := `while true; do sleep 3600; done`
 	scriptPath := writeScript(t, sleepForeverScript)
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -627,7 +637,7 @@ func TestRunRole_ContextCancelled(t *testing.T) {
 
 func TestRunRole_ProcessGroupKilled(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 1200 * time.Millisecond // generous enough to ensure script executes before kill
+	cfg.Timeout = 3 * time.Second // generous enough to ensure script executes before kill
 
 	pidDir := t.TempDir()
 	pidFile := filepath.Join(pidDir, "child.pid")
@@ -642,7 +652,7 @@ func TestRunRole_ProcessGroupKilled(t *testing.T) {
 	scriptPath := writeScript(t, scriptContent)
 
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	start := time.Now()
@@ -693,6 +703,7 @@ func TestRunRole_ProcessGroupKilled(t *testing.T) {
 }
 
 func TestRunRole_DevDoneAcceptedStopsInvocationBeforePostGateMutation_AC006(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 	markerFile := filepath.Join(t.TempDir(), "mutated.txt")
@@ -705,7 +716,7 @@ echo mutated > "$MUTATION_MARKER"
 `
 	scriptPath := writeScript(t, scriptContent)
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, _, err := RunRole(ctx, cfg)
@@ -721,6 +732,7 @@ echo mutated > "$MUTATION_MARKER"
 }
 
 func TestRunRole_DevDoneRejectedOrInvalidStopsInvocationBeforePostGateMutation_AC006(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		result string
@@ -736,7 +748,9 @@ func TestRunRole_DevDoneRejectedOrInvalidStopsInvocationBeforePostGateMutation_A
 	}
 
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			cfg := defaultRoleConfig(t, "dev")
 			cfg.Timeout = 5 * time.Second
 			markerFile := filepath.Join(t.TempDir(), "mutated.txt")
@@ -749,7 +763,7 @@ echo mutated > "$MUTATION_MARKER"
 `
 			scriptPath := writeScript(t, scriptContent)
 			var capturedArgs []string
-			fakeCommandFactory(t, scriptPath, &capturedArgs)
+			fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 			ctx := context.Background()
 			exitCode, _, err := RunRole(ctx, cfg)
@@ -767,6 +781,7 @@ echo mutated > "$MUTATION_MARKER"
 }
 
 func TestRunRole_ReviewSubmitAcceptedStopsInvocationBeforePostGateMutation_AC006(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "reviewer")
 	cfg.Timeout = 5 * time.Second
 	markerFile := filepath.Join(t.TempDir(), "mutated.txt")
@@ -779,7 +794,7 @@ echo mutated > "$MUTATION_MARKER"
 `
 	scriptPath := writeScript(t, scriptContent)
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, _, err := RunRole(ctx, cfg)
@@ -799,13 +814,14 @@ echo mutated > "$MUTATION_MARKER"
 // ---------------------------------------------------------------------------
 
 func TestRunRole_ExitCodeReturned(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 
 	// Script that exits with code 7 (arbitrary non-zero)
 	scriptContent := `exit 7`
 	scriptPath := writeScript(t, scriptContent)
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, _, err := RunRole(ctx, cfg)
@@ -823,6 +839,7 @@ func TestRunRole_ExitCodeReturned(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_WorktreeDirAsCWD(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.WorktreeDir = t.TempDir()
 
@@ -836,7 +853,7 @@ func TestRunRole_WorktreeDirAsCWD(t *testing.T) {
 	scriptContent := `if [ -f marker.txt ]; then echo "CWD_OK"; else echo "CWD_MISMATCH"; fi`
 	scriptPath := writeScript(t, scriptContent)
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	_, paths, err := RunRole(ctx, cfg)
@@ -858,11 +875,7 @@ func TestRunRole_WorktreeDirAsCWD(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMain(m *testing.M) {
-	// Run tests with the default CommandFactory
-	code := m.Run()
-	// Restore to avoid side effects
-	CommandFactory = exec.Command
-	os.Exit(code)
+	os.Exit(m.Run())
 }
 
 // argContains checks if args contains flag followed by want value.
@@ -880,8 +893,9 @@ func argContains(args []string, flag, want string) bool {
 // ---------------------------------------------------------------------------
 
 func TestParseIdleTimeout_DefaultIs300s_AC6(t *testing.T) {
+	// t.Setenv: serial — exercises env fallback path for idle timeout.
 	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "")
-	got := parseIdleTimeout()
+	got := parseIdleTimeout(30 * time.Second)
 	want := 300 * time.Second
 	if got != want {
 		t.Errorf("default idle timeout: got %v, want %v", got, want)
@@ -893,13 +907,14 @@ func TestParseIdleTimeout_DefaultIs300s_AC6(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_ModeJsonAndSessionID_AC1(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.RunID = "test-run-123"
 	cfg.TurnID = 5
 
 	var capturedArgs []string
 	scriptPath := writeScript(t, captureEnvScript())
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, _, err := RunRole(ctx, cfg)
@@ -926,6 +941,7 @@ func TestRunRole_ModeJsonAndSessionID_AC1(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.RunID = "run-retry-test"
 	cfg.TurnID = 7
@@ -938,22 +954,17 @@ func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
 	var allInvocations [][]string
 	var mu sync.Mutex
 	invocationCount := 0
-	CommandFactory = func(name string, args ...string) *exec.Cmd {
+	cfg.CommandFactory = func(name string, args ...string) *exec.Cmd {
 		mu.Lock()
 		allInvocations = append(allInvocations, append([]string{name}, args...))
 		invocationCount++
 		mu.Unlock()
-		cmd := exec.Command(scriptPath, args...)
-		return cmd
+		return exec.Command(scriptPath, args...)
 	}
-	t.Cleanup(func() { CommandFactory = exec.Command })
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
 
 	cfg.IdleTimeout = 150 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(2)
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1004,14 +1015,11 @@ done
 exit 0
 `
 	scriptPath := writeScript(t, steadyScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
 	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(2)
 
 	ctx := context.Background()
 	exitCode, paths, err := RunRole(ctx, cfg)
@@ -1045,12 +1053,13 @@ exit 0
 // ---------------------------------------------------------------------------
 
 func TestRunRole_ReviewerActivityJsonl_AC4(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "reviewer")
 	cfg.ToolAllowlist = []string{"read", "bash"}
 
 	var capturedArgs []string
 	scriptPath := writeScript(t, captureEnvScript())
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, paths, err := RunRole(ctx, cfg)
@@ -1087,6 +1096,7 @@ func TestRunRole_ReviewerActivityJsonl_AC4(t *testing.T) {
 
 // AC-1: subprocess stalls (no output) → RunRole kills it, retries, detects stall
 func TestRunRole_StallDetection_AC1(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
@@ -1094,21 +1104,15 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 	scriptPath := writeScript(t, sleepForeverScript)
 
 	// Attempt-aware factory: all invocations run the same stall script
-	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath})
-
-	// Lower poll interval for fast test
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath, scriptPath})
 
 	// Capture the per-killed-attempt stall diagnostic.
 	var stallLog bytes.Buffer
-	origWriter := stallLogWriter
-	stallLogWriter = &stallLog
-	t.Cleanup(func() { stallLogWriter = origWriter })
+	cfg.StallLogWriter = &stallLog
 
 	cfg.IdleTimeout = 150 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(1)
 
 	ctx := context.Background()
 	_, paths, err := RunRole(ctx, cfg)
@@ -1147,6 +1151,7 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 // idleTimeout+pollInterval, the stall window (anchored to process start) fires
 // before the wall-clock timeout, returning ErrStalled.
 func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	// idle=150ms, poll=250ms. lastProgress is anchored to process start (~t0).
 	// First poll at ~250ms: 250ms >= 150ms → stall fires immediately.
@@ -1156,14 +1161,11 @@ func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
 	writeOnceThenHang := `printf 'hello'
 while true; do sleep 3600; done`
 	scriptPath := writeScript(t, writeOnceThenHang)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
-
-	origPoll := pollInterval
-	pollInterval = 250 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
 	cfg.IdleTimeout = 150 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+	cfg.PollInterval = 250 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(0)
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1181,20 +1183,18 @@ while true; do sleep 3600; done`
 
 // AC-2: all attempts stall → returns ErrStalled (not ErrTimeout)
 func TestRunRole_AllAttemptsStall_AC2(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
 	sleepForeverScript := `while true; do sleep 3600; done`
 	scriptPath := writeScript(t, sleepForeverScript)
 	var capturedArgs []string
-	fakeCommandFactory(t, scriptPath, &capturedArgs)
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	fakeCommandFactory(t, &cfg, scriptPath, &capturedArgs)
 
 	cfg.IdleTimeout = 150 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(0)
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1227,14 +1227,11 @@ exit 0`
 	successPath := writeScript(t, successScript)
 
 	// Attempt-aware factory: attempt 1 stalls, attempt 2 succeeds
-	invocations := attemptAwareFactory(t, []string{stallPath, successPath})
+	invocations := attemptAwareFactory(t, &cfg, []string{stallPath, successPath})
 
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
-
-	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+	cfg.IdleTimeout = 1 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(1)
 
 	ctx := context.Background()
 	exitCode, paths, err := RunRole(ctx, cfg)
@@ -1272,7 +1269,7 @@ func TestRunRole_SteadyOutput_AC4(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Emit tool_execution_end every 50ms (< 500ms idle timeout), run for ~0.35s total.
+	// Emit tool_execution_end every 50ms (< 2s idle timeout), run for ~0.35s total.
 	steadyScript := `
 for i in 1 2 3 4 5 6 7; do
   printf '{"type":"tool_execution_start"}\n'
@@ -1282,14 +1279,11 @@ done
 exit 0
 `
 	scriptPath := writeScript(t, steadyScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
-
-	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+	cfg.IdleTimeout = 2 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(1)
 
 	ctx := context.Background()
 	exitCode, paths, err := RunRole(ctx, cfg)
@@ -1318,21 +1312,19 @@ exit 0
 
 // AC-5: produces output but exceeds wall-clock timeout → ErrTimeout (terminal, not retried)
 func TestRunRole_TimeoutNotRetried_AC5(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 2 * time.Second
+	cfg.Timeout = 3 * time.Second
 
 	// Output immediately, then sleep forever
 	timeoutScript := `echo "started" && while true; do sleep 3600; done`
 	scriptPath := writeScript(t, timeoutScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
 	// Long idle timeout so stall detection doesn't fire
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "90")
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
+	cfg.IdleTimeout = 90 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(2)
 
 	ctx := context.Background()
 	_, paths, err := RunRole(ctx, cfg)
@@ -1365,18 +1357,16 @@ func TestRunRole_TimeoutNotRetried_AC5(t *testing.T) {
 
 // AC-7: custom env vars (GOLEMIC_AGENT_MAX_STALL_RETRIES) are parsed and honored
 func TestRunRole_CustomEnvVars_AC7(t *testing.T) {
+	// t.Setenv: serial — exercises env fallback paths for idle-timeout and max-stall-retries.
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
 
 	sleepScript := `while true; do sleep 3600; done`
 	scriptPath := writeScript(t, sleepScript)
 
 	// Spec AC-7: MAX_STALL_RETRIES=1 means exactly 2 total attempts (1 initial + 1 retry)
-	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath})
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath, scriptPath})
 
 	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1") // spec value: exactly 2 total attempts
@@ -1400,10 +1390,7 @@ func TestRunRole_CustomEnvVars_AC7(t *testing.T) {
 
 // Test env var parsing
 func TestParseIdleTimeout_Invalid(t *testing.T) {
-	origPoll := pollInterval
-	t.Cleanup(func() { pollInterval = origPoll })
-	pollInterval = 20 * time.Millisecond
-
+	// t.Setenv: serial — exercises env fallback path for idle timeout.
 	tests := []struct {
 		name     string
 		envValue string
@@ -1424,7 +1411,7 @@ func TestParseIdleTimeout_Invalid(t *testing.T) {
 			} else {
 				t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "")
 			}
-			got := parseIdleTimeout()
+			got := parseIdleTimeout(20 * time.Millisecond)
 			if got != tt.want {
 				t.Errorf("parseIdleTimeout(): got %v, want %v", got, tt.want)
 			}
@@ -1461,14 +1448,11 @@ func TestParseMaxStallRetries_Invalid(t *testing.T) {
 }
 
 // TestParseIdleTimeout_ProductionBoundary validates the production boundary case:
-// with pollInterval=30s and IDLE_TIMEOUT_SEC=30, should accept (not default).
+// with effectivePollInterval=30s and IDLE_TIMEOUT_SEC=30, should accept (not default).
 func TestParseIdleTimeout_ProductionBoundary(t *testing.T) {
-	origPoll := pollInterval
-	t.Cleanup(func() { pollInterval = origPoll })
-	pollInterval = 30 * time.Second
-
+	// t.Setenv: serial — exercises env fallback path for idle timeout boundary.
 	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "30")
-	got := parseIdleTimeout()
+	got := parseIdleTimeout(30 * time.Second)
 	want := 30 * time.Second
 	if got != want {
 		t.Errorf("parseIdleTimeout with production boundary (30s == 30s poll interval): got %v, want %v", got, want)
@@ -1503,6 +1487,7 @@ func extractEnvVar(output, name string) string {
 // TestRunRole_SessionIDStableAcrossDevTurns verifies that the dev session ID is
 // identical for TurnID=1 (initial dev) and TurnID=3 (dev-retry after reviewer).
 func TestRunRole_SessionIDStableAcrossDevTurns_Issue147(t *testing.T) {
+	t.Parallel()
 	scriptPath := writeScript(t, captureEnvScript())
 
 	run := func(turnID int) string {
@@ -1510,7 +1495,7 @@ func TestRunRole_SessionIDStableAcrossDevTurns_Issue147(t *testing.T) {
 		cfg.RunID = "issue-42-test"
 		cfg.TurnID = turnID
 		var args []string
-		fakeCommandFactory(t, scriptPath, &args)
+		fakeCommandFactory(t, &cfg, scriptPath, &args)
 		if _, _, err := RunRole(context.Background(), cfg); err != nil {
 			t.Fatalf("RunRole (TurnID=%d) failed: %v", turnID, err)
 		}
@@ -1535,6 +1520,7 @@ func TestRunRole_SessionIDStableAcrossDevTurns_Issue147(t *testing.T) {
 // TestRunRole_SessionIDStableAcrossReviewerTurns verifies that the reviewer
 // session ID is identical for TurnID=2 (first review) and TurnID=4 (second review).
 func TestRunRole_SessionIDStableAcrossReviewerTurns_Issue147(t *testing.T) {
+	t.Parallel()
 	scriptPath := writeScript(t, captureEnvScript())
 
 	run := func(turnID int) string {
@@ -1543,7 +1529,7 @@ func TestRunRole_SessionIDStableAcrossReviewerTurns_Issue147(t *testing.T) {
 		cfg.TurnID = turnID
 		cfg.ToolAllowlist = []string{"read", "bash"}
 		var args []string
-		fakeCommandFactory(t, scriptPath, &args)
+		fakeCommandFactory(t, &cfg, scriptPath, &args)
 		if _, _, err := RunRole(context.Background(), cfg); err != nil {
 			t.Fatalf("RunRole reviewer (TurnID=%d) failed: %v", turnID, err)
 		}
@@ -1564,6 +1550,7 @@ func TestRunRole_SessionIDStableAcrossReviewerTurns_Issue147(t *testing.T) {
 // TestRunRole_ReviewerSessionIDDiffersAcrossRounds verifies that reviewer rounds
 // use distinct pi session IDs so round-2 cannot resume round-1's session (issue-212).
 func TestRunRole_ReviewerSessionIDDiffersAcrossRounds_Issue212(t *testing.T) {
+	t.Parallel()
 	scriptPath := writeScript(t, captureEnvScript())
 
 	run := func(round int) string {
@@ -1572,7 +1559,7 @@ func TestRunRole_ReviewerSessionIDDiffersAcrossRounds_Issue212(t *testing.T) {
 		cfg.Round = round
 		cfg.ToolAllowlist = []string{"read", "bash"}
 		var args []string
-		fakeCommandFactory(t, scriptPath, &args)
+		fakeCommandFactory(t, &cfg, scriptPath, &args)
 		if _, _, err := RunRole(context.Background(), cfg); err != nil {
 			t.Fatalf("RunRole reviewer (Round=%d) failed: %v", round, err)
 		}
@@ -1593,6 +1580,7 @@ func TestRunRole_ReviewerSessionIDDiffersAcrossRounds_Issue212(t *testing.T) {
 // TestRunRole_DevSessionIDDiffersAcrossRounds verifies that dev rounds use distinct
 // pi session IDs so round-2 cannot resume round-1's session (issue-219).
 func TestRunRole_DevSessionIDDiffersAcrossRounds_Issue219(t *testing.T) {
+	t.Parallel()
 	scriptPath := writeScript(t, captureEnvScript())
 
 	run := func(round int) string {
@@ -1600,7 +1588,7 @@ func TestRunRole_DevSessionIDDiffersAcrossRounds_Issue219(t *testing.T) {
 		cfg.RunID = "issue-219-test"
 		cfg.Round = round
 		var args []string
-		fakeCommandFactory(t, scriptPath, &args)
+		fakeCommandFactory(t, &cfg, scriptPath, &args)
 		if _, _, err := RunRole(context.Background(), cfg); err != nil {
 			t.Fatalf("RunRole dev (Round=%d) failed: %v", round, err)
 		}
@@ -1621,6 +1609,7 @@ func TestRunRole_DevSessionIDDiffersAcrossRounds_Issue219(t *testing.T) {
 // TestRunRole_DevSessionIDStableAcrossAttempts verifies that gate-retry attempts within
 // a single round share the same session ID so the retry resumes the in-round context (issue-219).
 func TestRunRole_DevSessionIDStableAcrossAttempts_Issue219(t *testing.T) {
+	t.Parallel()
 	scriptPath := writeScript(t, captureEnvScript())
 
 	run := func(attempt int) string {
@@ -1629,7 +1618,7 @@ func TestRunRole_DevSessionIDStableAcrossAttempts_Issue219(t *testing.T) {
 		cfg.Round = 1
 		cfg.Attempt = attempt
 		var args []string
-		fakeCommandFactory(t, scriptPath, &args)
+		fakeCommandFactory(t, &cfg, scriptPath, &args)
 		if _, _, err := RunRole(context.Background(), cfg); err != nil {
 			t.Fatalf("RunRole dev (Attempt=%d) failed: %v", attempt, err)
 		}
@@ -1650,6 +1639,7 @@ func TestRunRole_DevSessionIDStableAcrossAttempts_Issue219(t *testing.T) {
 // TestRunRole_DevAndReviewerSessionIDsDiffer verifies that dev and reviewer
 // maintain separate session IDs within the same run.
 func TestRunRole_DevAndReviewerSessionIDsDiffer_Issue147(t *testing.T) {
+	t.Parallel()
 	scriptPath := writeScript(t, captureEnvScript())
 
 	runRole := func(role string, turnID int) string {
@@ -1660,7 +1650,7 @@ func TestRunRole_DevAndReviewerSessionIDsDiffer_Issue147(t *testing.T) {
 			cfg.ToolAllowlist = []string{"read", "bash"}
 		}
 		var args []string
-		fakeCommandFactory(t, scriptPath, &args)
+		fakeCommandFactory(t, &cfg, scriptPath, &args)
 		if _, _, err := RunRole(context.Background(), cfg); err != nil {
 			t.Fatalf("RunRole %s (TurnID=%d) failed: %v", role, turnID, err)
 		}
@@ -1681,6 +1671,7 @@ func TestRunRole_DevAndReviewerSessionIDsDiffer_Issue147(t *testing.T) {
 // TestRunRole_TurnIDInEnvVar verifies that GOLEMIC_TURN_ID still reflects the
 // actual per-turn counter even though session IDs are now stable per role.
 func TestRunRole_TurnIDInEnvVar_Issue147(t *testing.T) {
+	t.Parallel()
 	captureScript := writeScript(t, `echo "ARGS: $@"
 echo "GOLEMIC_RUN_ID: ${GOLEMIC_RUN_ID}"
 echo "GOLEMIC_TURN_ID: ${GOLEMIC_TURN_ID}"
@@ -1691,7 +1682,7 @@ echo "GOLEMIC_TURN_ID: ${GOLEMIC_TURN_ID}"
 		cfg.RunID = "issue-42-test"
 		cfg.TurnID = turnID
 		var args []string
-		fakeCommandFactory(t, captureScript, &args)
+		fakeCommandFactory(t, &cfg, captureScript, &args)
 		_, paths, err := RunRole(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("RunRole (TurnID=%d) failed: %v", turnID, err)
@@ -1729,14 +1720,11 @@ func TestToolProgress_ThinkingLoopStalls(t *testing.T) {
   sleep 0.05
 done`
 	scriptPath := writeScript(t, thinkingScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
-
-	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1") // would retry if hang; must NOT retry for thinking_loop
+	cfg.IdleTimeout = 1 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(1) // would retry if hang; must NOT retry for thinking_loop
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1763,24 +1751,19 @@ done`
 // (hang) follows the existing retry path: stalled=true, retried up to
 // maxStallRetries, then returns ErrStalled.
 func TestStallDetection_HangRetriesThenStalled(t *testing.T) {
+	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
 	sleepForeverScript := `while true; do sleep 3600; done`
 	scriptPath := writeScript(t, sleepForeverScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath})
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath, scriptPath})
 
 	var stallLog bytes.Buffer
-	origWriter := stallLogWriter
-	stallLogWriter = &stallLog
-	t.Cleanup(func() { stallLogWriter = origWriter })
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
-
+	cfg.StallLogWriter = &stallLog
 	cfg.IdleTimeout = 150 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(1)
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1814,19 +1797,13 @@ func TestStallDetection_ThinkingLoopLogReason(t *testing.T) {
   sleep 0.05
 done`
 	scriptPath := writeScript(t, thinkingScript)
-	attemptAwareFactory(t, []string{scriptPath})
+	attemptAwareFactory(t, &cfg, []string{scriptPath})
 
 	var stallLog bytes.Buffer
-	origWriter := stallLogWriter
-	stallLogWriter = &stallLog
-	t.Cleanup(func() { stallLogWriter = origWriter })
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
-
-	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+	cfg.StallLogWriter = &stallLog
+	cfg.IdleTimeout = 1 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(0)
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1842,9 +1819,12 @@ done`
 // TestRoleConfig_IdleTimeoutOverridesEnv verifies that RoleConfig.IdleTimeout
 // takes precedence over the GOLEMIC_AGENT_IDLE_TIMEOUT_SEC env variable.
 func TestRoleConfig_IdleTimeoutOverridesEnv(t *testing.T) {
+	// t.Setenv(GOLEMIC_AGENT_IDLE_TIMEOUT_SEC): serial — exercises env fallback path.
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 	cfg.IdleTimeout = 1 * time.Second // explicit; env sets a longer value
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(0)
 
 	// Stream grows → thinking_loop; with explicit 1s IdleTimeout it fires quickly.
 	thinkingScript := `while true; do
@@ -1852,15 +1832,10 @@ func TestRoleConfig_IdleTimeoutOverridesEnv(t *testing.T) {
   sleep 0.05
 done`
 	scriptPath := writeScript(t, thinkingScript)
-	attemptAwareFactory(t, []string{scriptPath})
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	attemptAwareFactory(t, &cfg, []string{scriptPath})
 
 	// env says 300s; RoleConfig.IdleTimeout=1s must win
 	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "300")
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	start := time.Now()
 	ctx := context.Background()
@@ -1882,21 +1857,18 @@ done`
 func TestToolProgress_InFlightToolSuppressesStall(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	// Short wall-clock timeout so the test completes quickly.
-	cfg.Timeout = 2 * time.Second
+	cfg.Timeout = 3 * time.Second
 
 	// Emit tool_execution_start then hang indefinitely (no end event).
 	inFlightScript := `printf '{"type":"tool_execution_start"}\n'
 while true; do sleep 3600; done`
 	scriptPath := writeScript(t, inFlightScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
-
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
 	// idle timeout shorter than wall-clock timeout: stall would fire if not suppressed.
-	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+	cfg.IdleTimeout = 1 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(0)
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -1922,7 +1894,7 @@ func TestToolProgress_RegularCompletionsNoStall(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Complete a tool every 50ms (< 500ms idle timeout), 10 times, then exit.
+	// Complete a tool every 50ms (< 2s idle timeout), 10 times, then exit.
 	regularScript := `for i in 1 2 3 4 5 6 7 8 9 10; do
   printf '{"type":"tool_execution_start"}\n'
   printf '{"type":"tool_execution_end"}\n'
@@ -1930,14 +1902,11 @@ func TestToolProgress_RegularCompletionsNoStall(t *testing.T) {
 done
 exit 0`
 	scriptPath := writeScript(t, regularScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
-
-	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+	cfg.IdleTimeout = 2 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(0)
 
 	ctx := context.Background()
 	exitCode, _, err := RunRole(ctx, cfg)
@@ -1968,14 +1937,11 @@ func TestToolProgress_ToolcallCompositionStalls(t *testing.T) {
   sleep 0.05
 done`
 	scriptPath := writeScript(t, compositionScript)
-	invocations := attemptAwareFactory(t, []string{scriptPath})
+	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
-	origPoll := pollInterval
-	pollInterval = 20 * time.Millisecond
-	t.Cleanup(func() { pollInterval = origPoll })
-
-	cfg.IdleTimeout = 500 * time.Millisecond
-	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
+	cfg.IdleTimeout = 1 * time.Second
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxStallRetries = intPtr(0)
 
 	ctx := context.Background()
 	_, _, err := RunRole(ctx, cfg)
@@ -2003,6 +1969,7 @@ done`
 // ---------------------------------------------------------------------------
 
 func TestNewPiCmd_PreservesPATHAndOmitsSecrets(t *testing.T) {
+	// t.Setenv: serial — seeds parent tokens and PATH to prove subprocess scrubs/preserves them.
 	golemicPiDir := t.TempDir()
 	t.Setenv("PATH", "/base/bin")
 	t.Setenv("GH_TOKEN", "parent-gh-token")
@@ -2020,10 +1987,7 @@ func TestNewPiCmd_PreservesPATHAndOmitsSecrets(t *testing.T) {
 	}
 	t.Cleanup(func() { stdoutFile.Close(); stderrFile.Close() })
 
-	oldCF := CommandFactory
-	CommandFactory = exec.Command
-	t.Cleanup(func() { CommandFactory = oldCF })
-
+	// cfg.CommandFactory is nil ⇒ exec.Command (production default).
 	cfg := RoleConfig{WorktreeDir: t.TempDir()}
 	cmd := newPiCmd(cfg, nil, "/unused", golemicPiDir, "/unused-shim", stdoutFile, stderrFile, nil)
 

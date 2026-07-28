@@ -62,15 +62,6 @@ func (e *ModelChainExhaustedError) Is(target error) bool {
 	return target == ErrModelChainExhausted
 }
 
-// ---------------------------------------------------------------------------
-// Command factory (injectable for tests)
-// ---------------------------------------------------------------------------
-
-// CommandFactory creates *exec.Cmd instances. Defaults to exec.Command (the
-// production value: var CommandFactory = exec.Command). Override in tests to
-// inject a fake binary without a real pi installation.
-var CommandFactory = exec.Command
-
 func filterEnv(env []string, banned ...string) []string {
 	if len(banned) == 0 {
 		return append([]string(nil), env...)
@@ -96,14 +87,6 @@ func filterEnv(env []string, banned ...string) []string {
 // Stall detection configuration
 // ---------------------------------------------------------------------------
 
-// pollInterval is the interval for checking transcript growth (30s in production).
-// Override in tests via direct assignment (mirrors CommandFactory seam).
-var pollInterval = 30 * time.Second
-
-// stallLogWriter receives the per-killed-attempt stall diagnostic. Defaults to
-// os.Stderr; override in tests to capture and assert the emitted line.
-var stallLogWriter io.Writer = os.Stderr
-
 const (
 	// defaultIdleTimeout is the default idle timeout (300s).
 	defaultIdleTimeout = 300 * time.Second
@@ -124,14 +107,14 @@ func sanitizeSessionID(s string) string {
 
 // parseIdleTimeout reads GOLEMIC_AGENT_IDLE_TIMEOUT_SEC from environment.
 // Returns the timeout duration, or defaultIdleTimeout if absent or invalid.
-// If the parsed value is <= 0 or < pollInterval, returns defaultIdleTimeout.
-func parseIdleTimeout() time.Duration {
+// If the parsed value is <= 0 or < effectivePollInterval, returns defaultIdleTimeout.
+func parseIdleTimeout(effectivePollInterval time.Duration) time.Duration {
 	envVal := os.Getenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC")
 	if envVal == "" {
 		return defaultIdleTimeout
 	}
 	sec, err := strconv.Atoi(envVal)
-	if err != nil || sec <= 0 || time.Duration(sec)*time.Second < pollInterval {
+	if err != nil || sec <= 0 || time.Duration(sec)*time.Second < effectivePollInterval {
 		return defaultIdleTimeout
 	}
 	return time.Duration(sec) * time.Second
@@ -158,22 +141,56 @@ func parseMaxStallRetries() int {
 // RoleConfig holds the parameters needed to invoke an agent role as a pi
 // subprocess. Validation is performed at the top of RunRole.
 type RoleConfig struct {
-	Role             string        // "dev" or "reviewer" (informational, used for transcript filenames)
-	SystemPromptFile string        // path to the system prompt file, passed as @<file>
-	UserPrompt       string        // the rendered user prompt text (last positional arg)
-	WorktreeDir      string        // CWD for the subprocess
-	RunID            string        // golemic run identifier, set as GOLEMIC_RUN_ID
-	EventLogPath     string        // path to the JSONL event log, set as GOLEMIC_EVENT_LOG
-	Model            string        // model identifier passed to --model
-	Timeout          time.Duration // maximum wall-clock time for the subprocess
-	IdleTimeout      time.Duration // idle window for stall detection; 0 means use env/default
-	ToolAllowlist    []string      // tool names passed to --tools (e.g. ["read","bash","write","edit"])
-	RunsDir          string        // base directory for transcript files (<RunsDir>/<RunID>/<role>-r<Round>-a<Attempt>.*)
-	Round            int           // dev-loop round index (0-based), used for scoped log filenames
-	Attempt          int           // gate-retry attempt index (0-based), used for scoped log filenames
-	TurnID           int           // monotonic turn identifier, exported as GOLEMIC_TURN_ID
-	Env              []string      // additional "KEY=VALUE" pairs merged into the subprocess environment
-	TerminalDone     chan struct{} // closed when gm_dev_done or accepted gm_review_submit reaches a terminal result
+	Role             string                                      // "dev" or "reviewer" (informational, used for transcript filenames)
+	SystemPromptFile string                                      // path to the system prompt file, passed as @<file>
+	UserPrompt       string                                      // the rendered user prompt text (last positional arg)
+	WorktreeDir      string                                      // CWD for the subprocess
+	RunID            string                                      // golemic run identifier, set as GOLEMIC_RUN_ID
+	EventLogPath     string                                      // path to the JSONL event log, set as GOLEMIC_EVENT_LOG
+	Model            string                                      // model identifier passed to --model
+	Timeout          time.Duration                               // maximum wall-clock time for the subprocess
+	IdleTimeout      time.Duration                               // idle window for stall detection; 0 means use env/default
+	ToolAllowlist    []string                                    // tool names passed to --tools (e.g. ["read","bash","write","edit"])
+	RunsDir          string                                      // base directory for transcript files (<RunsDir>/<RunID>/<role>-r<Round>-a<Attempt>.*)
+	Round            int                                         // dev-loop round index (0-based), used for scoped log filenames
+	Attempt          int                                         // gate-retry attempt index (0-based), used for scoped log filenames
+	TurnID           int                                         // monotonic turn identifier, exported as GOLEMIC_TURN_ID
+	Env              []string                                    // additional "KEY=VALUE" pairs merged into the subprocess environment
+	TerminalDone     chan struct{}                               // closed when gm_dev_done or accepted gm_review_submit reaches a terminal result
+	CommandFactory   func(name string, args ...string) *exec.Cmd // nil ⇒ exec.Command
+	PollInterval     time.Duration                               // <=0 ⇒ 30s
+	MaxStallRetries  *int                                        // nil ⇒ env/default 2
+	LocalPiAgentDir  string                                      // "" ⇒ env/~/.pi/agent
+	GolemicHomeDir   string                                      // "" ⇒ os.UserHomeDir()
+	StallLogWriter   io.Writer                                   // nil ⇒ os.Stderr
+}
+
+func (c RoleConfig) commandFactory() func(string, ...string) *exec.Cmd {
+	if c.CommandFactory != nil {
+		return c.CommandFactory
+	}
+	return exec.Command
+}
+
+func (c RoleConfig) effectivePollInterval() time.Duration {
+	if c.PollInterval > 0 {
+		return c.PollInterval
+	}
+	return 30 * time.Second
+}
+
+func (c RoleConfig) effectiveMaxStallRetries() int {
+	if c.MaxStallRetries != nil {
+		return *c.MaxStallRetries
+	}
+	return parseMaxStallRetries()
+}
+
+func (c RoleConfig) stallLogWriter() io.Writer {
+	if c.StallLogWriter != nil {
+		return c.StallLogWriter
+	}
+	return os.Stderr
 }
 
 // TranscriptPaths holds the absolute paths of the captured output files.
@@ -348,12 +365,15 @@ func RunRole(ctx context.Context, cfg RoleConfig) (exitCode int, paths Transcrip
 	paths = TranscriptPaths{Stdout: stdoutPath, Stderr: stderrPath}
 
 	// ---- Prepare golemic-owned pi agent dir ----
-	localPiDir, err := resolveLocalPiAgentDir()
-	if err != nil {
-		return 0, TranscriptPaths{}, err
+	localPiDir := cfg.LocalPiAgentDir
+	if localPiDir == "" {
+		localPiDir, err = resolveLocalPiAgentDir()
+		if err != nil {
+			return 0, TranscriptPaths{}, err
+		}
 	}
 	gmExtDir := filepath.Join(cfg.WorktreeDir, ".pi", "extensions", "golemic")
-	golemicPiDir, err := preparePiAgentDir(localPiDir, gmExtDir)
+	golemicPiDir, err := preparePiAgentDir(localPiDir, gmExtDir, cfg.GolemicHomeDir)
 	if err != nil {
 		return 0, TranscriptPaths{}, err
 	}
@@ -435,7 +455,7 @@ func openTranscriptFiles(stdoutPath, stderrPath string) (stdout, stderr *os.File
 
 // newPiCmd builds and configures the pi subprocess without starting it.
 func newPiCmd(cfg RoleConfig, args []string, golemicDir, golemicPiDir, shimDir string, stdoutFile, stderrFile *os.File, terminalDone chan struct{}) *exec.Cmd {
-	cmd := CommandFactory("pi", args...)
+	cmd := cfg.commandFactory()("pi", args...)
 	cmd.Dir = cfg.WorktreeDir
 	env := filterEnv(os.Environ(), "GH_TOKEN", "GOLEMIC_DEV_TOKEN", "GOLEMIC_REVIEWER_TOKEN")
 	env = append(env,
@@ -464,9 +484,9 @@ func runModelAttempt(ctx context.Context, cfg RoleConfig, model, sessionID, gole
 	args := buildPiArgs(cfg, model, sessionID)
 	idleTimeout := cfg.IdleTimeout
 	if idleTimeout <= 0 {
-		idleTimeout = parseIdleTimeout()
+		idleTimeout = parseIdleTimeout(cfg.effectivePollInterval())
 	}
-	maxStallRetries := parseMaxStallRetries()
+	maxStallRetries := cfg.effectiveMaxStallRetries()
 
 	for attempt := 0; attempt <= maxStallRetries; attempt++ {
 		stdoutFile, stderrFile, fileErr := openTranscriptFiles(stdoutPath, stderrPath)
@@ -514,13 +534,13 @@ func killProcessGroup(cmd *exec.Cmd, stdoutFile, stderrFile *os.File, done <-cha
 
 // classifyStall returns "thinking_loop" if the stream grew since lastStreamOffset
 // (deterministic failure, no retry) or "hang" if frozen (transient, retry eligible).
-// It also logs the diagnostic line.
-func classifyStall(role string, attempt int, idleDuration, idleTimeout time.Duration, currentOffset, lastStreamOffset int64) string {
+// It also logs the diagnostic line to w.
+func classifyStall(w io.Writer, role string, attempt int, idleDuration, idleTimeout time.Duration, currentOffset, lastStreamOffset int64) string {
 	reason := "hang"
 	if currentOffset > lastStreamOffset {
 		reason = "thinking_loop"
 	}
-	fmt.Fprintf(stallLogWriter, "agent: role %q stalled at attempt %d (no tool completion for %v >= %v, reason: %s)\n",
+	fmt.Fprintf(w, "agent: role %q stalled at attempt %d (no tool completion for %v >= %v, reason: %s)\n",
 		role, attempt, idleDuration, idleTimeout, reason)
 	return reason
 }
@@ -563,7 +583,7 @@ func handlePollTick(cfg RoleConfig, cmd *exec.Cmd, stdoutFile, stderrFile *os.Fi
 		*lastStreamOffset = toolState.offset
 	}
 	if !inFlight && time.Since(*lastProgress) >= idleTimeout {
-		reason := classifyStall(cfg.Role, attempt, time.Since(*lastProgress), idleTimeout, toolState.offset, *lastStreamOffset)
+		reason := classifyStall(cfg.stallLogWriter(), cfg.Role, attempt, time.Since(*lastProgress), idleTimeout, toolState.offset, *lastStreamOffset)
 		pollErr := killProcessGroup(cmd, stdoutFile, stderrFile, done)
 		pollTicker.Stop()
 		cancel()
@@ -592,7 +612,7 @@ func waitForProcess(ctx context.Context, cfg RoleConfig, cmd *exec.Cmd, stdoutFi
 	timeoutCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
-	pollTicker := time.NewTicker(pollInterval)
+	pollTicker := time.NewTicker(cfg.effectivePollInterval())
 	lastProgress := time.Now()
 	var toolState toolProgressState
 	// lastStreamOffset tracks stream offset when last tool completed, to detect

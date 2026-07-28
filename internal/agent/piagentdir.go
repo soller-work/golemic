@@ -38,14 +38,15 @@ func checkLocalPiDir(localPiAgentDir string) error {
 // non-empty and exists, the gm_ pi extension is provisioned at
 // ~/.golemic/pi/extensions/golemic. Idempotent and safe under concurrent
 // calls. Fails closed if localPiAgentDir does not exist.
-func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error) {
+// golemicHomeDir overrides the base for ~/.golemic/pi; empty means os.UserHomeDir().
+func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir, golemicHomeDir string) (string, error) {
 	if err := checkLocalPiDir(localPiAgentDir); err != nil {
 		return "", err
 	}
 
-	home, err := os.UserHomeDir()
+	home, err := resolveGolemicHomeDir(golemicHomeDir)
 	if err != nil {
-		return "", fmt.Errorf("agent: cannot determine home directory: %w", err)
+		return "", err
 	}
 
 	golemicPiDir := filepath.Join(home, ".golemic", "pi")
@@ -53,23 +54,8 @@ func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error
 		return "", fmt.Errorf("agent: create golemic pi agent dir %q: %w", golemicPiDir, err)
 	}
 
-	entries, err := os.ReadDir(localPiAgentDir)
-	if err != nil {
-		return "", fmt.Errorf("agent: read local pi agent dir %q: %w", localPiAgentDir, err)
-	}
-
-	for _, entry := range entries {
-		name := entry.Name()
-		// settings.json is derived, not symlinked; extensions is owned by seedExtensions
-		// so the gm_ extension can be added without clobbering the seeded real directory.
-		if name == "settings.json" || name == "extensions" {
-			continue
-		}
-		target := filepath.Join(localPiAgentDir, name)
-		dst := filepath.Join(golemicPiDir, name)
-		if err := ensureSymlink(dst, target); err != nil {
-			return "", err
-		}
+	if err := seedLocalPiAgentDir(localPiAgentDir, golemicPiDir); err != nil {
+		return "", err
 	}
 
 	if err := seedExtensions(golemicPiDir, filepath.Join(localPiAgentDir, "extensions"), gmExtensionSrcDir); err != nil {
@@ -81,6 +67,34 @@ func preparePiAgentDir(localPiAgentDir, gmExtensionSrcDir string) (string, error
 	}
 
 	return golemicPiDir, nil
+}
+
+func resolveGolemicHomeDir(golemicHomeDir string) (string, error) {
+	if golemicHomeDir != "" {
+		return golemicHomeDir, nil
+	}
+	return os.UserHomeDir()
+}
+
+func seedLocalPiAgentDir(localPiAgentDir, golemicPiDir string) error {
+	entries, err := os.ReadDir(localPiAgentDir)
+	if err != nil {
+		return fmt.Errorf("agent: read local pi agent dir %q: %w", localPiAgentDir, err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		// settings.json is derived, not symlinked; extensions is owned by seedExtensions
+		// so the gm_ extension can be added without clobbering the seeded real directory.
+		if name == "settings.json" || name == "extensions" {
+			continue
+		}
+		target := filepath.Join(localPiAgentDir, name)
+		dst := filepath.Join(golemicPiDir, name)
+		if err := ensureSymlink(dst, target); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // seedExtensions provisions golemicPiDir/extensions. Without a usable gm extension source

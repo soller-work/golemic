@@ -9,22 +9,20 @@ import (
 	"time"
 )
 
-// captureArgsFactory returns a factory that records the full argv per invocation
+// captureArgsFactory sets cfg.CommandFactory to record the full argv per invocation
 // alongside running the given scripts in order.
-func captureArgsFactory(t *testing.T, scripts []string, allArgs *[][]string) {
+func captureArgsFactory(t *testing.T, cfg *RoleConfig, scripts []string, allArgs *[][]string) {
 	t.Helper()
 	invocations := 0
-	CommandFactory = func(name string, args ...string) *exec.Cmd {
+	cfg.CommandFactory = func(name string, args ...string) *exec.Cmd {
 		idx := invocations
 		invocations++
 		*allArgs = append(*allArgs, append([]string{name}, args...))
 		if idx >= len(scripts) {
 			t.Fatalf("unexpected invocation %d (only %d scripts configured)", idx+1, len(scripts))
 		}
-		cmd := exec.Command(scripts[idx], args...)
-		return cmd
+		return exec.Command(scripts[idx], args...)
 	}
-	t.Cleanup(func() { CommandFactory = exec.Command })
 }
 
 // limitErrorTranscript is a Pi JSONL transcript simulating a subscription limit error.
@@ -55,7 +53,7 @@ func TestRunRole_SingleModel_Success(t *testing.T) {
 	scripts := []string{
 		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -85,7 +83,7 @@ func TestRunRole_TwoModelChain_FirstLimitFallback(t *testing.T) {
 		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
 		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -117,7 +115,7 @@ func TestRunRole_TwoModelChain_BothExhausted(t *testing.T) {
 		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
 		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if !errors.Is(err, ErrModelChainExhausted) {
@@ -155,7 +153,7 @@ func TestRunRole_AutoRetryEndFallback(t *testing.T) {
 		writeScript(t, `echo '`+autoRetryEndFailTranscript[:len(autoRetryEndFailTranscript)-1]+`'; exit 0`),
 		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -180,7 +178,7 @@ func TestRunRole_NonFallbackTaskFailure(t *testing.T) {
 	scripts := []string{
 		writeScript(t, `echo '`+taskFailTranscript[:len(taskFailTranscript)-1]+`'; exit 1`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -220,7 +218,7 @@ func TestRunRole_ModelChainDeduplication(t *testing.T) {
 	scripts := []string{
 		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -245,7 +243,7 @@ func TestRunRole_SemanticFailureAbortedAtExitZero(t *testing.T) {
 	scripts := []string{
 		writeScript(t, `echo '`+abortedTranscript[:len(abortedTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -271,7 +269,7 @@ func TestRunRole_SemanticFailureErrorNoLimitAtExitZero(t *testing.T) {
 	scripts := []string{
 		writeScript(t, `echo '`+errorNoLimitTranscript[:len(errorNoLimitTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	exitCode, _, err := RunRole(context.Background(), cfg)
 	if err != nil {
@@ -296,7 +294,7 @@ func TestRunRole_EachModelGetsExactlyOneModelArg(t *testing.T) {
 		writeScript(t, `echo '`+limitErrorTranscript[:len(limitErrorTranscript)-1]+`'; exit 0`),
 		writeScript(t, `echo '`+stopTranscript[:len(stopTranscript)-1]+`'; exit 0`),
 	}
-	captureArgsFactory(t, scripts, &allArgs)
+	captureArgsFactory(t, &cfg, scripts, &allArgs)
 
 	_, _, _ = RunRole(context.Background(), cfg)
 
