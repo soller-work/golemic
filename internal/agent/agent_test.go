@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -20,8 +19,6 @@ import (
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
-
-var helperMode = flag.String("helper-mode", "", "agent subprocess helper mode")
 
 // writeScript creates a temporary executable shell script and returns its path.
 // The script is automatically cleaned up when the test ends.
@@ -47,137 +44,6 @@ func waitForFile(t *testing.T, path string, timeout time.Duration) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("file %q did not appear within %v", path, timeout)
-}
-
-func helperCommand(mode string) *exec.Cmd {
-	return exec.Command(os.Args[0], "-test.run=TestAgentSubprocessHelper", "-helper-mode="+mode)
-}
-
-func runHelperSleepForever() {
-	for {
-		time.Sleep(time.Hour)
-	}
-}
-
-func runHelperTerminalThenDelayedMutation(events ...string) {
-	for _, event := range events {
-		fmt.Println(event)
-	}
-	marker := os.Getenv("MUTATION_MARKER")
-	if marker != "" {
-		time.Sleep(100 * time.Millisecond)
-		_ = os.WriteFile(marker, []byte("mutated\n"), 0644)
-	}
-	runHelperSleepForever()
-}
-
-func runHelperRepeatedLines(count int, lines ...string) {
-	for i := 0; i < count; i++ {
-		for _, line := range lines {
-			fmt.Println(line)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-func runHelperRepeatedLinesForever(lines ...string) {
-	for {
-		for _, line := range lines {
-			fmt.Println(line)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
-func runHelperProcessGroup(t *testing.T) {
-	t.Helper()
-	pidPath := os.Getenv("PID_FILE")
-	if pidPath == "" {
-		return
-	}
-	child := exec.Command("sleep", "60")
-	if err := child.Start(); err != nil {
-		t.Fatalf("failed to start child sleep: %v", err)
-	}
-	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d\n", child.Process.Pid)), 0644); err != nil {
-		t.Fatalf("failed to write pid file: %v", err)
-	}
-	runHelperSleepForever()
-}
-
-var helperHandlers = map[string]func(*testing.T){
-	"helper-hang": func(*testing.T) { runHelperSleepForever() },
-	"helper-inflight": func(*testing.T) {
-		fmt.Println(`{"type":"tool_execution_start"}`)
-		runHelperSleepForever()
-	},
-	"helper-success-marker": func(*testing.T) {
-		fmt.Println(`MARKER_ATTEMPT_TWO`)
-		fmt.Println("success")
-	},
-	"helper-marker-then-hang": func(*testing.T) {
-		// Write marker then a tool completion so lastStreamOffset advances past
-		// the marker, classifying the subsequent hang as "hang" (retryable) not
-		// "thinking_loop" (non-retryable).
-		fmt.Println(`MARKER_ATTEMPT_ONE`)
-		fmt.Println(`{"type":"tool_execution_start"}`)
-		fmt.Println(`{"type":"tool_execution_end"}`)
-		runHelperSleepForever()
-	},
-	"helper-limit-error":         func(*testing.T) { fmt.Print(limitErrorTranscript) },
-	"helper-stop":                func(*testing.T) { fmt.Print(stopTranscript) },
-	"helper-auto-retry-end-fail": func(*testing.T) { fmt.Print(autoRetryEndFailTranscript) },
-	"helper-task-fail": func(*testing.T) {
-		fmt.Print(taskFailTranscript)
-		os.Exit(1)
-	},
-	"helper-steady-output": func(*testing.T) {
-		runHelperRepeatedLines(10, `{"type":"tool_execution_start"}`, `{"type":"tool_execution_end"}`)
-	},
-	"helper-thinking":       func(*testing.T) { runHelperRepeatedLinesForever(`{"type":"thinking","content":"still thinking"}`) },
-	"helper-thinking-delta": func(*testing.T) { runHelperRepeatedLinesForever(`{"type":"thinking_delta","delta":"x"}`) },
-	"helper-composition":    func(*testing.T) { runHelperRepeatedLinesForever(`{"type":"toolcall_delta","delta":"x"}`) },
-	"helper-devdone-accepted": func(*testing.T) {
-		runHelperTerminalThenDelayedMutation(
-			`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`,
-			`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}`,
-		)
-	},
-	"helper-devdone-gate-rejected": func(*testing.T) {
-		runHelperTerminalThenDelayedMutation(
-			`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`,
-			`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"DEV_GATE","message":"gm_dev_done: last gm_project_check was not green"}}`,
-		)
-	},
-	"helper-devdone-schema-invalid": func(*testing.T) {
-		runHelperTerminalThenDelayedMutation(
-			`{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}`,
-			`{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":false,"code":"SCHEMA_INVALID","message":"gm_dev_done: prBody is required"}}`,
-		)
-	},
-	"helper-review-submit": func(*testing.T) {
-		runHelperTerminalThenDelayedMutation(
-			`{"type":"tool_execution_start","toolName":"gm_review_submit","args":{}}`,
-			`{"type":"tool_execution_end","toolName":"gm_review_submit","result":{"ok":true,"accepted":true}}`,
-		)
-	},
-	"helper-write-once-hang": func(*testing.T) {
-		_, _ = os.Stdout.Write([]byte("hello"))
-		runHelperSleepForever()
-	},
-	"helper-timeout-output": func(*testing.T) {
-		fmt.Println("started")
-		runHelperSleepForever()
-	},
-	"helper-process-group": runHelperProcessGroup,
-}
-
-// TestAgentSubprocessHelper is invoked as a child process by selected tests.
-// It is a no-op during the parent test run.
-func TestAgentSubprocessHelper(t *testing.T) {
-	if fn, ok := helperHandlers[*helperMode]; ok {
-		fn(t)
-	}
 }
 
 // fakeCommandFactory returns a CommandFactory function that runs the given
@@ -208,32 +74,6 @@ func attemptAwareFactory(t *testing.T, scripts []string) *int {
 		}
 		cmd := exec.Command(scripts[idx], args...)
 		return cmd
-	}
-	t.Cleanup(func() { CommandFactory = exec.Command })
-	return &invocations
-}
-
-func helperCommandFactory(t *testing.T, mode string) *int {
-	t.Helper()
-	invocations := 0
-	CommandFactory = func(name string, args ...string) *exec.Cmd {
-		invocations++
-		return helperCommand(mode)
-	}
-	t.Cleanup(func() { CommandFactory = exec.Command })
-	return &invocations
-}
-
-func attemptAwareHelperFactory(t *testing.T, modes []string) *int {
-	t.Helper()
-	invocations := 0
-	CommandFactory = func(name string, args ...string) *exec.Cmd {
-		idx := invocations
-		invocations++
-		if idx >= len(modes) {
-			t.Fatalf("unexpected invocation %d (only %d helper modes configured)", idx+1, len(modes))
-		}
-		return helperCommand(modes[idx])
 	}
 	t.Cleanup(func() { CommandFactory = exec.Command })
 	return &invocations
@@ -787,13 +627,22 @@ func TestRunRole_ContextCancelled(t *testing.T) {
 
 func TestRunRole_ProcessGroupKilled(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 300 * time.Millisecond
+	cfg.Timeout = 1200 * time.Millisecond // generous enough to ensure script executes before kill
 
 	pidDir := t.TempDir()
 	pidFile := filepath.Join(pidDir, "child.pid")
-	cfg.Env = append(cfg.Env, "PID_FILE="+pidFile)
 
-	helperCommandFactory(t, "helper-process-group")
+	// Script that forks a background child, writes the child's PID to a known
+	// file, then blocks via wait. Both parent and child must be killed by the
+	// process-group kill on timeout.
+	scriptContent := fmt.Sprintf(
+		"sleep 60 >/dev/null 2>&1 &\nprintf '%%d\\n' $! > %s\nwait",
+		pidFile,
+	)
+	scriptPath := writeScript(t, scriptContent)
+
+	var capturedArgs []string
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	start := time.Now()
@@ -849,7 +698,14 @@ func TestRunRole_DevDoneAcceptedStopsInvocationBeforePostGateMutation_AC006(t *t
 	markerFile := filepath.Join(t.TempDir(), "mutated.txt")
 	cfg.Env = append(cfg.Env, "MUTATION_MARKER="+markerFile)
 
-	helperCommandFactory(t, "helper-devdone-accepted")
+	scriptContent := `printf '%s\n' '{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}'
+printf '%s\n' '{"type":"tool_execution_end","toolName":"gm_dev_done","result":{"ok":true,"accepted":true}}'
+sleep 1
+echo mutated > "$MUTATION_MARKER"
+`
+	scriptPath := writeScript(t, scriptContent)
+	var capturedArgs []string
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, _, err := RunRole(ctx, cfg)
@@ -886,11 +742,14 @@ func TestRunRole_DevDoneRejectedOrInvalidStopsInvocationBeforePostGateMutation_A
 			markerFile := filepath.Join(t.TempDir(), "mutated.txt")
 			cfg.Env = append(cfg.Env, "MUTATION_MARKER="+markerFile)
 
-			mode := "helper-devdone-gate-rejected"
-			if tc.name == "schema_invalid" {
-				mode = "helper-devdone-schema-invalid"
-			}
-			helperCommandFactory(t, mode)
+			scriptContent := `printf '%s\n' '{"type":"tool_execution_start","toolName":"gm_dev_done","args":{}}'
+printf '%s\n' '{"type":"tool_execution_end","toolName":"gm_dev_done","result":` + tc.result + `}'
+sleep 1
+echo mutated > "$MUTATION_MARKER"
+`
+			scriptPath := writeScript(t, scriptContent)
+			var capturedArgs []string
+			fakeCommandFactory(t, scriptPath, &capturedArgs)
 
 			ctx := context.Background()
 			exitCode, _, err := RunRole(ctx, cfg)
@@ -913,7 +772,14 @@ func TestRunRole_ReviewSubmitAcceptedStopsInvocationBeforePostGateMutation_AC006
 	markerFile := filepath.Join(t.TempDir(), "mutated.txt")
 	cfg.Env = append(cfg.Env, "MUTATION_MARKER="+markerFile)
 
-	helperCommandFactory(t, "helper-review-submit")
+	scriptContent := `printf '%s\n' '{"type":"tool_execution_start","toolName":"gm_review_submit","args":{}}'
+printf '%s\n' '{"type":"tool_execution_end","toolName":"gm_review_submit","result":{"ok":true,"accepted":true}}'
+sleep 1
+echo mutated > "$MUTATION_MARKER"
+`
+	scriptPath := writeScript(t, scriptContent)
+	var capturedArgs []string
+	fakeCommandFactory(t, scriptPath, &capturedArgs)
 
 	ctx := context.Background()
 	exitCode, _, err := RunRole(ctx, cfg)
@@ -1086,7 +952,7 @@ func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
 
 	ctx := context.Background()
@@ -1128,13 +994,23 @@ func TestRunRole_SteadyOutputNotKilled_AC2(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	invocations := helperCommandFactory(t, "helper-steady-output")
+	// Emit tool_execution_end events every 50ms (< 500ms idle timeout), run for ~0.5s.
+	steadyScript := `
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  printf '{"type":"tool_execution_start"}\n'
+  printf '{"type":"tool_execution_end"}\n'
+  sleep 0.05
+done
+exit 0
+`
+	scriptPath := writeScript(t, steadyScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
 
 	ctx := context.Background()
@@ -1231,7 +1107,7 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 	stallLogWriter = &stallLog
 	t.Cleanup(func() { stallLogWriter = origWriter })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1272,19 +1148,22 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 // before the wall-clock timeout, returning ErrStalled.
 func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	// idle=1s, poll=750ms. lastProgress is anchored to process start (~t0).
-	// First poll at ~750ms: 750ms < 1s → no stall.
-	// Second poll at ~1.5s: 1.5s >= 1s → stall.
-	// Wall-clock timeout=2.4s, so 1.5s < 2.4s → ErrStalled, not ErrTimeout.
-	cfg.Timeout = 2400 * time.Millisecond
+	// idle=500ms, poll=250ms. lastProgress is anchored to process start (~t0).
+	// First poll at ~250ms: 250ms < 500ms → no stall.
+	// Second poll at ~500ms: ~500ms >= 500ms → stall.
+	// Wall-clock timeout=700ms, so stall at ~500ms < 700ms → ErrStalled, not ErrTimeout.
+	cfg.Timeout = 700 * time.Millisecond
 
-	invocations := helperCommandFactory(t, "helper-write-once-hang")
+	writeOnceThenHang := `printf 'hello'
+while true; do sleep 3600; done`
+	scriptPath := writeScript(t, writeOnceThenHang)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
-	pollInterval = 750 * time.Millisecond
+	pollInterval = 250 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "2")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1315,7 +1194,7 @@ func TestRunRole_AllAttemptsStall_AC2(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1337,14 +1216,25 @@ func TestRunRole_StallThenSuccess_AC3(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Attempt-aware helper: attempt 1 writes its marker then stalls, attempt 2 succeeds.
-	invocations := attemptAwareHelperFactory(t, []string{"helper-marker-then-hang", "helper-success-marker"})
+	// Attempt 1: write a distinctive marker to stdout (the transcript), then hang so it stalls.
+	stallScript := `printf 'MARKER_ATTEMPT_ONE'
+while true; do sleep 3600; done`
+	// Attempt 2: write a different marker to stdout, emit success, exit 0.
+	successScript := `printf 'MARKER_ATTEMPT_TWO'
+echo "success"
+exit 0`
+
+	stallPath := writeScript(t, stallScript)
+	successPath := writeScript(t, successScript)
+
+	// Attempt-aware factory: attempt 1 stalls, attempt 2 succeeds
+	invocations := attemptAwareFactory(t, []string{stallPath, successPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1383,13 +1273,23 @@ func TestRunRole_SteadyOutput_AC4(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	invocations := helperCommandFactory(t, "helper-steady-output")
+	// Emit tool_execution_end every 50ms (< 500ms idle timeout), run for ~0.35s total.
+	steadyScript := `
+for i in 1 2 3 4 5 6 7; do
+  printf '{"type":"tool_execution_start"}\n'
+  printf '{"type":"tool_execution_end"}\n'
+  sleep 0.05
+done
+exit 0
+`
+	scriptPath := writeScript(t, steadyScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1420,9 +1320,12 @@ func TestRunRole_SteadyOutput_AC4(t *testing.T) {
 // AC-5: produces output but exceeds wall-clock timeout → ErrTimeout (terminal, not retried)
 func TestRunRole_TimeoutNotRetried_AC5(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 300 * time.Millisecond
+	cfg.Timeout = 2 * time.Second
 
-	invocations := helperCommandFactory(t, "helper-timeout-output")
+	// Output immediately, then sleep forever
+	timeoutScript := `echo "started" && while true; do sleep 3600; done`
+	scriptPath := writeScript(t, timeoutScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
@@ -1466,8 +1369,11 @@ func TestRunRole_CustomEnvVars_AC7(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
+	sleepScript := `while true; do sleep 3600; done`
+	scriptPath := writeScript(t, sleepScript)
+
 	// Spec AC-7: MAX_STALL_RETRIES=1 means exactly 2 total attempts (1 initial + 1 retry)
-	invocations := attemptAwareHelperFactory(t, []string{"helper-hang", "helper-hang"})
+	invocations := attemptAwareFactory(t, []string{scriptPath, scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
@@ -1818,13 +1724,19 @@ func TestToolProgress_ThinkingLoopStalls(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	invocations := helperCommandFactory(t, "helper-thinking")
+	// Continuously emit thinking events but never complete a tool execution.
+	thinkingScript := `while true; do
+  printf '{"type":"thinking","content":"still thinking"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, thinkingScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1") // would retry if hang; must NOT retry for thinking_loop
 
 	ctx := context.Background()
@@ -1868,7 +1780,7 @@ func TestStallDetection_HangRetriesThenStalled(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1898,7 +1810,12 @@ func TestStallDetection_ThinkingLoopLogReason(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	attemptAwareHelperFactory(t, []string{"helper-thinking-delta"})
+	thinkingScript := `while true; do
+  printf '{"type":"thinking_delta","delta":"x"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, thinkingScript)
+	attemptAwareFactory(t, []string{scriptPath})
 
 	var stallLog bytes.Buffer
 	origWriter := stallLogWriter
@@ -1909,7 +1826,7 @@ func TestStallDetection_ThinkingLoopLogReason(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1928,10 +1845,15 @@ func TestStallDetection_ThinkingLoopLogReason(t *testing.T) {
 func TestRoleConfig_IdleTimeoutOverridesEnv(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
-	cfg.IdleTimeout = 200 * time.Millisecond // explicit; env sets a longer value
+	cfg.IdleTimeout = 1 * time.Second // explicit; env sets a longer value
 
-	// Stream grows → thinking_loop; with explicit IdleTimeout it fires quickly.
-	helperCommandFactory(t, "helper-thinking-delta")
+	// Stream grows → thinking_loop; with explicit 1s IdleTimeout it fires quickly.
+	thinkingScript := `while true; do
+  printf '{"type":"thinking","content":"looping"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, thinkingScript)
+	attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
@@ -1961,17 +1883,20 @@ func TestRoleConfig_IdleTimeoutOverridesEnv(t *testing.T) {
 func TestToolProgress_InFlightToolSuppressesStall(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	// Short wall-clock timeout so the test completes quickly.
-	cfg.Timeout = 300 * time.Millisecond
+	cfg.Timeout = 2 * time.Second
 
-	invocations := helperCommandFactory(t, "helper-inflight")
+	// Emit tool_execution_start then hang indefinitely (no end event).
+	inFlightScript := `printf '{"type":"tool_execution_start"}\n'
+while true; do sleep 3600; done`
+	scriptPath := writeScript(t, inFlightScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
 	// idle timeout shorter than wall-clock timeout: stall would fire if not suppressed.
-	cfg.Timeout = 400 * time.Millisecond
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1998,13 +1923,21 @@ func TestToolProgress_RegularCompletionsNoStall(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	invocations := helperCommandFactory(t, "helper-steady-output")
+	// Complete a tool every 50ms (< 500ms idle timeout), 10 times, then exit.
+	regularScript := `for i in 1 2 3 4 5 6 7 8 9 10; do
+  printf '{"type":"tool_execution_start"}\n'
+  printf '{"type":"tool_execution_end"}\n'
+  sleep 0.05
+done
+exit 0`
+	scriptPath := writeScript(t, regularScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -2030,13 +1963,19 @@ func TestToolProgress_ToolcallCompositionStalls(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	invocations := helperCommandFactory(t, "helper-composition")
+	// Continuously emit toolcall_delta (composition) but never start a real execution.
+	compositionScript := `while true; do
+  printf '{"type":"toolcall_delta","delta":"x"}\n'
+  sleep 0.05
+done`
+	scriptPath := writeScript(t, compositionScript)
+	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	cfg.IdleTimeout = 150 * time.Millisecond
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
