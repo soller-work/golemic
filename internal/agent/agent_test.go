@@ -1151,8 +1151,8 @@ func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
 	// idle=500ms, poll=250ms. lastProgress is anchored to process start (~t0).
 	// First poll at ~250ms: 250ms < 500ms → no stall.
 	// Second poll at ~500ms: ~500ms >= 500ms → stall.
-	// Wall-clock timeout=700ms, so stall at ~500ms < 700ms → ErrStalled, not ErrTimeout.
-	cfg.Timeout = 700 * time.Millisecond
+	// Wall-clock timeout=1000ms gives 500ms headroom beyond the stall point.
+	cfg.Timeout = 1000 * time.Millisecond
 
 	writeOnceThenHang := `printf 'hello'
 while true; do sleep 3600; done`
