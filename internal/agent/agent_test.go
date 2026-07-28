@@ -952,7 +952,7 @@ func TestRunRole_StallRetryWithSameSessionID_AC3(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
 
 	ctx := context.Background()
@@ -994,12 +994,12 @@ func TestRunRole_SteadyOutputNotKilled_AC2(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Emit tool_execution_end events every 200ms (< 1s idle timeout), run for ~2s.
+	// Emit tool_execution_end events every 50ms (< 500ms idle timeout), run for ~0.5s.
 	steadyScript := `
 for i in 1 2 3 4 5 6 7 8 9 10; do
   printf '{"type":"tool_execution_start"}\n'
   printf '{"type":"tool_execution_end"}\n'
-  sleep 0.2
+  sleep 0.05
 done
 exit 0
 `
@@ -1010,7 +1010,7 @@ exit 0
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "2")
 
 	ctx := context.Background()
@@ -1107,7 +1107,7 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 	stallLogWriter = &stallLog
 	t.Cleanup(func() { stallLogWriter = origWriter })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1148,11 +1148,10 @@ func TestRunRole_StallDetection_AC1(t *testing.T) {
 // before the wall-clock timeout, returning ErrStalled.
 func TestRunRole_StallAnchoredToLastWrite_AC1b(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	// idle=2s, poll=1.5s. lastProgress is anchored to process start (~t0).
-	// First poll at ~1.5s: 1.5s < 2s → no stall.
-	// Second poll at ~3.0s: 3.0s >= 2s → stall.
-	// Wall-clock timeout=3.75s, so 3.0s < 3.75s → ErrStalled, not ErrTimeout.
-	cfg.Timeout = 3750 * time.Millisecond
+	// idle=150ms, poll=250ms. lastProgress is anchored to process start (~t0).
+	// First poll at ~250ms: 250ms >= 150ms → stall fires immediately.
+	// Wall-clock timeout=1000ms gives plenty of headroom.
+	cfg.Timeout = 1000 * time.Millisecond
 
 	writeOnceThenHang := `printf 'hello'
 while true; do sleep 3600; done`
@@ -1160,10 +1159,10 @@ while true; do sleep 3600; done`
 	invocations := attemptAwareFactory(t, []string{scriptPath})
 
 	origPoll := pollInterval
-	pollInterval = 1500 * time.Millisecond
+	pollInterval = 250 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "2")
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1194,7 +1193,7 @@ func TestRunRole_AllAttemptsStall_AC2(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1234,7 +1233,7 @@ exit 0`
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1273,12 +1272,12 @@ func TestRunRole_SteadyOutput_AC4(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Emit tool_execution_end every 300ms (< 1s idle timeout), run for ~2s total.
+	// Emit tool_execution_end every 50ms (< 500ms idle timeout), run for ~0.35s total.
 	steadyScript := `
 for i in 1 2 3 4 5 6 7; do
   printf '{"type":"tool_execution_start"}\n'
   printf '{"type":"tool_execution_end"}\n'
-  sleep 0.3
+  sleep 0.05
 done
 exit 0
 `
@@ -1289,7 +1288,7 @@ exit 0
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1736,7 +1735,7 @@ done`
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1") // would retry if hang; must NOT retry for thinking_loop
 
 	ctx := context.Background()
@@ -1780,7 +1779,7 @@ func TestStallDetection_HangRetriesThenStalled(t *testing.T) {
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 150 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "1")
 
 	ctx := context.Background()
@@ -1826,7 +1825,7 @@ done`
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1896,7 +1895,7 @@ while true; do sleep 3600; done`
 	t.Cleanup(func() { pollInterval = origPoll })
 
 	// idle timeout shorter than wall-clock timeout: stall would fire if not suppressed.
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1923,11 +1922,11 @@ func TestToolProgress_RegularCompletionsNoStall(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
 	cfg.Timeout = 5 * time.Second
 
-	// Complete a tool every 200ms (< 1s idle timeout), 10 times, then exit.
+	// Complete a tool every 50ms (< 500ms idle timeout), 10 times, then exit.
 	regularScript := `for i in 1 2 3 4 5 6 7 8 9 10; do
   printf '{"type":"tool_execution_start"}\n'
   printf '{"type":"tool_execution_end"}\n'
-  sleep 0.2
+  sleep 0.05
 done
 exit 0`
 	scriptPath := writeScript(t, regularScript)
@@ -1937,7 +1936,7 @@ exit 0`
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
@@ -1975,7 +1974,7 @@ done`
 	pollInterval = 20 * time.Millisecond
 	t.Cleanup(func() { pollInterval = origPoll })
 
-	t.Setenv("GOLEMIC_AGENT_IDLE_TIMEOUT_SEC", "1")
+	cfg.IdleTimeout = 500 * time.Millisecond
 	t.Setenv("GOLEMIC_AGENT_MAX_STALL_RETRIES", "0")
 
 	ctx := context.Background()
