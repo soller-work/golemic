@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -739,5 +740,139 @@ func TestDeriveReasonUsesLastEvent(t *testing.T) {
 	reason := l.deriveReason(eventLogPath)
 	if reason != "failed" {
 		t.Errorf("reason: want failed (last event was escalated), got %q", reason)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Back-to-back: two queued issues are processed without waiting the interval
+// ---------------------------------------------------------------------------
+
+func TestBackToBackIssuesNoIntervalWait(t *testing.T) { //nolint:cyclop,gocognit,funlen // multi-issue coordination; splitting would obscure the timing assertion
+	exec := &mockExecutor{}
+	l, _ := newTestLoop(t, exec)
+	l.interval = time.Hour // would make the test time out if incorrectly waited
+
+	var runIDCounter atomic.Int32
+	l.newRunID = func() string {
+		return fmt.Sprintf("run-%d", runIDCounter.Add(1))
+	}
+
+	var nextIssueCalls atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
+		if name != fakeGolemicBin || len(args) == 0 || args[0] != "next-issue" {
+			return "", fmt.Errorf("unexpected RunInDir: %s %v", name, args)
+		}
+		switch nextIssueCalls.Add(1) {
+		case 1:
+			return issueJSON(42), nil
+		case 2:
+			return issueJSON(43), nil
+		default:
+			// No more issues; cancel so the loop exits cleanly.
+			cancel()
+			return "", &preflight.ErrExit{ExitCode: 2, Stderr: "no issue"}
+		}
+	}
+
+	var viewCalls atomic.Int32
+	exec.runWithEnvFunc = func(env map[string]string, name string, args ...string) (string, error) {
+		if name != "gh" {
+			return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+		}
+		if len(args) >= 2 && args[0] == "issue" && args[1] == "view" {
+			// Views 1,4: ready-for-agent (first view of claim per issue).
+			// All others: in-progress+golemic-dev (claim verification and release).
+			v := viewCalls.Add(1)
+			if v == 1 || v == 4 {
+				return issueViewJSON([]string{"ready-for-agent"}, nil), nil
+			}
+			return issueViewJSON([]string{"in-progress"}, []string{"golemic-dev"}), nil
+		}
+		if len(args) >= 2 && args[0] == "issue" && args[1] == "edit" {
+			return "", nil
+		}
+		return "", fmt.Errorf("unexpected RunWithEnv: %s %v", name, args)
+	}
+
+	var runnerStarts atomic.Int32
+	exec.startWithEnvInDirFunc = func(env map[string]string, dir, name string, args ...string) (ProcessHandle, error) {
+		runnerStarts.Add(1)
+		// Write a success event so the release reason is "done".
+		if logPath := env["GOLEMIC_EVENT_LOG"]; logPath != "" {
+			writeRunFinishedEvent(t, logPath, "success")
+		}
+		return &mockHandle{
+			waitFn:   func() error { return nil },
+			signalFn: func(os.Signal) error { return nil },
+		}, nil
+	}
+
+	start := time.Now()
+
+	done := make(chan struct{})
+	go func() {
+		l.Run(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not exit within 5 seconds — likely waiting the 1-hour interval between issues")
+	}
+
+	if got := runnerStarts.Load(); got != 2 {
+		t.Errorf("expected 2 runner starts (one per issue), got %d", got)
+	}
+	if elapsed := time.Since(start); elapsed >= time.Second {
+		t.Errorf("loop took %v — interval was waited between back-to-back issues", elapsed)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Idle poll: interval is waited when no issue is takeable
+// ---------------------------------------------------------------------------
+
+func TestIdleWaitsInterval(t *testing.T) {
+	exec := &mockExecutor{}
+	l, _ := newTestLoop(t, exec)
+	l.interval = 200 * time.Millisecond
+
+	var nextIssueCalls atomic.Int32
+	exec.runInDirFunc = func(dir, name string, args ...string) (string, error) {
+		nextIssueCalls.Add(1)
+		return "", &preflight.ErrExit{ExitCode: 2, Stderr: "no issue"}
+	}
+
+	var buf bytes.Buffer
+	l.stderr = &buf
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		l.Run(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// OK
+	case <-time.After(time.Second):
+		t.Fatal("loop did not exit after context cancellation")
+	}
+
+	// The first tick fires immediately; the second should not fire within 100ms
+	// because the interval is 200ms. So only 1 next-issue call expected.
+	if got := nextIssueCalls.Load(); got != 1 {
+		t.Errorf("expected 1 next-issue call (interval not elapsed), got %d", got)
+	}
+	if !strings.Contains(buf.String(), "run-loop terminated") {
+		t.Errorf("stderr should contain 'run-loop terminated', got: %q", buf.String())
 	}
 }
