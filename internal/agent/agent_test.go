@@ -1314,31 +1314,50 @@ exit 0
 func TestRunRole_TimeoutNotRetried_AC5(t *testing.T) {
 	t.Parallel()
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 3 * time.Second
+	// defaultRoleConfig sets Timeout=30s; we cancel via context after confirming echo ran.
 
-	// Output immediately, then sleep forever
-	timeoutScript := `echo "started" && while true; do sleep 3600; done`
+	// Signal file ensures echo ran before we trigger termination, avoiding a race
+	// between the timeout and subprocess scheduling under CI load.
+	signalFile := filepath.Join(t.TempDir(), "started.signal")
+	timeoutScript := fmt.Sprintf(`echo "started" && touch %s && while true; do sleep 3600; done`, signalFile)
 	scriptPath := writeScript(t, timeoutScript)
 	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
-	// Long idle timeout so stall detection doesn't fire
+	// Long idle timeout so stall detection doesn't fire.
 	cfg.IdleTimeout = 90 * time.Second
 	cfg.PollInterval = 20 * time.Millisecond
 	cfg.MaxStallRetries = intPtr(2)
 
-	ctx := context.Background()
-	_, paths, err := RunRole(ctx, cfg)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	if err == nil {
+	type runResult struct {
+		paths TranscriptPaths
+		err   error
+	}
+	ch := make(chan runResult, 1)
+	go func() {
+		_, p, e := RunRole(ctx, cfg)
+		ch <- runResult{p, e}
+	}()
+
+	// Wait for subprocess to signal it wrote "started" to stdout.
+	waitForFile(t, signalFile, 10*time.Second)
+	// Cancelling the parent context fires timeoutCtx.Done() in waitForProcess,
+	// which calls timeoutWaitResult and returns ErrTimeout.
+	cancel()
+
+	res := <-ch
+
+	if res.err == nil {
 		t.Fatal("expected ErrTimeout, got nil")
 	}
-
-	if !errors.Is(err, ErrTimeout) {
-		t.Errorf("error should wrap ErrTimeout, got: %v", err)
+	if !errors.Is(res.err, ErrTimeout) {
+		t.Errorf("error should wrap ErrTimeout, got: %v", res.err)
 	}
 	// Should NOT be stalled (wall-clock timeout fires first)
-	if errors.Is(err, ErrStalled) {
-		t.Errorf("timeout should not be retried as stall: %v", err)
+	if errors.Is(res.err, ErrStalled) {
+		t.Errorf("timeout should not be retried as stall: %v", res.err)
 	}
 
 	// AC-5: Assert invoked exactly once (wall-clock timeout terminal, not retried)
@@ -1346,9 +1365,9 @@ func TestRunRole_TimeoutNotRetried_AC5(t *testing.T) {
 		t.Errorf("subprocess invocation count: got %d, want 1 (timeout is terminal)", *invocations)
 	}
 
-	stdoutBytes, err := os.ReadFile(paths.Stdout)
-	if err != nil {
-		t.Fatalf("failed to read stdout: %v", err)
+	stdoutBytes, readErr := os.ReadFile(res.paths.Stdout)
+	if readErr != nil {
+		t.Fatalf("failed to read stdout: %v", readErr)
 	}
 	if !strings.Contains(string(stdoutBytes), "started") {
 		t.Errorf("stdout should contain 'started', got: %q", string(stdoutBytes))
