@@ -37,7 +37,7 @@ def _is_empty(value: Any) -> bool:
 
 
 PLACEHOLDER_RE = re.compile(
-    r"\b(?:tbd|todo|unknown|later|to be decided|not specified|fixme)\b",
+    r"\b(?:tbd|todo|to be decided|not specified|fixme|tbc|to be confirmed|to be determined|to be defined|to be added|placeholder|xxx|wip|work in progress)\b|\?{2,}",
     re.IGNORECASE,
 )
 
