@@ -123,7 +123,7 @@ def cmd_new(args: argparse.Namespace) -> None:
         print(f"❌ Unknown change_type: {change_type}. Must be: feature|bug|refactoring", file=sys.stderr)
         sys.exit(1)
 
-    path = Path(args.file) if args.file else Path(".pi/skills/grill-me/.tmp/slice.json")
+    path = Path(args.path) if args.path else Path(".pi/skills/grill-me/.tmp/slice.json")
 
     skeleton = {
         "slice_type": slice_type,
@@ -312,11 +312,11 @@ def main() -> None:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # new <type> [--file PATH]
+    # new <type> [path]
     new_parser = subparsers.add_parser("new", help="Create skeleton (no N/A sections for type)")
     new_parser.add_argument("type", help="Slice type: command|query|process|integration")
     new_parser.add_argument("--change-type", dest="change_type", default="feature", help="Change type: feature|bug|refactoring (default: feature)")
-    new_parser.add_argument("--file", help="Output path (default: .pi/skills/grill-me/.tmp/slice.json)")
+    new_parser.add_argument("path", nargs="?", default=None, help="Output path (default: .pi/skills/grill-me/.tmp/slice.json)")
     new_parser.set_defaults(func=cmd_new)
 
     # write <path> <json>

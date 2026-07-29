@@ -160,7 +160,7 @@ class TestSkeleton:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "slice.json"
             code, stdout, stderr = run_slice(
-                "new", "command", "--change-type", "bug", "--file", str(path)
+                "new", "command", "--change-type", "bug", str(path)
             )
             assert code == 0, f"new failed: {stderr}"
             data = json.loads(path.read_text())
@@ -173,7 +173,7 @@ class TestSkeleton:
     def test_new_defaults_to_feature_skeleton(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "slice.json"
-            code, stdout, stderr = run_slice("new", "command", "--file", str(path))
+            code, stdout, stderr = run_slice("new", "command", str(path))
             assert code == 0, f"new failed: {stderr}"
             data = json.loads(path.read_text())
             assert data["change_type"] == "feature"

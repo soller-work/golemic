@@ -67,7 +67,7 @@ class TestSliceNew:
             tmpdir = Path(tmpdir)
             slice_path = tmpdir / "slice.json"
 
-            code, stdout, stderr = run_slice_cmd("new", "command", "--file", str(slice_path))
+            code, stdout, stderr = run_slice_cmd("new", "command", str(slice_path))
             assert code == 0, f"Failed to create skeleton: {stderr}"
             assert slice_path.exists(), "Slice file not created"
 
@@ -84,7 +84,7 @@ class TestSliceNew:
             tmpdir = Path(tmpdir)
             slice_path = tmpdir / "slice.json"
 
-            code, stdout, stderr = run_slice_cmd("new", "query", "--file", str(slice_path))
+            code, stdout, stderr = run_slice_cmd("new", "query", str(slice_path))
             assert code == 0
             assert slice_path.exists()
 
@@ -97,7 +97,7 @@ class TestSliceNew:
             tmpdir = Path(tmpdir)
             slice_path = tmpdir / "slice.json"
 
-            code, stdout, stderr = run_slice_cmd("new", "invalid", "--file", str(slice_path))
+            code, stdout, stderr = run_slice_cmd("new", "invalid", str(slice_path))
             assert code != 0, "Should fail with invalid type"
             assert "Unknown slice_type" in stderr
 
