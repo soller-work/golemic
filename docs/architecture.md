@@ -351,8 +351,9 @@ risikoarme Verpackung und kommen als eigene Iterationen oben drauf.
 **Eskalation** per PR-Kommentar an den Menschen, kein Merge, kein `done`.
 
 ### Iteration 3 — Autonomes Polling (`run.sh`)
-`run.sh` fragt alle 60s GitHub nach Issues mit Label `ready-for-agent` ohne offene
-Abhängigkeiten, wählt eins, ruft den Runner. Dauerbetrieb ohne Menschen.
+`run.sh` startet `golemic` (ohne Subcommand), das alle 60s GitHub nach Issues mit
+Label `ready-for-agent` ohne offene Abhängigkeiten fragt, eins wählt und den Runner
+aufruft. Dauerbetrieb ohne Menschen.
 
 ### Iteration 4 — Human-in-the-Loop-Pickup
 Runner erkennt PRs, die ein **Mensch** auf `changes_requested` gesetzt hat

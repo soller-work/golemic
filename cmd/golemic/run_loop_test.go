@@ -114,7 +114,7 @@ func TestRunLoopDispatcher_SingleTickSmoke(t *testing.T) {
 	})
 
 	var stdout, stderr bytes.Buffer
-	exitCode := runRunLoop(ctx, []string{"golemic", "run-loop"}, &stdout, &stderr, exec)
+	exitCode := runRunLoop(ctx, []string{"golemic"}, &stdout, &stderr, exec)
 	if exitCode != 0 {
 		t.Errorf("exit code: want 0, got %d; stderr: %q", exitCode, stderr.String())
 	}
@@ -159,7 +159,7 @@ func TestRunLoopDispatcher_StartupFailsWhenLabelsMissing(t *testing.T) { //nolin
 
 	ctx := context.Background()
 	var stdout, stderr bytes.Buffer
-	exitCode := runRunLoop(ctx, []string{"golemic", "run-loop"}, &stdout, &stderr, exec)
+	exitCode := runRunLoop(ctx, []string{"golemic"}, &stdout, &stderr, exec)
 	if exitCode != 1 {
 		t.Errorf("exit code: want 1, got %d", exitCode)
 	}
@@ -238,7 +238,7 @@ func TestRunLoopDispatcher_EnvWiredCorrectly(t *testing.T) { //nolint:cyclop,goc
 
 	done := make(chan int, 1)
 	go func() {
-		done <- runRunLoop(ctx, []string{"golemic", "run-loop"}, &stdout, &stderr, exec)
+		done <- runRunLoop(ctx, []string{"golemic"}, &stdout, &stderr, exec)
 	}()
 
 	select {
