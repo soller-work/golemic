@@ -77,31 +77,42 @@ func (l *Loop) Run(ctx context.Context) {
 	fmt.Fprintln(l.stderr, "run-loop started") //nolint:errcheck
 
 	// First tick fires immediately.
-	l.tick(ctx)
+	processed := l.tick(ctx)
 
 	for {
-		select {
-		case <-ctx.Done():
-			fmt.Fprintln(l.stderr, "run-loop terminated") //nolint:errcheck
-			return
-		case <-time.After(l.interval):
-			l.tick(ctx)
+		if processed {
+			// After a completed issue run, check cancellation then re-tick immediately.
+			select {
+			case <-ctx.Done():
+				fmt.Fprintln(l.stderr, "run-loop terminated") //nolint:errcheck
+				return
+			default:
+			}
+		} else {
+			select {
+			case <-ctx.Done():
+				fmt.Fprintln(l.stderr, "run-loop terminated") //nolint:errcheck
+				return
+			case <-time.After(l.interval):
+			}
 		}
+		processed = l.tick(ctx)
 	}
 }
 
-// tick performs one complete tick cycle.
-func (l *Loop) tick(ctx context.Context) {
+// tick performs one complete tick cycle. It reports true only when an issue
+// was claimed and the runner was started and awaited (runAndRelease reached).
+func (l *Loop) tick(ctx context.Context) bool {
 	issueNum, ok := l.selectIssue()
 	if !ok {
-		return
+		return false
 	}
 
 	runID := l.newRunID()
 	runsDir := filepath.Join(l.homeDir, ".golemic", l.project, "runs", runID)
 	if err := os.MkdirAll(runsDir, 0o755); err != nil {
 		fmt.Fprintf(l.stderr, "run-loop: failed to create run dir: %v\n", err) //nolint:errcheck
-		return
+		return false
 	}
 	eventLogPath := filepath.Join(runsDir, "events.jsonl")
 
@@ -112,10 +123,11 @@ func (l *Loop) tick(ctx context.Context) {
 	}
 
 	if !l.claim(issueNum, tickEnv) {
-		return
+		return false
 	}
 
 	l.runAndRelease(ctx, issueNum, eventLogPath, tickEnv)
+	return true
 }
 
 // selectIssue calls golemic next-issue and returns the issue number.
