@@ -156,11 +156,78 @@ class TestValidateSlice:
             data = load_minimal_slice()
             data["readiness"] = "ready"
             data["blockers"] = []
-            data["behavior"] = "Return `TBD` as placeholder text."  # quoted TBD
+            data["behavior"] = "Return `TBD` as the marker text."  # quoted TBD
             slice_path.write_text(json.dumps(data))
 
             code, stdout, stderr = run_validate(str(schema_path), str(slice_path))
             assert code == 0, "Should pass: quoted placeholder is allowed"
+
+    def test_validate_removed_words_pass_unquoted(self):
+        """Test that 'unknown' and 'later' no longer trigger placeholder errors."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            slice_path = tmpdir / "slice.json"
+            schema_path = SCHEMA_PATH
+
+            data = load_minimal_slice()
+            data["readiness"] = "ready"
+            data["blockers"] = []
+            data["behavior"] = "An unrecognized subcommand is treated the same as an unknown command. We handle it later in the pipeline."
+            slice_path.write_text(json.dumps(data))
+
+            code, stdout, stderr = run_validate(str(schema_path), str(slice_path))
+            assert code == 0, f"Should pass: 'unknown'/'later' are ordinary prose words, not deferral markers. stderr={stderr}"
+
+    def _check_marker_fails(self, marker_text: str):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            slice_path = Path(tmpdir) / "slice.json"
+            data = load_minimal_slice()
+            data["readiness"] = "ready"
+            data["blockers"] = []
+            data["behavior"] = f"This field contains {marker_text} as a deferral marker."
+            slice_path.write_text(json.dumps(data))
+            code, stdout, stderr = run_validate(str(SCHEMA_PATH), str(slice_path))
+            assert code != 0, f"Should fail: unquoted marker '{marker_text}' should block ready slice"
+
+    def _check_marker_passes_when_backticked(self, marker_text: str):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            slice_path = Path(tmpdir) / "slice.json"
+            data = load_minimal_slice()
+            data["readiness"] = "ready"
+            data["blockers"] = []
+            data["behavior"] = f"Return `{marker_text}` as literal text."
+            slice_path.write_text(json.dumps(data))
+            code, stdout, stderr = run_validate(str(SCHEMA_PATH), str(slice_path))
+            assert code == 0, f"Should pass: backtick-quoted marker '{marker_text}' must not block ready slice"
+
+    def test_new_markers_fail_unquoted(self):
+        """Test that newly added deferral markers block a ready slice."""
+        new_markers = [
+            "tbc",
+            "to be confirmed",
+            "to be determined",
+            "to be defined",
+            "to be added",
+            "placeholder",
+            "xxx",
+            "wip",
+            "work in progress",
+            "???",
+        ]
+        for marker in new_markers:
+            self._check_marker_fails(marker)
+
+    def test_new_markers_pass_when_backticked(self):
+        """Test that backtick-quoted new markers are allowed in ready slices."""
+        new_markers = ["tbc", "placeholder", "xxx", "???"]
+        for marker in new_markers:
+            self._check_marker_passes_when_backticked(marker)
+
+    def test_existing_marker_todo_still_fails(self):
+        """Test that existing marker 'todo' still blocks a ready slice."""
+        self._check_marker_fails("todo")
 
     def test_validate_missing_required_field(self):
         """Test validation fails when required field is missing."""
