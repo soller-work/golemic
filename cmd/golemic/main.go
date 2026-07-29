@@ -28,26 +28,39 @@ var knownCommands = []struct {
 	{"run", "Run the main process (golemic run --issue N)"},
 	{"status", "Show run health status"},
 	{"next-issue", "Return the next takeable GitHub issue (JSON)"},
-	{"run-loop", "Run the autonomous 60-second polling loop for takeable issues"},
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintf(w, "Usage: golemic <command>\n\n")
+	fmt.Fprintf(w, "Usage: golemic [command]\n\n")
+	fmt.Fprintf(w, "  golemic            Start the autonomous polling loop\n")
+	fmt.Fprintf(w, "  golemic --help     Show this help\n\n")
 	fmt.Fprintf(w, "Available commands:\n")
 	for _, c := range knownCommands {
 		fmt.Fprintf(w, "  %-13s %s\n", c.name, c.desc)
 	}
 }
 
-// run dispatches subcommands. All error and usage output goes to stderr.
-// stdout is left untouched for error states. Returns the process exit code.
+// run is the production entry point. It installs the signal handler and delegates
+// to runDispatch with the real run-loop executor.
 func run(args []string, stdout, stderr io.Writer) int {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return runDispatch(ctx, args, stdout, stderr, osRunLoopExecutor{})
+}
+
+// runDispatch is the testable dispatcher. It accepts an injected run-loop executor
+// so tests can drive the loop without real subprocesses.
+func runDispatch(ctx context.Context, args []string, stdout, stderr io.Writer, loopExec runloop.Executor) int {
 	if len(args) < 2 {
-		usage(stderr)
-		return 1
+		return runRunLoop(ctx, args, stdout, stderr, loopExec)
 	}
 
 	command := args[1]
+
+	if command == "--help" || command == "-h" {
+		usage(stdout)
+		return 0
+	}
 
 	if command == "preflight" {
 		return dispatchPreflight(args, stdout, stderr)
@@ -59,12 +72,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if code, ok := dispatchExtendedCommands(command, args, stdout, stderr); ok {
 		return code
-	}
-
-	if command == "run-loop" {
-		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-		defer stop()
-		return runRunLoop(ctx, args, stdout, stderr, osRunLoopExecutor{})
 	}
 
 	for _, c := range knownCommands {
