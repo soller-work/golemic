@@ -54,6 +54,7 @@ _CORE_HINTS = {
     "definition_of_done": "Array of strings: completion criteria.",
     "security_relevant": "Boolean: set true if security implications exist.",
     "security": "String (Markdown, required if security_relevant=true).",
+    "e2e_modify_approved": "Boolean (default false): set true ONLY if the user explicitly grants permission to modify existing E2E tests during the interview.",
     "blockers": "Array of {kind: 'question'|'assumption'|'blocker', text: '...'} — empty when ready.",
     "readiness": "Enum: 'ready' or 'blocked' (set by finalize).",
 }
@@ -65,7 +66,7 @@ def plan_order(change_type: str) -> list[str]:
         "change_type", "stakeholder", "trigger", "success_outcome", "tldr", "scope",
         *[f.key for f in _detail_blocks.detail_fields(change_type)],
         "proof", "codebase_evidence", "verify_commands", "definition_of_done",
-        "security_relevant", "security", "blockers", "readiness",
+        "security_relevant", "security", "e2e_modify_approved", "blockers", "readiness",
     ]
 
 
@@ -136,13 +137,19 @@ def cmd_new(args: argparse.Namespace) -> None:
         "scope": {"in": [], "out": []},
     }
     for field in _detail_blocks.detail_fields(change_type):
-        skeleton[field.key] = [] if field.kind == "scenarios" else ""
+        if field.kind == "scenarios":
+            skeleton[field.key] = []
+        elif field.kind == "e2e":
+            skeleton[field.key] = {}
+        else:
+            skeleton[field.key] = ""
     skeleton.update({
         "proof": {"how": "", "why": "", "checks": []},
         "codebase_evidence": [],
         "verify_commands": [],
         "definition_of_done": [],
         "security_relevant": False,
+        "e2e_modify_approved": False,
         "blockers": [],
         "readiness": "blocked",
     })

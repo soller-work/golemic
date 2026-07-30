@@ -26,12 +26,12 @@ _detail_blocks = _load_detail_blocks()
 
 
 def _is_empty(value: Any) -> bool:
-    """Empty means: absent, blank string, or empty list."""
+    """Empty means: absent, blank string, empty list, or empty dict."""
     if value is None:
         return True
     if isinstance(value, str):
         return not value.strip()
-    if isinstance(value, list):
+    if isinstance(value, (list, dict)):
         return len(value) == 0
     return False
 
@@ -128,16 +128,44 @@ def semantic_errors(document: dict[str, Any]) -> list[str]:
     if change_type in _detail_blocks.DETAIL_BLOCKS:
         own_fields = _detail_blocks.detail_fields(change_type)
         own_keys = {f.key for f in own_fields}
+        _cross_ok = _detail_blocks.cross_gattung_ok_keys()
         for field in own_fields:
             if field.required and _is_empty(document.get(field.key)):
                 errors.append(
                     f"change_type '{change_type}' requires a non-empty $.{field.key}"
                 )
-        for key in _detail_blocks.all_detail_keys() - own_keys:
+        for key in _detail_blocks.all_detail_keys() - own_keys - _cross_ok:
             if not _is_empty(document.get(key)):
                 errors.append(
                     f"$.{key} does not belong to change_type '{change_type}' and must be empty"
                 )
+
+    # E2E semantic rules
+    e2e = document.get("e2e") or {}
+    if change_type == "feature":
+        scenarios = e2e.get("scenarios") or []
+        waiver = e2e.get("waiver") or {}
+        has_scenarios = len(scenarios) > 0
+        has_granted_waiver = (
+            isinstance(waiver, dict)
+            and waiver.get("granted") is True
+            and not _is_empty(waiver.get("reason", ""))
+        )
+        if has_scenarios and has_granted_waiver:
+            errors.append(
+                "Feature slice must have either $.e2e.scenarios or a granted $.e2e.waiver, not both"
+            )
+        elif not has_scenarios and not has_granted_waiver:
+            errors.append(
+                "Feature slice requires either non-empty $.e2e.scenarios or "
+                "a granted $.e2e.waiver (granted=true with non-empty reason)"
+            )
+    elif change_type in _detail_blocks.DETAIL_BLOCKS:
+        # Non-feature: waiver is not allowed
+        if isinstance(e2e, dict) and e2e.get("waiver") is not None:
+            errors.append(
+                f"$.e2e.waiver is not allowed for change_type '{change_type}'; waivers are feature-only"
+            )
 
     # Rule 4: if security_relevant=true, security field must be present and non-empty
     if document.get("security_relevant") is True:
