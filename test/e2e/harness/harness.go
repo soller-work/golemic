@@ -109,6 +109,12 @@ func New(t *testing.T) *Harness {
 		reviewerToken: reviewerToken,
 		homeDir:       homeDir,
 	}
+
+	if err := ensureRequiredLabels(t, e2eRepo, devToken); err != nil {
+		t.Skipf("cannot provision required labels in %s: %v", e2eRepo, err)
+		return nil
+	}
+
 	return h
 }
 
@@ -424,6 +430,40 @@ func (h *Harness) LatestRunEventsPath() string {
 		return ""
 	}
 	return filepath.Join(runsDir, latest, "events.jsonl")
+}
+
+// requiredSandboxLabels mirrors internal/preflight/preflight.go:requiredLabels.
+// Update both when golemic's workflow label requirements change.
+var requiredSandboxLabels = []struct {
+	name        string
+	color       string
+	description string
+}{
+	{"in-progress", "fbca04", "Issue is currently claimed by an autonomous runner"},
+	{"needs-human", "d93f0b", "Autonomous runner failed; requires human triage"},
+	{"confidence:high", "0075ca", "Reviewer confidence: high"},
+	{"confidence:medium", "e4e669", "Reviewer confidence: medium"},
+	{"confidence:low", "d93f0b", "Reviewer confidence: low"},
+}
+
+// ensureRequiredLabels idempotently creates the workflow labels golemic's
+// preflight requires in the sandbox repo. Uses --force so already-existing
+// labels are updated rather than causing an error.
+func ensureRequiredLabels(t *testing.T, repo, token string) error {
+	t.Helper()
+	env := append(os.Environ(), "GH_TOKEN="+token)
+	for _, lbl := range requiredSandboxLabels {
+		cmd := exec.Command("gh", "label", "create", lbl.name,
+			"--repo", repo,
+			"--color", lbl.color,
+			"--description", lbl.description,
+			"--force")
+		cmd.Env = env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("gh label create %s: %w\n%s", lbl.name, err, out)
+		}
+	}
+	return nil
 }
 
 // --- helpers ---
