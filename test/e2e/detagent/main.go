@@ -361,7 +361,7 @@ func runReviewer() error {
 	case scenarios.HappyPath, scenarios.DevVerifyFails, scenarios.Collision, scenarios.Timeout:
 		return reviewerApprove(benv)
 	case scenarios.ReviewerRejectsOnce:
-		if round == 0 {
+		if round == 1 {
 			return reviewerReject(benv)
 		}
 		return reviewerApprove(benv)

@@ -22,7 +22,7 @@ import (
 )
 
 // TestE2EHappyPath exercises the full issue → dev → PR → approved review → merge loop.
-// Expects golemic to exit 0 and the run_finished outcome to be "ok".
+// Expects golemic to exit 0 and the run_finished outcome to be "success".
 func TestE2EHappyPath(t *testing.T) {
 	h := harness.New(t)
 	if h == nil {
@@ -46,7 +46,7 @@ func TestE2EHappyPath(t *testing.T) {
 		}
 	})
 
-	result := h.RunWithTimeout(t, issueNum, 0)
+	result := h.RunWithTimeout(t, issueNum, 0, false)
 	t.Logf("golemic stdout:\n%s", result.Stdout)
 	t.Logf("golemic stderr:\n%s", result.Stderr)
 
@@ -60,8 +60,8 @@ func TestE2EHappyPath(t *testing.T) {
 
 	t.Run("Outcome", func(t *testing.T) {
 		outcome := harness.RunFinishedOutcome(eventsPath)
-		if outcome != "ok" {
-			t.Errorf("run_finished outcome: got %q, want %q", outcome, "ok")
+		if outcome != "success" {
+			t.Errorf("run_finished outcome: got %q, want %q", outcome, "success")
 		}
 	})
 
@@ -85,7 +85,7 @@ func TestE2EHappyPath(t *testing.T) {
 }
 
 // TestE2EReviewerRejectsOnce exercises the changes_requested → fix → approved loop.
-// Expects two review_submitted events (changes_requested then approved) and a merged PR.
+// Expects two review_submitted events (changes_requested then approved) and a merged PR, outcome "success".
 func TestE2EReviewerRejectsOnce(t *testing.T) {
 	h := harness.New(t)
 	if h == nil {
@@ -109,7 +109,7 @@ func TestE2EReviewerRejectsOnce(t *testing.T) {
 		}
 	})
 
-	result := h.RunWithTimeout(t, issueNum, 0)
+	result := h.RunWithTimeout(t, issueNum, 0, false)
 	t.Logf("golemic stdout:\n%s", result.Stdout)
 	t.Logf("golemic stderr:\n%s", result.Stderr)
 
@@ -123,8 +123,8 @@ func TestE2EReviewerRejectsOnce(t *testing.T) {
 
 	t.Run("Outcome", func(t *testing.T) {
 		outcome := harness.RunFinishedOutcome(eventsPath)
-		if outcome != "ok" {
-			t.Errorf("run_finished outcome: got %q, want %q", outcome, "ok")
+		if outcome != "success" {
+			t.Errorf("run_finished outcome: got %q, want %q", outcome, "success")
 		}
 	})
 
@@ -168,7 +168,7 @@ func TestE2EDevVerifyFails(t *testing.T) {
 		}
 	})
 
-	result := h.RunWithTimeout(t, issueNum, 0)
+	result := h.RunWithTimeout(t, issueNum, 0, false)
 	t.Logf("golemic stdout:\n%s", result.Stdout)
 	t.Logf("golemic stderr:\n%s", result.Stderr)
 
@@ -218,7 +218,7 @@ func TestE2ECollision(t *testing.T) {
 		}
 	})
 
-	result := h.RunWithTimeout(t, issueNum, 0)
+	result := h.RunWithTimeout(t, issueNum, 0, true)
 	t.Logf("golemic stdout:\n%s", result.Stdout)
 	t.Logf("golemic stderr:\n%s", result.Stderr)
 
@@ -273,7 +273,7 @@ func TestE2ETimeout(t *testing.T) {
 	// Use a short idle timeout and no retries so the test completes quickly.
 	// GOLEMIC_AGENT_IDLE_TIMEOUT_SEC=20: agent is killed after 20 s of silence.
 	// GOLEMIC_AGENT_MAX_STALL_RETRIES=0: no retries, fail immediately on first stall.
-	result := h.RunWithTimeout(t, issueNum, 120, // 2-minute wall-clock cap for the test
+	result := h.RunWithTimeout(t, issueNum, 120, false, // 2-minute wall-clock cap for the test
 		"GOLEMIC_AGENT_IDLE_TIMEOUT_SEC=20",
 		"GOLEMIC_AGENT_MAX_STALL_RETRIES=0",
 	)

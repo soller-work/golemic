@@ -188,12 +188,15 @@ func (h *Harness) CreateCollisionPR(t *testing.T, issueNum int) (prNum int, clea
 }
 
 // Run spawns golemic against the sandbox for the given issue number and waits
-// for it to finish. extraEnv values are appended to the subprocess environment
-// (format: "KEY=VALUE").
+// for it to finish. noClean skips --clean (required for collision detection).
+// extraEnv values are appended to the subprocess environment (format: "KEY=VALUE").
 //
 // Token values in the captured output are redacted before returning.
-func (h *Harness) Run(ctx context.Context, issueNum int, extraEnv ...string) *RunResult {
-	args := []string{"run", "--issue", fmt.Sprintf("%d", issueNum), "--clean"}
+func (h *Harness) Run(ctx context.Context, issueNum int, noClean bool, extraEnv ...string) *RunResult {
+	args := []string{"run", "--issue", fmt.Sprintf("%d", issueNum)}
+	if !noClean {
+		args = append(args, "--clean")
+	}
 	cmd := exec.CommandContext(ctx, h.GolemicBin, args...)
 	cmd.Dir = h.E2EPath
 
@@ -231,8 +234,9 @@ func (h *Harness) Run(ctx context.Context, issueNum int, extraEnv ...string) *Ru
 }
 
 // RunWithTimeout wraps Run with a context deadline. timeoutSec controls the
-// wall-clock limit; zero means 30 minutes.
-func (h *Harness) RunWithTimeout(t *testing.T, issueNum, timeoutSec int, extraEnv ...string) *RunResult {
+// wall-clock limit; zero means 30 minutes. noClean skips --clean (required for
+// collision detection).
+func (h *Harness) RunWithTimeout(t *testing.T, issueNum, timeoutSec int, noClean bool, extraEnv ...string) *RunResult {
 	t.Helper()
 	d := time.Duration(timeoutSec) * time.Second
 	if d <= 0 {
@@ -240,7 +244,7 @@ func (h *Harness) RunWithTimeout(t *testing.T, issueNum, timeoutSec int, extraEn
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	t.Cleanup(cancel)
-	return h.Run(ctx, issueNum, extraEnv...)
+	return h.Run(ctx, issueNum, noClean, extraEnv...)
 }
 
 // RemoveWorktrees removes all worktrees created for the sandbox's golemic state dir.
@@ -301,7 +305,7 @@ func (h *Harness) ClosePR(prNum int) {
 }
 
 // RunFinishedOutcome reads events.jsonl at path and returns the run_finished
-// outcome string (e.g. "ok", "dev_failed", "aborted", "timeout", "stalled").
+// outcome string (e.g. "success", "dev_failed", "aborted", "timeout", "stalled").
 // Returns "" if the event is not found.
 func RunFinishedOutcome(eventsPath string) string {
 	data, err := os.ReadFile(eventsPath)
