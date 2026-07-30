@@ -1,0 +1,77 @@
+# E2E Nightly Workflow Template
+#
+# Install this file in soller-work/golemic_e2e as:
+#   .github/workflows/e2e-nightly.yml
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   GOLEMIC_DEV_TOKEN       GitHub fine-grained token: issues:write + contents:write on golemic_e2e
+#   GOLEMIC_REVIEWER_TOKEN  GitHub fine-grained token: issues:write + pull_requests:write on golemic_e2e
+#   GOLEMIC_TICKET_TOKEN    GitHub fine-grained token: issues:write on soller-work/golemic (for bug tickets)
+#
+# Required label in soller-work/golemic:
+#   e2e-failure  (any colour — the reporter creates issues with this label)
+#
+# See docs/e2e-setup.md in the golemic repo for step-by-step installation.
+
+name: E2E Nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 02:00 UTC every night
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout golemic
+        uses: actions/checkout@v4
+        with:
+          repository: soller-work/golemic
+          ref: main
+          path: golemic
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: golemic/go.mod
+          cache: false
+
+      - name: Checkout golemic_e2e (sandbox)
+        uses: actions/checkout@v4
+        with:
+          path: golemic_e2e
+
+      - name: Build golemic binary
+        working-directory: golemic
+        run: go build -o ../golemic-bin ./cmd/golemic
+
+      - name: Run E2E suite
+        id: e2e
+        working-directory: golemic
+        continue-on-error: true
+        env:
+          GOLEMIC_BINARY: ${{ github.workspace }}/golemic-bin
+          GOLEMIC_E2E_PATH: ${{ github.workspace }}/golemic_e2e
+          GOLEMIC_E2E_REPO: ${{ github.repository }}
+          GOLEMIC_DEV_TOKEN: ${{ secrets.GOLEMIC_DEV_TOKEN }}
+          GOLEMIC_REVIEWER_TOKEN: ${{ secrets.GOLEMIC_REVIEWER_TOKEN }}
+        run: |
+          go test -tags e2e ./test/e2e/... -json | tee "$RUNNER_TEMP/e2e-output.json"
+          exit "${PIPESTATUS[0]}"
+
+      - name: Report failures
+        if: always()
+        working-directory: golemic
+        env:
+          GOLEMIC_TICKET_TOKEN: ${{ secrets.GOLEMIC_TICKET_TOKEN }}
+          GOLEMIC_TARGET_REPO: soller-work/golemic
+        run: go run ./test/e2e/report "$RUNNER_TEMP/e2e-output.json"
+
+      - name: Fail if suite failed
+        if: steps.e2e.outcome == 'failure'
+        run: |
+          echo "E2E suite failed — check the test output above and any newly filed tickets in soller-work/golemic."
+          exit 1
