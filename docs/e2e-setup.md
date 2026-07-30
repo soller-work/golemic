@@ -59,7 +59,33 @@ Actions → New repository secret** and add all three secrets:
 | `GOLEMIC_REVIEWER_TOKEN` | PAT from Step 1 (reviewer account) |
 | `GOLEMIC_TICKET_TOKEN` | PAT from Step 1 (ticket account) |
 
-## Step 3 — Create the `e2e-failure` label in golemic
+## Step 3 — Workflow labels in the sandbox repo
+
+Golemic's preflight checks that the following workflow labels exist in the
+sandbox repo before it starts. The harness **auto-creates them on every run**
+(idempotent), so no manual step is required for normal use.
+
+| Label | Colour | Description |
+|---|---|---|
+| `in-progress` | `#fbca04` | Issue is currently claimed by an autonomous runner |
+| `needs-human` | `#d93f0b` | Autonomous runner failed; requires human triage |
+| `confidence:high` | `#0075ca` | Reviewer confidence: high |
+| `confidence:medium` | `#e4e669` | Reviewer confidence: medium |
+| `confidence:low` | `#d93f0b` | Reviewer confidence: low |
+
+If you need to pre-create them manually (e.g. for a scenario run that bypasses
+the harness), run:
+
+```bash
+for label in in-progress needs-human confidence:high confidence:medium confidence:low; do
+  gh label create "$label" --repo soller-work/golemic_e2e --force
+done
+```
+
+The harness uses `gh label create --force` so re-runs against an already-
+provisioned sandbox succeed without error.
+
+## Step 4 — Create the `e2e-failure` label in golemic
 
 In `soller-work/golemic`, go to **Issues → Labels → New label** and create:
 
@@ -71,7 +97,7 @@ In `soller-work/golemic`, go to **Issues → Labels → New label** and create:
 The reporter will error if the label does not exist when it tries to file a
 ticket.
 
-## Step 4 — Install the workflow file
+## Step 5 — Install the workflow file
 
 Copy `docs/e2e-workflow-template.yml` from the golemic repository to:
 
@@ -82,7 +108,7 @@ soller-work/golemic_e2e/.github/workflows/e2e-nightly.yml
 Commit and push to the default branch of `golemic_e2e`. GitHub Actions will
 pick it up automatically.
 
-## Step 5 — Validate with a manual run
+## Step 6 — Validate with a manual run
 
 1. In `soller-work/golemic_e2e`, go to **Actions → E2E Nightly**.
 2. Click **Run workflow → Run workflow** (uses the default branch).
@@ -117,7 +143,7 @@ The only reasons to update `e2e-nightly.yml` are:
 
 **Reporter exits with "HTTP 422 Unprocessable Entity"**
 : The `e2e-failure` label does not exist in `soller-work/golemic`. Create it
-  following Step 3.
+  following Step 4.
 
 **Reporter exits with "no test events parsed"**
 : The E2E suite crashed before producing any output. Check the suite step logs.
