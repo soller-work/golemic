@@ -1,187 +1,615 @@
 //go:build e2e
 
-// Package harness provides the test harness for spawning and managing
-// golemic subprocesses in E2E tests.
-//
-// IF-001: GollemicRunner loads golemic_e2e config and tokens, then spawns
-// the golemic binary as a subprocess, capturing output while redacting tokens.
+// Package harness provides the build and run infrastructure for the deterministic
+// E2E test suite. It builds the golemic binary and the detagent (fake pi), runs
+// golemic against the golemic_e2e sandbox, and handles idempotent cleanup.
 package harness
 
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
+	"testing"
 	"time"
-
-	"golemic/internal/config"
-	"golemic/internal/credentials"
 )
 
-// GollemicRunner manages golemic subprocess execution for E2E tests.
-// It loads configuration and credentials from the golemic_e2e sandbox
-// and enforces token redaction (BR-003).
-type GollemicRunner struct {
-	e2ePath       string
-	golemicBinary string
-	cfg           *config.Config
-	creds         *credentials.Credentials
+// Harness holds the binaries and sandbox configuration for one E2E test run.
+type Harness struct {
+	E2EPath    string // local path to golemic_e2e sandbox
+	E2ERepo    string // GitHub owner/repo slug for the sandbox
+	GolemicBin string // path to built golemic binary
+	PiDir      string // temp dir containing the fake pi binary
+	GolemicDir string // <HOME>/.golemic/<project>
+
+	devToken      string
+	reviewerToken string
 	homeDir       string
 }
 
-// RunResult holds the captured output and exit code from a subprocess execution.
+// RunResult holds the captured output and exit code from a golemic subprocess.
 type RunResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
 }
 
-// NewRunner creates a new GollemicRunner.
-//
-// It performs preflight validation (BR-004):
-//   - golemic_e2e directory must exist and contain .golemic/config.json
-//   - config.json must be valid
-//   - GOLEMIC_DEV_TOKEN and GOLEMIC_REVIEWER_TOKEN must be set (env or credentials file)
-//
-// Returns an error if any validation fails.
-func NewRunner(golemicE2EPath, golemicBinary string) (*GollemicRunner, error) {
-	// Validate golemic_e2e path.
-	info, err := os.Stat(golemicE2EPath)
-	if err != nil {
-		return nil, fmt.Errorf("golemic_e2e path not accessible: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("golemic_e2e path is not a directory: %s", golemicE2EPath)
+// New creates a Harness. Returns (nil, reason) and calls t.Skip when prerequisites
+// are not met so the test skips rather than failing.
+func New(t *testing.T) *Harness {
+	t.Helper()
+
+	e2ePath := resolveE2EPath()
+	if e2ePath == "" {
+		t.Skip("golemic_e2e sandbox not found — set GOLEMIC_E2E_PATH or check out ~/golemic_e2e")
+		return nil
 	}
 
-	// Validate golemic binary.
-	if _, err := os.Stat(golemicBinary); err != nil {
-		return nil, fmt.Errorf("golemic binary not found at %s: %w", golemicBinary, err)
+	if _, err := exec.LookPath("gh"); err != nil {
+		t.Skip("gh CLI not in PATH — skipping E2E test")
+		return nil
 	}
 
-	// Load config (BR-004: fail fast if invalid).
-	cfg, err := config.Load(golemicE2EPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+	e2eRepo := resolveE2ERepo(t)
+	if e2eRepo == "" {
+		return nil // t.Skip already called
 	}
 
-	// Determine home directory for credentials loading.
+	if out, err := exec.Command("gh", "repo", "view", e2eRepo, "--json", "name").CombinedOutput(); err != nil {
+		t.Skipf("golemic_e2e GitHub repo %q not accessible: %v\n%s", e2eRepo, err, out)
+		return nil
+	}
+
+	devToken := os.Getenv("GOLEMIC_DEV_TOKEN")
+	reviewerToken := os.Getenv("GOLEMIC_REVIEWER_TOKEN")
+	if devToken == "" || reviewerToken == "" {
+		t.Skip("GOLEMIC_DEV_TOKEN and/or GOLEMIC_REVIEWER_TOKEN not set — skipping E2E test")
+		return nil
+	}
+
 	homeDir := os.Getenv("HOME")
 	if homeDir == "" {
-		var err error
-		homeDir, err = os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("cannot determine home directory: %w", err)
+		if d, err := os.UserHomeDir(); err == nil {
+			homeDir = d
 		}
 	}
 
-	// Load credentials.
-	loader := credentials.NewLoader(homeDir)
-	creds, err := loader.Load(cfg.Project)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load credentials: %w", err)
+	srcRoot := findSourceRoot()
+	if srcRoot == "" {
+		t.Skip("cannot locate golemic source root (go.mod not found)")
+		return nil
 	}
 
-	return &GollemicRunner{
-		e2ePath:       golemicE2EPath,
-		golemicBinary: golemicBinary,
-		cfg:           cfg,
-		creds:         creds,
+	golemicBin, piDir, err := buildBinaries(t, srcRoot)
+	if err != nil {
+		t.Skipf("failed to build binaries: %v", err)
+		return nil
+	}
+
+	project := resolveProject(e2ePath)
+	if project == "" {
+		t.Skip("cannot read .golemic/config.json project name from sandbox")
+		return nil
+	}
+
+	h := &Harness{
+		E2EPath:       e2ePath,
+		E2ERepo:       e2eRepo,
+		GolemicBin:    golemicBin,
+		PiDir:         piDir,
+		GolemicDir:    filepath.Join(homeDir, ".golemic", project),
+		devToken:      devToken,
+		reviewerToken: reviewerToken,
 		homeDir:       homeDir,
-	}, nil
+	}
+	return h
 }
 
-// Config returns the loaded configuration.
-func (r *GollemicRunner) Config() *config.Config { return r.cfg }
+// CreateIssue creates a sandbox issue with the given scenario marker and returns
+// the issue number. The body contains the machine-readable E2E-SCENARIO line
+// plus a human-readable description.
+func (h *Harness) CreateIssue(scenario string) (int, error) {
+	title := fmt.Sprintf("E2E %s %d", scenario, time.Now().UnixNano())
+	body := fmt.Sprintf("E2E-SCENARIO: %s\n\nAutomated E2E test issue — safe to close.", scenario)
+	return ghCreateIssue(h.E2ERepo, title, body)
+}
 
-// Credentials returns the loaded credentials (tokens).
-func (r *GollemicRunner) Credentials() *credentials.Credentials { return r.creds }
+// CloseIssue closes a sandbox issue. Safe to call multiple times (idempotent).
+func (h *Harness) CloseIssue(issueNum int) {
+	cmd := exec.Command("gh", "issue", "close",
+		fmt.Sprintf("%d", issueNum), "--repo", h.E2ERepo, "--reason", "not planned")
+	cmd.CombinedOutput() //nolint:errcheck
+}
 
-// E2EPath returns the golemic_e2e working directory path.
-func (r *GollemicRunner) E2EPath() string { return r.e2ePath }
+// CreateCollisionPR creates an open PR for the given issue's branch so golemic
+// detects a collision when it runs. Returns the PR number and cleanup function.
+func (h *Harness) CreateCollisionPR(t *testing.T, issueNum int) (prNum int, cleanup func()) {
+	t.Helper()
+	branch := fmt.Sprintf("golemic/issue-%d", issueNum)
+	uniqueBranch := fmt.Sprintf("e2e-collision-%d-%d", issueNum, time.Now().UnixNano())
 
-// HomeDir returns the home directory used for credential resolution.
-func (r *GollemicRunner) HomeDir() string { return r.homeDir }
-
-// Exec spawns the golemic binary as a subprocess with the given arguments.
-//
-// It sets up the environment:
-//   - Working directory: golemic_e2e path
-//   - HOME: runner's home directory
-//   - GOLEMIC_DEV_TOKEN and GOLEMIC_REVIEWER_TOKEN: from credentials
-//   - GH_TOKEN: unset (golemic manages token switching internally)
-//
-// If ctx has no deadline and config specifies a timeout, wraps ctx with
-// context.WithTimeout using config.TimeoutMinutes (IC-002 compliance).
-//
-// Returns RunResult with captured stdout, stderr, and exit code.
-// The output is redacted (BR-003): token values are replaced with ***REDACTED***.
-func (r *GollemicRunner) Exec(ctx context.Context, args ...string) (*RunResult, error) {
-	// Apply config timeout if context has no deadline (IC-002).
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline && r.cfg.TimeoutMinutes > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(r.cfg.TimeoutMinutes)*time.Minute)
-		defer cancel()
+	// Create a temp worktree in the sandbox to push a branch for the PR.
+	wtDir := filepath.Join(h.E2EPath, ".e2e-tmp", uniqueBranch)
+	if err := runInDir(h.E2EPath, "git", "worktree", "add", "--detach", wtDir, "HEAD"); err != nil {
+		t.Skipf("cannot create git worktree for collision setup: %v", err)
+		return 0, func() {}
 	}
-	cmd := exec.CommandContext(ctx, r.golemicBinary, args...)
 
-	// Set working directory to golemic_e2e.
-	cmd.Dir = r.e2ePath
+	cleanup = func() {
+		runInDir(h.E2EPath, "git", "worktree", "remove", "--force", wtDir) //nolint:errcheck
+		runInDir(h.E2EPath, "git", "push", "origin", "--delete", branch)   //nolint:errcheck
+	}
 
-	// Build environment: inherit current env and add/override required vars.
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env,
-		"HOME="+r.homeDir,
-		"GOLEMIC_DEV_TOKEN="+r.creds.DevToken(),
-		"GOLEMIC_REVIEWER_TOKEN="+r.creds.ReviewerToken(),
+	if err := runInDir(wtDir, "git", "checkout", "-b", branch); err != nil {
+		cleanup()
+		t.Skipf("cannot create collision branch %s: %v", branch, err)
+		return 0, func() {}
+	}
+	if err := runInDir(wtDir, "git", "commit", "--allow-empty", "-m", "chore: e2e collision setup"); err != nil {
+		cleanup()
+		t.Skipf("cannot commit for collision PR: %v", err)
+		return 0, func() {}
+	}
+	if err := runInDir(wtDir, "git", "push", "origin", branch); err != nil {
+		cleanup()
+		t.Skipf("cannot push collision branch: %v", err)
+		return 0, func() {}
+	}
+
+	out, err := runGhOut("pr", "create",
+		"--repo", h.E2ERepo,
+		"--head", branch,
+		"--base", "main",
+		"--title", fmt.Sprintf("E2E collision setup for issue #%d", issueNum),
+		"--body", "Automated collision test — safe to close.")
+	if err != nil {
+		cleanup()
+		t.Skipf("cannot create collision PR: %v", err)
+		return 0, func() {}
+	}
+	prNum = parsePRNum(out)
+
+	closePR := func() {
+		if prNum > 0 {
+			runGhOut("pr", "close", fmt.Sprintf("%d", prNum), "--repo", h.E2ERepo) //nolint:errcheck
+		}
+	}
+	return prNum, func() {
+		closePR()
+		cleanup()
+	}
+}
+
+// Run spawns golemic against the sandbox for the given issue number and waits
+// for it to finish. noClean skips --clean (required for collision detection).
+// extraEnv values are appended to the subprocess environment (format: "KEY=VALUE").
+//
+// Token values in the captured output are redacted before returning.
+func (h *Harness) Run(ctx context.Context, issueNum int, noClean bool, extraEnv ...string) *RunResult {
+	args := []string{"run", "--issue", fmt.Sprintf("%d", issueNum)}
+	if !noClean {
+		args = append(args, "--clean")
+	}
+	cmd := exec.CommandContext(ctx, h.GolemicBin, args...)
+	cmd.Dir = h.E2EPath
+
+	// Build environment: inherit current env, inject tokens and fake pi.
+	env := filterEnv(os.Environ(), "GH_TOKEN", "GOLEMIC_DEV_TOKEN", "GOLEMIC_REVIEWER_TOKEN")
+	env = append(env,
+		"HOME="+h.homeDir,
+		"GOLEMIC_DEV_TOKEN="+h.devToken,
+		"GOLEMIC_REVIEWER_TOKEN="+h.reviewerToken,
+		// Prepend the fake pi directory first on PATH.
+		"PATH="+h.PiDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 	)
-
-	// Remove GH_TOKEN from environment to avoid conflict with golemic's
-	// internal token management (the runner sets GH_TOKEN per-role).
-	cmd.Env = filterEnv(cmd.Env, "GH_TOKEN")
+	env = append(env, extraEnv...)
+	cmd.Env = env
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-
 	exitCode := 0
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			exitCode = exitErr.ExitCode()
-		} else {
-			return nil, fmt.Errorf("failed to execute golemic: %w", err)
+		if ee, ok := err.(*exec.ExitError); ok {
+			exitCode = ee.ExitCode()
 		}
 	}
 
-	// Redact tokens from output (BR-003).
-	stdoutStr := redactTokens(stdout.String(), r.creds.DevToken(), r.creds.ReviewerToken())
-	stderrStr := redactTokens(stderr.String(), r.creds.DevToken(), r.creds.ReviewerToken())
-
+	stdoutStr := redact(stdout.String(), h.devToken, h.reviewerToken)
+	stderrStr := redact(stderr.String(), h.devToken, h.reviewerToken)
 	return &RunResult{
 		Stdout:   stdoutStr,
 		Stderr:   stderrStr,
 		ExitCode: exitCode,
-	}, nil
+	}
 }
 
-// filterEnv removes entries from env that have the given key prefix.
-func filterEnv(env []string, key string) []string {
-	var filtered []string
-	for _, e := range env {
-		if !strings.HasPrefix(e, key+"=") {
-			filtered = append(filtered, e)
+// RunWithTimeout wraps Run with a context deadline. timeoutSec controls the
+// wall-clock limit; zero means 30 minutes. noClean skips --clean (required for
+// collision detection).
+func (h *Harness) RunWithTimeout(t *testing.T, issueNum, timeoutSec int, noClean bool, extraEnv ...string) *RunResult {
+	t.Helper()
+	d := time.Duration(timeoutSec) * time.Second
+	if d <= 0 {
+		d = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), d)
+	t.Cleanup(cancel)
+	return h.Run(ctx, issueNum, noClean, extraEnv...)
+}
+
+// RemoveWorktrees removes all worktrees created for the sandbox's golemic state dir.
+func (h *Harness) RemoveWorktrees() error {
+	wtDir := filepath.Join(h.GolemicDir, "worktrees")
+	entries, err := os.ReadDir(wtDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("readdir %s: %w", wtDir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		wtPath := filepath.Join(wtDir, e.Name())
+		if runErr := runInDir(h.E2EPath, "git", "worktree", "remove", "--force", wtPath); runErr != nil {
+			if rmErr := os.RemoveAll(wtPath); rmErr != nil {
+				return fmt.Errorf("remove worktree %s: git=%v rm=%w", wtPath, runErr, rmErr)
+			}
 		}
 	}
-	return filtered
+	return nil
 }
 
-// redactTokens replaces occurrences of token values in s with "***REDACTED***".
-func redactTokens(s, devToken, reviewerToken string) string {
+// RemoveRuns removes all run directories from the sandbox's golemic state dir.
+func (h *Harness) RemoveRuns() error {
+	runsDir := filepath.Join(h.GolemicDir, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("readdir %s: %w", runsDir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(runsDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteBranch deletes a remote branch from the sandbox. Idempotent.
+func (h *Harness) DeleteBranch(branch string) {
+	runInDir(h.E2EPath, "git", "push", "origin", "--delete", branch) //nolint:errcheck
+}
+
+// ClosePR closes a PR. Idempotent.
+func (h *Harness) ClosePR(prNum int) {
+	if prNum > 0 {
+		runGhOut("pr", "close", fmt.Sprintf("%d", prNum), "--repo", h.E2ERepo) //nolint:errcheck
+	}
+}
+
+// RunFinishedOutcome reads events.jsonl at path and returns the run_finished
+// outcome string (e.g. "success", "dev_failed", "aborted", "timeout", "stalled").
+// Returns "" if the event is not found.
+func RunFinishedOutcome(eventsPath string) string {
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "run_finished" {
+			continue
+		}
+		var p struct {
+			Outcome string `json:"outcome"`
+		}
+		if json.Unmarshal(ev.Payload, &p) == nil {
+			return p.Outcome
+		}
+	}
+	return ""
+}
+
+// HasEvent returns true if events.jsonl contains at least one event with the given type.
+func HasEvent(eventsPath, eventType string) bool {
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+// CountEvents returns the number of events with the given type in events.jsonl.
+func CountEvents(eventsPath, eventType string) int {
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal([]byte(line), &ev) == nil && ev.Type == eventType {
+			count++
+		}
+	}
+	return count
+}
+
+// PRNumFromEvents reads events.jsonl and returns the PR number from pr_opened.
+func PRNumFromEvents(eventsPath string) int {
+	data, err := os.ReadFile(eventsPath)
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Type    string          `json:"type"`
+			Payload json.RawMessage `json:"payload"`
+		}
+		if json.Unmarshal([]byte(line), &ev) != nil || ev.Type != "pr_opened" {
+			continue
+		}
+		var p struct {
+			PRNumber string `json:"prNumber"`
+		}
+		if json.Unmarshal(ev.Payload, &p) != nil {
+			continue
+		}
+		n, err := strconv.Atoi(p.PRNumber)
+		if err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// LatestRunEventsPath returns the path to events.jsonl for the latest run in
+// the golemic state directory. Returns "" if no runs exist.
+func (h *Harness) LatestRunEventsPath() string {
+	runsDir := filepath.Join(h.GolemicDir, "runs")
+	entries, err := os.ReadDir(runsDir)
+	if err != nil {
+		return ""
+	}
+	// Runs are named with timestamps; sort order finds the latest.
+	latest := ""
+	for _, e := range entries {
+		if e.IsDir() && e.Name() > latest {
+			latest = e.Name()
+		}
+	}
+	if latest == "" {
+		return ""
+	}
+	return filepath.Join(runsDir, latest, "events.jsonl")
+}
+
+// --- helpers ---
+
+func resolveE2EPath() string {
+	if p := os.Getenv("GOLEMIC_E2E_PATH"); p != "" {
+		if isGitDir(p) {
+			return p
+		}
+	}
+	home := os.Getenv("HOME")
+	for _, p := range []string{
+		filepath.Join(home, "golemic_e2e"),
+		filepath.Join(home, "Dev", "golemic_e2e"),
+	} {
+		if isGitDir(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func isGitDir(path string) bool {
+	_, err := os.Stat(filepath.Join(path, ".git"))
+	return err == nil
+}
+
+func resolveE2ERepo(t *testing.T) string {
+	t.Helper()
+	if r := os.Getenv("GOLEMIC_E2E_REPO"); r != "" {
+		return r
+	}
+	out, err := exec.Command("gh", "api", "user", "--jq", ".login").Output()
+	if err != nil {
+		t.Skipf("cannot determine GitHub owner (gh not authenticated?): %v", err)
+		return ""
+	}
+	owner := strings.TrimSpace(string(out))
+	if owner == "" {
+		t.Skip("gh api user returned empty login — skipping E2E test")
+		return ""
+	}
+	return owner + "/golemic_e2e"
+}
+
+func resolveProject(e2ePath string) string {
+	cfgPath := filepath.Join(e2ePath, ".golemic", "config.json")
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Project string `json:"project"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	return cfg.Project
+}
+
+func findSourceRoot() string {
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		return ""
+	}
+	dir := filepath.Dir(file)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+func buildBinaries(t *testing.T, srcRoot string) (golemicBin, piDir string, err error) {
+	t.Helper()
+	tmpDir, err := os.MkdirTemp("", "e2e-bins-*")
+	if err != nil {
+		return "", "", fmt.Errorf("mkdirtemp: %w", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+
+	// Build golemic binary (or use GOLEMIC_BINARY override).
+	golemicBin = os.Getenv("GOLEMIC_BINARY")
+	if golemicBin == "" {
+		golemicBin = filepath.Join(tmpDir, "golemic")
+		cmd := exec.Command("go", "build", "-o", golemicBin, "./cmd/golemic")
+		cmd.Dir = srcRoot
+		if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
+			return "", "", fmt.Errorf("go build ./cmd/golemic: %w\n%s", buildErr, out)
+		}
+	}
+
+	// Build detagent as "pi" into a dedicated directory.
+	piDir = filepath.Join(tmpDir, "pidir")
+	if err := os.MkdirAll(piDir, 0755); err != nil {
+		return "", "", fmt.Errorf("mkdir pidir: %w", err)
+	}
+	piOut := filepath.Join(piDir, "pi")
+	cmd := exec.Command("go", "build", "-o", piOut, "./test/e2e/detagent")
+	cmd.Dir = srcRoot
+	if out, buildErr := cmd.CombinedOutput(); buildErr != nil {
+		return "", "", fmt.Errorf("go build ./test/e2e/detagent: %w\n%s", buildErr, out)
+	}
+
+	return golemicBin, piDir, nil
+}
+
+func ghCreateIssue(repo, title, body string) (int, error) {
+	out, err := runGhOut("issue", "create",
+		"--repo", repo,
+		"--title", title,
+		"--body", body,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("gh issue create: %w", err)
+	}
+	// Output is the issue URL; parse the number from the last segment.
+	url := strings.TrimSpace(out)
+	idx := strings.LastIndex(url, "/")
+	if idx < 0 {
+		return 0, fmt.Errorf("unexpected gh issue create output: %s", out)
+	}
+	n, err := strconv.Atoi(url[idx+1:])
+	if err != nil {
+		return 0, fmt.Errorf("parse issue number from %q: %w", url, err)
+	}
+	return n, nil
+}
+
+func runGhOut(args ...string) (string, error) {
+	cmd := exec.Command("gh", args...)
+	out, err := cmd.Output()
+	if err != nil {
+		var stderr string
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = string(ee.Stderr)
+		}
+		return "", fmt.Errorf("gh %s: %w\n%s", strings.Join(args, " "), err, stderr)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func runInDir(dir string, name string, args ...string) error {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, out)
+	}
+	return nil
+}
+
+var prNumRe = regexp.MustCompile(`/(\d+)$`)
+
+func parsePRNum(url string) int {
+	m := prNumRe.FindStringSubmatch(strings.TrimSpace(url))
+	if len(m) < 2 {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+func filterEnv(env []string, keys ...string) []string {
+	var out []string
+	for _, e := range env {
+		skip := false
+		for _, k := range keys {
+			if strings.HasPrefix(e, k+"=") {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func redact(s, devToken, reviewerToken string) string {
 	if devToken != "" {
 		s = strings.ReplaceAll(s, devToken, "***REDACTED***")
 	}
@@ -189,18 +617,4 @@ func redactTokens(s, devToken, reviewerToken string) string {
 		s = strings.ReplaceAll(s, reviewerToken, "***REDACTED***")
 	}
 	return s
-}
-
-// WriteFixtureConfig writes a valid config.json to the given golemic_e2e path.
-// Used to bootstrap a test environment.
-func WriteFixtureConfig(golemicE2EPath, project string) error {
-	configPath := filepath.Join(golemicE2EPath, ".golemic")
-	if err := os.MkdirAll(configPath, 0755); err != nil {
-		return fmt.Errorf("failed to create .golemic directory: %w", err)
-	}
-	cfg := ValidConfigJSON()
-	if err := os.WriteFile(filepath.Join(configPath, "config.json"), []byte(cfg), 0644); err != nil {
-		return fmt.Errorf("failed to write config.json: %w", err)
-	}
-	return nil
 }

@@ -43,5 +43,6 @@ __pycache__/
 
 # Local build output
 /golemic
+/detagent
 # Per-worktree MCP config written by the runner (machine-specific absolute paths)
 .mcp.json
