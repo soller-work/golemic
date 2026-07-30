@@ -18,6 +18,12 @@
     "Given a shipped order, when cancel-order is called, then the request is rejected."
   ],
   "inputs_outputs_errors": "Input: order_id (string, required).\nOutput: cancelled order object.\nErrors: ORDER_NOT_OWNED when the order belongs to a different user; ORDER_ALREADY_SHIPPED when the order status is SHIPPED.",
+  "e2e": {
+    "scenarios": [
+      {"name": "cancel_pending_order", "description": "Cancel a pending order owned by the requesting user.", "expected_outcome": "Order status becomes cancelled."},
+      {"name": "reject_shipped_order_cancel", "description": "Attempt to cancel a shipped order.", "expected_outcome": "Request is rejected with ORDER_ALREADY_SHIPPED error."}
+    ]
+  },
   "proof": {
     "how": "We walk through cancelling a real order and see it flip to 'cancelled', then try to cancel an order that already shipped and see it refused, and try to cancel someone else's order and see it refused.",
     "why": "These three walk-throughs cover exactly the promise: your own pending order can be cancelled, and the two cases that must never succeed (already shipped, not yours) are actively blocked — so if all three behave as described, the feature does what was asked.",

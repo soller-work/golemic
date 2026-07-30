@@ -50,6 +50,7 @@ def load_minimal_slice():
         "business_rules": "",
         "acceptance_scenarios": [],
         "inputs_outputs_errors": "X → Y",
+        "e2e": {"scenarios": [{"name": "happy_path", "description": "Do X.", "expected_outcome": "Y happens."}]},
         "proof": {
             "how": "We observe X producing Y.",
             "why": "Y is the promised result.",

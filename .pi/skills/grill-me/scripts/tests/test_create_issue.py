@@ -30,6 +30,7 @@ def load_minimal_slice():
         "business_rules": "",
         "acceptance_scenarios": ["Given X, when Y, then Z"],
         "inputs_outputs_errors": "Input: event. Output: state.",
+        "e2e": {"scenarios": [{"name": "happy_path", "description": "Run the action.", "expected_outcome": "State updates."}]},
         "proof": {
             "how": "We run the action and see the state change.",
             "why": "The observed change is exactly the promised outcome.",
@@ -40,6 +41,7 @@ def load_minimal_slice():
         "readiness": "ready",
         "blockers": [],
         "security_relevant": False,
+        "e2e_modify_approved": False,
     }
 
 
@@ -100,6 +102,7 @@ class TestCreateIssueRender:
                 "Acceptance Scenarios",
                 "Proof of Delivery",
                 "Inputs / Outputs / Errors",
+                "E2E Scenarios",
                 "Codebase Evidence",
                 "Verify",
                 "Definition of Done",
@@ -204,6 +207,7 @@ class TestCreateIssueRender:
                 "Acceptance Scenarios",
                 "Proof of Delivery",
                 "Inputs / Outputs / Errors",
+                "E2E Scenarios",
                 "Codebase Evidence",
                 "Security",
                 "Verify",

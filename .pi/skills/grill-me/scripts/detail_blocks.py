@@ -17,9 +17,10 @@ from typing import NamedTuple
 class FieldSpec(NamedTuple):
     key: str
     label: str
-    kind: str  # "markdown" | "scenarios"
+    kind: str  # "markdown" | "scenarios" | "e2e"
     required: bool
     hint: str
+    cross_gattung_ok: bool = False  # if True, allowed (but not required) in other change types
 
 
 DETAIL_BLOCKS: dict[str, dict[str, list[FieldSpec]]] = {
@@ -35,6 +36,9 @@ DETAIL_BLOCKS: dict[str, dict[str, list[FieldSpec]]] = {
         "post_proof": [
             FieldSpec("inputs_outputs_errors", "Inputs / Outputs / Errors", "markdown", True,
                       "String (Markdown): I/O contract, validation, errors."),
+            FieldSpec("e2e", "E2E", "e2e", False,
+                      "Object: {scenarios:[{name (snake_case),description,expected_outcome}]} XOR {waiver:{granted:true,reason:'...'}}. Feature slices require one of the two.",
+                      cross_gattung_ok=True),
         ],
     },
     "bug": {
@@ -80,4 +84,14 @@ def all_detail_keys() -> set[str]:
     keys: set[str] = set()
     for change_type in DETAIL_BLOCKS:
         keys.update(f.key for f in detail_fields(change_type))
+    return keys
+
+
+def cross_gattung_ok_keys() -> set[str]:
+    """Fields allowed (but not required) in change types other than their own."""
+    keys: set[str] = set()
+    for change_type in DETAIL_BLOCKS:
+        for f in detail_fields(change_type):
+            if f.cross_gattung_ok:
+                keys.add(f.key)
     return keys

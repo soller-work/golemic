@@ -151,6 +151,7 @@ class TestGattungRequiredFields:
         data["business_rules"] = ""
         data["acceptance_scenarios"] = ["Given X, When Y, Then Z"]
         data["inputs_outputs_errors"] = "In: event. Out: state."
+        data["e2e"] = {"scenarios": [{"name": "state_mutation", "description": "Trigger the action.", "expected_outcome": "State mutates."}]}
         code, stdout, stderr = check_slice(data)
         assert code == 0, f"feature slice must stay valid: {stderr}"
 

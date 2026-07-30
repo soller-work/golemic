@@ -82,7 +82,19 @@ def _normalize_table_cell(text: str) -> str:
 
 
 def _render_detail_field(parts: list, data: dict, field) -> None:
-    """Render one gattung detail field (markdown or scenarios), matching the legacy layout."""
+    """Render one gattung detail field (markdown, scenarios, or e2e), matching the legacy layout."""
+    if field.kind == "e2e":
+        e2e = data.get(field.key) or {}
+        scenarios = e2e.get("scenarios") or []
+        waiver = e2e.get("waiver") or {}
+        if scenarios:
+            parts.append("## E2E Scenarios")
+            for s in scenarios:
+                parts.append(f"- **{s['name']}**: {s['description']} → {s['expected_outcome']}")
+        elif waiver.get("granted"):
+            parts.append("## E2E Waiver")
+            parts.append(waiver.get("reason", ""))
+        return
     parts.append(f"## {field.label}")
     if field.kind == "scenarios":
         items = data.get(field.key, [])
@@ -199,6 +211,10 @@ def render_body(data: dict) -> str:
             parts.append(f"- {item}")
     else:
         parts.append("_None_")
+
+    # E2E-MODIFY-APPROVED marker (conditional: only if flag is set)
+    if data.get("e2e_modify_approved"):
+        parts.append("E2E-MODIFY-APPROVED")
 
     # Blockers / Open Questions (conditional: only if non-empty)
     blockers = data.get("blockers", [])

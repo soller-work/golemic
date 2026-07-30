@@ -250,7 +250,37 @@
         "blocked"
       ],
       "description": "Set by finalize command; ready iff blockers empty and validation passes."
-    }
+    },
+    "e2e": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "E2E plan: scenarios XOR a granted waiver. Feature slices require one of the two.",
+      "properties": {
+        "scenarios": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "description", "expected_outcome"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+              "description": {"type": "string", "minLength": 1},
+              "expected_outcome": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        "waiver": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["granted", "reason"],
+          "properties": {
+            "granted": {"type": "boolean"},
+            "reason": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "e2e_modify_approved": {"type": "boolean", "default": false}
   },
   "if": {
     "properties": {

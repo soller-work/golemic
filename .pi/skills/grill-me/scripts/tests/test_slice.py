@@ -45,6 +45,7 @@ def load_minimal_slice():
         "business_rules": "",
         "acceptance_scenarios": ["Given user is logged in, when they click button, then state updates"],
         "inputs_outputs_errors": "Input: click event. Output: updated state. Errors: none.",
+        "e2e": {"scenarios": [{"name": "happy_path", "description": "Click the button.", "expected_outcome": "State updates."}]},
         "proof": {
             "how": "We click the button and see the state update.",
             "why": "The update is the promised outcome.",
@@ -55,6 +56,7 @@ def load_minimal_slice():
         "readiness": "ready",
         "blockers": [],
         "security_relevant": False,
+        "e2e_modify_approved": False,
     }
 
 
