@@ -29,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golemic/test/e2e/scenarios"
 )
 
 // scenarioRe matches "E2E-SCENARIO: <name>" in the issue body.
@@ -220,16 +222,16 @@ func runDev() error {
 	fmt.Fprintf(os.Stderr, "detagent dev: scenario=%s round=%d\n", scenario, round)
 
 	switch scenario {
-	case "happy_path":
+	case scenarios.HappyPath:
 		return devHappyPath(benv)
-	case "reviewer_rejects_once":
+	case scenarios.ReviewerRejectsOnce:
 		return devReviewerRejectsOnce(benv, round)
-	case "dev_verify_fails":
+	case scenarios.DevVerifyFails:
 		return devVerifyFails(benv)
-	case "collision":
+	case scenarios.Collision:
 		// Should not be invoked (golemic exits before dev agent runs).
 		return devHappyPath(benv)
-	case "timeout":
+	case scenarios.Timeout:
 		// Sleep until golemic kills us — this triggers the timeout/stall path.
 		fmt.Fprintln(os.Stderr, "detagent dev: sleeping to trigger timeout")
 		time.Sleep(24 * time.Hour)
@@ -356,9 +358,9 @@ func runReviewer() error {
 	}
 
 	switch scenario {
-	case "happy_path", "dev_verify_fails", "collision", "timeout":
+	case scenarios.HappyPath, scenarios.DevVerifyFails, scenarios.Collision, scenarios.Timeout:
 		return reviewerApprove(benv)
-	case "reviewer_rejects_once":
+	case scenarios.ReviewerRejectsOnce:
 		if round == 0 {
 			return reviewerReject(benv)
 		}
