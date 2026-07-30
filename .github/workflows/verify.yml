@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      issues: read
 
     steps:
       - uses: actions/checkout@v4
@@ -31,5 +32,21 @@ jobs:
       - run: go build ./...
 
       - run: go test ./...
+
+      - name: Export issue body for E2E guard (pull_request only)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PR_BODY=$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")
+          ISSUE_NUM=$(printf '%s' "$PR_BODY" | grep -oE '(Closes|Fixes|Resolves)[[:space:]]+#[0-9]+' | grep -oE '[0-9]+' | head -1)
+          if [ -n "$ISSUE_NUM" ]; then
+            ISSUE_BODY=$(gh issue view "$ISSUE_NUM" --json body -q .body 2>/dev/null || true)
+            if [ -n "$ISSUE_BODY" ]; then
+              BODY_FILE=$(mktemp)
+              printf '%s' "$ISSUE_BODY" > "$BODY_FILE"
+              echo "GOLEMIC_ISSUE_BODY_FILE=$BODY_FILE" >> "$GITHUB_ENV"
+            fi
+          fi
 
       - run: make lint

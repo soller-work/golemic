@@ -36,12 +36,17 @@ lint-gofmt: ## Fail if any .go file is not gofmt-clean
 		exit 1; \
 	fi
 
+.PHONY: lint-e2e-guard
+lint-e2e-guard: ## Block modification/deletion of existing test/e2e files without E2E-MODIFY-APPROVED in the driving issue
+	@sh scripts/lint-e2e-guard.sh
+
 .PHONY: lint
 lint: $(GOBIN)/golangci-lint ## Run golangci-lint: changed-lines (complexity/standard) + repo-wide architecture rules; bans complexity nolint directives in production code (cyclop, gocognit, funlen, nestif, maintidx, interfacebloat)
 	$(MAKE) lint-gofmt
 	$(GOBIN)/golangci-lint run --new-from-rev=$(LINT_BASE_REF)
 	$(GOBIN)/golangci-lint run -c .golangci-arch.yml
 	$(MAKE) lint-no-prod-nolint
+	$(MAKE) lint-e2e-guard
 
 .PHONY: help
 help: ## Show available targets

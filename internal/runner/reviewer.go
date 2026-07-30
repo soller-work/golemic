@@ -447,7 +447,11 @@ func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath, parentSpanID
 		return "", nil, fmt.Errorf("reviewer_precheck: compute beforeFingerprint: %w", err)
 	}
 
-	stdout, stderr, exitCode := runPrecheckVerify(worktreePath, cmd)
+	issueBodyPath := r.writeIssueBodyFile()
+	if issueBodyPath != "" {
+		defer os.Remove(issueBodyPath) //nolint:errcheck
+	}
+	stdout, stderr, exitCode := runPrecheckVerify(worktreePath, cmd, issueBodyPath)
 
 	after, err := worktreefingerprint.Compute(worktreePath, r.executor)
 	if err != nil {
@@ -479,7 +483,8 @@ func runReviewerPrecheckImpl(r *Runner, worktreePath, eventLogPath, parentSpanID
 
 // runPrecheckVerify runs cmd via sh -c in worktreePath and returns stdout, stderr,
 // and the exit code. A non-zero exit code is returned as exitCode, not as an error.
-func runPrecheckVerify(worktreePath, cmd string) (stdout, stderr string, exitCode int) {
+// issueBodyPath, if non-empty, is exported as GOLEMIC_ISSUE_BODY_FILE.
+func runPrecheckVerify(worktreePath, cmd, issueBodyPath string) (stdout, stderr string, exitCode int) {
 	if cmd == "" {
 		return "", "", 0
 	}
@@ -489,9 +494,14 @@ func runPrecheckVerify(worktreePath, cmd string) (stdout, stderr string, exitCod
 
 	// Inherit PATH from login shell so toolchain is found.
 	pathOut, err := exec.Command("sh", "-l", "-c", "echo $PATH").Output()
+	env := os.Environ()
 	if err == nil {
-		c.Env = append(os.Environ(), "PATH="+strings.TrimSpace(string(pathOut)))
+		env = append(env, "PATH="+strings.TrimSpace(string(pathOut)))
 	}
+	if issueBodyPath != "" {
+		env = append(env, "GOLEMIC_ISSUE_BODY_FILE="+issueBodyPath)
+	}
+	c.Env = env
 
 	var outBuf, errBuf strings.Builder
 	c.Stdout = &outBuf
