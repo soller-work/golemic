@@ -26,7 +26,8 @@ import (
 
 const (
 	defaultTargetRepo = "soller-work/golemic"
-	maxLogBytes       = 8000
+	// Keep in sync with internal/runner.maxCILogBytes.
+	maxLogBytes = 8000
 )
 
 func main() {

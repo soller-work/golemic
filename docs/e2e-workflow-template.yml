@@ -67,6 +67,8 @@ jobs:
         working-directory: golemic
         env:
           GOLEMIC_TICKET_TOKEN: ${{ secrets.GOLEMIC_TICKET_TOKEN }}
+          GOLEMIC_DEV_TOKEN: ${{ secrets.GOLEMIC_DEV_TOKEN }}
+          GOLEMIC_REVIEWER_TOKEN: ${{ secrets.GOLEMIC_REVIEWER_TOKEN }}
           GOLEMIC_TARGET_REPO: soller-work/golemic
         run: go run ./test/e2e/report "$RUNNER_TEMP/e2e-output.json"
 
