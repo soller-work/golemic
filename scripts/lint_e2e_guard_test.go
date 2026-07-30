@@ -58,13 +58,34 @@ func newGitRepo(t *testing.T) (repoDir, baseCommit string) {
 	return dir, base
 }
 
+// filterEnvKeys returns env with any entry whose key matches one of keys removed.
+func filterEnvKeys(env []string, keys ...string) []string {
+	out := env[:0:0]
+	for _, e := range env {
+		keep := true
+		for _, k := range keys {
+			if strings.HasPrefix(e, k+"=") {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // runGuard runs lint-e2e-guard.sh in repoDir with LINT_BASE_REF=baseRef and
 // optional extra env vars. Returns (exitCode, stderr).
 func runGuard(t *testing.T, repoDir, baseRef string, extraEnv map[string]string) (int, string) {
 	t.Helper()
 	c := exec.Command("sh", scriptPath(t))
 	c.Dir = repoDir
-	env := append(os.Environ(), "LINT_BASE_REF="+baseRef)
+	// Strip guard-specific env vars so the parent process environment does not
+	// accidentally grant approval (e.g. when the runner sets GOLEMIC_ISSUE_BODY_FILE).
+	env := filterEnvKeys(os.Environ(), "GOLEMIC_ISSUE_BODY_FILE", "E2E_GUARD_ALLOW")
+	env = append(env, "LINT_BASE_REF="+baseRef)
 	for k, v := range extraEnv {
 		env = append(env, k+"="+v)
 	}
