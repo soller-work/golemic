@@ -1,5 +1,5 @@
 LINT_BASE_REF ?= origin/main
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v1.62.2
 GOBIN := $(shell go env GOPATH)/bin
 
 .PHONY: build
