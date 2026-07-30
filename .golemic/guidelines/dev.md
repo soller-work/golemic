@@ -25,5 +25,11 @@ Conventional Commits with slice number: `type(scope): summary (NNN)` — e.g. `f
 - No panics for normal errors; do not ignore errors; do not destroy error chains with `%v`.
 - Do not store `context.Context` in structs; no premature optimization; no clever one-liners at the cost of readability.
 
+## E2E Test Protection
+- **Do not modify or delete any file under `test/e2e/`** unless the issue body contains the line `E2E-MODIFY-APPROVED`.
+- Adding new files under `test/e2e/` is always allowed.
+- This rule is enforced by both this prompt and a hard verify check (`lint-e2e-guard`). Attempting to modify existing E2E tests without approval will fail `gm_project_check`.
+- `E2E_GUARD_ALLOW=1` exists solely for the human user working locally; never set it yourself.
+
 ## Exploring the Codebase
 The worktree is indexed into a code-intelligence graph. Prefer `gm_code_search_graph`, `gm_code_search`, `gm_code_get_snippet`, `gm_code_trace_call_path`, `gm_code_query_graph`, `gm_code_get_architecture`, and `gm_code_get_graph_schema` over `grep`/`find`/broad `read` for structural exploration — they answer in one call instead of many.

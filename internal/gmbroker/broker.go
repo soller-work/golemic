@@ -980,7 +980,10 @@ func (b *Broker) handleProjectCheck(_ json.RawMessage) json.RawMessage {
 		return errRes
 	}
 
-	res, err := checkFn(b.projectCheck, b.projectCheckLogDir)
+	cfg, cleanupBodyFile := b.projectCheckWithIssueBody()
+	defer cleanupBodyFile()
+
+	res, err := checkFn(cfg, b.projectCheckLogDir)
 	if err != nil {
 		return errResult("PROJECT_CHECK_FAILED", err.Error())
 	}
@@ -991,6 +994,38 @@ func (b *Broker) handleProjectCheck(_ json.RawMessage) json.RawMessage {
 
 	out, _ := json.Marshal(res)
 	return json.RawMessage(out)
+}
+
+// projectCheckWithIssueBody returns a ProjectCheckConfig with GOLEMIC_ISSUE_BODY_FILE
+// injected when the broker has a cached issue body (from a prior gm_slice_get call).
+// The returned cleanup func removes the temp file; callers must defer it.
+func (b *Broker) projectCheckWithIssueBody() (ProjectCheckConfig, func()) {
+	cfg := b.projectCheck
+
+	// Use the cached body only if gm_slice_get has already been called and succeeded.
+	if b.cachedBody == "" {
+		return cfg, func() {}
+	}
+
+	f, err := os.CreateTemp("", "golemic-issue-body-*.txt")
+	if err != nil {
+		return cfg, func() {}
+	}
+	if _, err := f.WriteString(b.cachedBody); err != nil {
+		_ = f.Close()
+		os.Remove(f.Name()) //nolint:errcheck
+		return cfg, func() {}
+	}
+	_ = f.Close()
+
+	env := make(map[string]string, len(cfg.Env)+1)
+	for k, v := range cfg.Env {
+		env[k] = v
+	}
+	env["GOLEMIC_ISSUE_BODY_FILE"] = f.Name()
+	cfg.Env = env
+
+	return cfg, func() { os.Remove(f.Name()) } //nolint:errcheck
 }
 
 func (b *Broker) projectCheckFnOrError() (func(ProjectCheckConfig, string) (*ProjectCheckResult, error), json.RawMessage) {
