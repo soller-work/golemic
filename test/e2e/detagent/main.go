@@ -40,6 +40,11 @@ var scenarioRe = regexp.MustCompile(`(?m)^E2E-SCENARIO:\s*(\S+)`)
 var roundRe = regexp.MustCompile(`round-(\d+)`)
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println("detagent 1.0.0 (golemic e2e fake pi)")
+		os.Exit(0)
+	}
+
 	role := os.Getenv("GOLEMIC_ROLE")
 	var err error
 	switch role {

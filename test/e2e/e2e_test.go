@@ -82,6 +82,12 @@ func TestE2EHappyPath(t *testing.T) {
 			t.Error("pr_merged event not found in events.jsonl")
 		}
 	})
+
+	t.Run("NoPiPreflight", func(t *testing.T) {
+		if strings.Contains(result.Stderr, "pi installiert") {
+			t.Errorf("golemic preflight failed for fake pi: stderr contains 'pi installiert'\n%s", result.Stderr)
+		}
+	})
 }
 
 // TestE2EReviewerRejectsOnce exercises the changes_requested → fix → approved loop.
