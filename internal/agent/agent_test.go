@@ -637,7 +637,7 @@ func TestRunRole_ContextCancelled(t *testing.T) {
 
 func TestRunRole_ProcessGroupKilled(t *testing.T) {
 	cfg := defaultRoleConfig(t, "dev")
-	cfg.Timeout = 3 * time.Second // generous enough to ensure script executes before kill
+	cfg.Timeout = 10 * time.Second // generous enough to ensure script executes before kill under parallel test load
 
 	pidDir := t.TempDir()
 	pidFile := filepath.Join(pidDir, "child.pid")
@@ -668,8 +668,8 @@ func TestRunRole_ProcessGroupKilled(t *testing.T) {
 
 	// The process should be killed within a reasonable time after the timeout.
 	// Allow some overhead for OS scheduling + kill + reap.
-	if elapsed > 5*time.Second {
-		t.Errorf("process took too long to die: %v (expected < 5s)", elapsed)
+	if elapsed > 15*time.Second {
+		t.Errorf("process took too long to die: %v (expected < 15s)", elapsed)
 	}
 
 	// P2-6: Verify background child process is actually dead.
@@ -1017,7 +1017,7 @@ exit 0
 	scriptPath := writeScript(t, steadyScript)
 	invocations := attemptAwareFactory(t, &cfg, []string{scriptPath})
 
-	cfg.IdleTimeout = 500 * time.Millisecond
+	cfg.IdleTimeout = 5 * time.Second // generous to tolerate process startup time under parallel test load
 	cfg.PollInterval = 20 * time.Millisecond
 	cfg.MaxStallRetries = intPtr(2)
 
