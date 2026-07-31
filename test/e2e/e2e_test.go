@@ -18,146 +18,39 @@ import (
 	"testing"
 
 	"golemic/test/e2e/harness"
-	"golemic/test/e2e/scenarios"
+	"golemic/test/e2e/scenario"
 )
 
-// TestE2EHappyPath exercises the full issue → dev → PR → approved review → merge loop.
-// Expects golemic to exit 0 and the run_finished outcome to be "success".
-func TestE2EHappyPath(t *testing.T) {
-	h := harness.New(t)
-	if h == nil {
-		return
-	}
-
-	issueNum, err := h.CreateIssue(scenarios.HappyPath)
-	if err != nil {
-		t.Fatalf("CreateIssue: %v", err)
-	}
-	branch := fmt.Sprintf("golemic/issue-%d", issueNum)
-
-	t.Cleanup(func() {
-		h.CloseIssue(issueNum)
-		h.DeleteBranch(branch)
-		if err := h.RemoveWorktrees(); err != nil {
-			t.Logf("cleanup: RemoveWorktrees: %v", err)
-		}
-		if err := h.RemoveRuns(); err != nil {
-			t.Logf("cleanup: RemoveRuns: %v", err)
-		}
-	})
-
-	result := h.RunWithTimeout(t, issueNum, 0, false)
-	t.Logf("golemic stdout:\n%s", result.Stdout)
-	t.Logf("golemic stderr:\n%s", result.Stderr)
-
-	eventsPath := h.LatestRunEventsPath()
-
-	t.Run("ExitCode", func(t *testing.T) {
-		if result.ExitCode != 0 {
-			t.Errorf("want exit 0, got %d", result.ExitCode)
-		}
-	})
-
-	t.Run("Outcome", func(t *testing.T) {
-		outcome := harness.RunFinishedOutcome(eventsPath)
-		if outcome != "success" {
-			t.Errorf("run_finished outcome: got %q, want %q", outcome, "success")
-		}
-	})
-
-	t.Run("PROpened", func(t *testing.T) {
-		if !harness.HasEvent(eventsPath, "pr_opened") {
-			t.Error("pr_opened event not found in events.jsonl")
-		}
-	})
-
-	t.Run("ReviewSubmitted", func(t *testing.T) {
-		if !harness.HasEvent(eventsPath, "review_submitted") {
-			t.Error("review_submitted event not found in events.jsonl")
-		}
-	})
-
-	t.Run("PRMerged", func(t *testing.T) {
-		if !harness.HasEvent(eventsPath, "pr_merged") {
-			t.Error("pr_merged event not found in events.jsonl")
-		}
-	})
-
-	t.Run("NoPiPreflight", func(t *testing.T) {
-		if strings.Contains(result.Stderr, "pi installiert") {
-			t.Errorf("golemic preflight failed for fake pi: stderr contains 'pi installiert'\n%s", result.Stderr)
-		}
-	})
+// harnessAdapter adapts *harness.Harness to the scenario.Sandbox interface.
+type harnessAdapter struct {
+	h *harness.Harness
+	t *testing.T
 }
 
-// TestE2EReviewerRejectsOnce exercises the changes_requested → fix → approved loop.
-// Expects two review_submitted events (changes_requested then approved) and a merged PR, outcome "success".
-func TestE2EReviewerRejectsOnce(t *testing.T) {
-	h := harness.New(t)
-	if h == nil {
-		return
-	}
-
-	issueNum, err := h.CreateIssue(scenarios.ReviewerRejectsOnce)
-	if err != nil {
-		t.Fatalf("CreateIssue: %v", err)
-	}
-	branch := fmt.Sprintf("golemic/issue-%d", issueNum)
-
-	t.Cleanup(func() {
-		h.CloseIssue(issueNum)
-		h.DeleteBranch(branch)
-		if err := h.RemoveWorktrees(); err != nil {
-			t.Logf("cleanup: RemoveWorktrees: %v", err)
-		}
-		if err := h.RemoveRuns(); err != nil {
-			t.Logf("cleanup: RemoveRuns: %v", err)
-		}
-	})
-
-	result := h.RunWithTimeout(t, issueNum, 0, false)
-	t.Logf("golemic stdout:\n%s", result.Stdout)
-	t.Logf("golemic stderr:\n%s", result.Stderr)
-
-	eventsPath := h.LatestRunEventsPath()
-
-	t.Run("ExitCode", func(t *testing.T) {
-		if result.ExitCode != 0 {
-			t.Errorf("want exit 0, got %d", result.ExitCode)
-		}
-	})
-
-	t.Run("Outcome", func(t *testing.T) {
-		outcome := harness.RunFinishedOutcome(eventsPath)
-		if outcome != "success" {
-			t.Errorf("run_finished outcome: got %q, want %q", outcome, "success")
-		}
-	})
-
-	t.Run("TwoReviews", func(t *testing.T) {
-		count := harness.CountEvents(eventsPath, "review_submitted")
-		if count < 2 {
-			t.Errorf("want at least 2 review_submitted events, got %d", count)
-		}
-	})
-
-	t.Run("PRMerged", func(t *testing.T) {
-		if !harness.HasEvent(eventsPath, "pr_merged") {
-			t.Error("pr_merged event not found in events.jsonl")
-		}
-	})
+func (a *harnessAdapter) CreateCollisionPR(issueNum int) (int, func()) {
+	a.t.Helper()
+	return a.h.CreateCollisionPR(a.t, issueNum)
 }
 
-// TestE2EDevVerifyFails exercises the dev-failure path where the verify command
-// fails (or the detagent exits non-zero after a failing project check).
-// Expects golemic to exit non-zero with a dev_failed outcome.
-func TestE2EDevVerifyFails(t *testing.T) {
+// TestE2EScenarios is the single table-driven runner for all registered E2E scenarios.
+func TestE2EScenarios(t *testing.T) {
 	h := harness.New(t)
 	if h == nil {
 		return
 	}
 
-	issueNum, err := h.CreateIssue(scenarios.DevVerifyFails)
+	for _, sc := range scenario.All() {
+		sc := sc
+		t.Run(sc.Name, func(t *testing.T) {
+			runScenario(t, h, sc)
+		})
+	}
+}
+
+func runScenario(t *testing.T, h *harness.Harness, sc scenario.Scenario) {
+	t.Helper()
+
+	issueNum, err := h.CreateIssue(sc.Name)
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
@@ -174,140 +67,84 @@ func TestE2EDevVerifyFails(t *testing.T) {
 		}
 	})
 
-	result := h.RunWithTimeout(t, issueNum, 0, false)
+	if sc.Setup != nil {
+		sb := &harnessAdapter{h: h, t: t}
+		cleanup := sc.Setup(sb, issueNum)
+		t.Cleanup(cleanup)
+	}
+
+	result := h.RunWithTimeout(t, issueNum, sc.TimeoutSec, sc.NoClean, sc.Env...)
 	t.Logf("golemic stdout:\n%s", result.Stdout)
 	t.Logf("golemic stderr:\n%s", result.Stderr)
 
 	eventsPath := h.LatestRunEventsPath()
+	assertExpect(t, sc.Expect, result, eventsPath)
+}
 
-	t.Run("NonZeroExit", func(t *testing.T) {
-		if result.ExitCode == 0 {
+func assertExpect(t *testing.T, ex scenario.Expect, result *harness.RunResult, eventsPath string) {
+	t.Helper()
+
+	t.Run("ExitCode", func(t *testing.T) {
+		if ex.ExitZero && result.ExitCode != 0 {
+			t.Errorf("want exit 0, got %d", result.ExitCode)
+		}
+		if !ex.ExitZero && result.ExitCode == 0 {
 			t.Error("want non-zero exit, got 0")
 		}
 	})
 
-	t.Run("FailureOutcome", func(t *testing.T) {
-		outcome := harness.RunFinishedOutcome(eventsPath)
-		if outcome == "ok" || outcome == "" {
-			t.Errorf("run_finished outcome: got %q, want a failure outcome (dev_failed etc.)", outcome)
-		}
-	})
-}
-
-// TestE2ECollision exercises golemic's collision detection when an open PR
-// already exists for the issue's branch.
-// Expects golemic to exit non-zero with outcome "aborted".
-func TestE2ECollision(t *testing.T) {
-	h := harness.New(t)
-	if h == nil {
-		return
+	if ex.Outcome != "" || len(ex.AllowedOutcomes) > 0 {
+		t.Run("Outcome", func(t *testing.T) {
+			got := harness.RunFinishedOutcome(eventsPath)
+			if len(ex.AllowedOutcomes) > 0 {
+				for _, o := range ex.AllowedOutcomes {
+					if strings.EqualFold(got, string(o)) {
+						return
+					}
+				}
+				t.Errorf("run_finished outcome: got %q, want one of %v", got, ex.AllowedOutcomes)
+			} else {
+				if !strings.EqualFold(got, string(ex.Outcome)) {
+					t.Errorf("run_finished outcome: got %q, want %q", got, ex.Outcome)
+				}
+			}
+		})
 	}
 
-	issueNum, err := h.CreateIssue(scenarios.Collision)
-	if err != nil {
-		t.Fatalf("CreateIssue: %v", err)
-	}
-	branch := fmt.Sprintf("golemic/issue-%d", issueNum)
-
-	// Pre-create the collision PR before running golemic.
-	_, collisionCleanup := h.CreateCollisionPR(t, issueNum)
-
-	t.Cleanup(func() {
-		collisionCleanup()
-		h.CloseIssue(issueNum)
-		h.DeleteBranch(branch)
-		if err := h.RemoveWorktrees(); err != nil {
-			t.Logf("cleanup: RemoveWorktrees: %v", err)
-		}
-		if err := h.RemoveRuns(); err != nil {
-			t.Logf("cleanup: RemoveRuns: %v", err)
-		}
-	})
-
-	result := h.RunWithTimeout(t, issueNum, 0, true)
-	t.Logf("golemic stdout:\n%s", result.Stdout)
-	t.Logf("golemic stderr:\n%s", result.Stderr)
-
-	eventsPath := h.LatestRunEventsPath()
-
-	t.Run("NonZeroExit", func(t *testing.T) {
-		if result.ExitCode == 0 {
-			t.Error("want non-zero exit for collision, got 0")
-		}
-	})
-
-	t.Run("AbortedOutcome", func(t *testing.T) {
-		outcome := harness.RunFinishedOutcome(eventsPath)
-		if outcome != "aborted" {
-			t.Errorf("run_finished outcome: got %q, want %q", outcome, "aborted")
-		}
-	})
-
-	t.Run("NoPROpened", func(t *testing.T) {
-		if harness.HasEvent(eventsPath, "pr_opened") {
-			t.Error("golemic should not open a PR when collision is detected")
-		}
-	})
-}
-
-// TestE2ETimeout exercises golemic's agent-stall handling when the detagent
-// sleeps without producing output past the idle timeout.
-// Expects golemic to exit non-zero with a timeout or stalled outcome.
-func TestE2ETimeout(t *testing.T) {
-	h := harness.New(t)
-	if h == nil {
-		return
+	for _, evType := range ex.RequireEvents {
+		evType := evType
+		t.Run("RequireEvent/"+evType, func(t *testing.T) {
+			if !harness.HasEvent(eventsPath, evType) {
+				t.Errorf("%s event not found in events.jsonl", evType)
+			}
+		})
 	}
 
-	issueNum, err := h.CreateIssue(scenarios.Timeout)
-	if err != nil {
-		t.Fatalf("CreateIssue: %v", err)
+	for _, evType := range ex.ForbidEvents {
+		evType := evType
+		t.Run("ForbidEvent/"+evType, func(t *testing.T) {
+			if harness.HasEvent(eventsPath, evType) {
+				t.Errorf("%s event must not appear in events.jsonl", evType)
+			}
+		})
 	}
-	branch := fmt.Sprintf("golemic/issue-%d", issueNum)
 
-	t.Cleanup(func() {
-		h.CloseIssue(issueNum)
-		h.DeleteBranch(branch)
-		if err := h.RemoveWorktrees(); err != nil {
-			t.Logf("cleanup: RemoveWorktrees: %v", err)
-		}
-		if err := h.RemoveRuns(); err != nil {
-			t.Logf("cleanup: RemoveRuns: %v", err)
-		}
-	})
-
-	// Use a short idle timeout and no retries so the test completes quickly.
-	// GOLEMIC_AGENT_IDLE_TIMEOUT_SEC=20: agent is killed after 20 s of silence.
-	// GOLEMIC_AGENT_MAX_STALL_RETRIES=0: no retries, fail immediately on first stall.
-	result := h.RunWithTimeout(t, issueNum, 120, false, // 2-minute wall-clock cap for the test
-		"GOLEMIC_AGENT_IDLE_TIMEOUT_SEC=20",
-		"GOLEMIC_AGENT_MAX_STALL_RETRIES=0",
-	)
-	t.Logf("golemic stdout:\n%s", result.Stdout)
-	t.Logf("golemic stderr:\n%s", result.Stderr)
-
-	eventsPath := h.LatestRunEventsPath()
-
-	t.Run("NonZeroExit", func(t *testing.T) {
-		if result.ExitCode == 0 {
-			t.Error("want non-zero exit for timeout/stall, got 0")
-		}
-	})
-
-	t.Run("FailureOutcome", func(t *testing.T) {
-		outcome := harness.RunFinishedOutcome(eventsPath)
-		if !isTimeoutOutcome(outcome) {
-			t.Errorf("run_finished outcome: got %q, want timeout or stalled", outcome)
-		}
-	})
-}
-
-// isTimeoutOutcome returns true for outcomes produced by agent kill paths.
-func isTimeoutOutcome(outcome string) bool {
-	for _, o := range []string{"timeout", "stalled"} {
-		if strings.EqualFold(outcome, o) {
-			return true
-		}
+	for evType, minCount := range ex.MinEventCount {
+		evType, minCount := evType, minCount
+		t.Run("MinCount/"+evType, func(t *testing.T) {
+			count := harness.CountEvents(eventsPath, evType)
+			if count < minCount {
+				t.Errorf("want at least %d %s events, got %d", minCount, evType, count)
+			}
+		})
 	}
-	return false
+
+	for _, sub := range ex.StderrContains {
+		sub := sub
+		t.Run("Stderr/"+sub, func(t *testing.T) {
+			if !strings.Contains(result.Stderr, sub) {
+				t.Errorf("stderr does not contain %q", sub)
+			}
+		})
+	}
 }
