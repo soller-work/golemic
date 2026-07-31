@@ -29,6 +29,7 @@ type Harness struct {
 	PiDir      string // temp dir containing the fake pi binary
 	GolemicDir string // <HOME>/.golemic/<project>
 
+	project       string // sandbox project name (for per-run isolation)
 	devToken      string
 	reviewerToken string
 	homeDir       string
@@ -105,6 +106,7 @@ func New(t *testing.T) *Harness {
 		GolemicBin:    golemicBin,
 		PiDir:         piDir,
 		GolemicDir:    filepath.Join(homeDir, ".golemic", project),
+		project:       project,
 		devToken:      devToken,
 		reviewerToken: reviewerToken,
 		homeDir:       homeDir,
@@ -116,6 +118,46 @@ func New(t *testing.T) *Harness {
 	}
 
 	return h
+}
+
+// IsolateRun creates a per-run harness with its own temporary HOME directory and
+// its own linked sandbox worktree so concurrent scenario runs share no mutable
+// local state. The per-run HOME gives golemic an isolated state dir
+// (<HOME>/.golemic/<project>) that contains exactly one run after golemic exits,
+// making LatestRunEventsPath unambiguous. Cleanup is registered with t.Cleanup:
+// it removes the temp HOME tree and prunes dangling git worktree metadata.
+func (h *Harness) IsolateRun(t *testing.T) *Harness {
+	t.Helper()
+
+	tmpHome, err := os.MkdirTemp("", "e2e-home-*")
+	if err != nil {
+		t.Fatalf("IsolateRun: create temp home: %v", err)
+	}
+
+	sandboxPath := filepath.Join(tmpHome, "sandbox")
+	if err := runInDir(h.E2EPath, "git", "worktree", "add", "--detach", sandboxPath, "HEAD"); err != nil {
+		os.RemoveAll(tmpHome)
+		t.Fatalf("IsolateRun: git worktree add: %v", err)
+	}
+
+	t.Cleanup(func() {
+		os.RemoveAll(tmpHome)
+		// Prune dangling references for the sandbox worktree and any golemic
+		// worktrees that were created inside this run's state dir.
+		runInDir(h.E2EPath, "git", "worktree", "prune") //nolint:errcheck
+	})
+
+	return &Harness{
+		E2EPath:       sandboxPath,
+		E2ERepo:       h.E2ERepo,
+		GolemicBin:    h.GolemicBin,
+		PiDir:         h.PiDir,
+		GolemicDir:    filepath.Join(tmpHome, ".golemic", h.project),
+		project:       h.project,
+		devToken:      h.devToken,
+		reviewerToken: h.reviewerToken,
+		homeDir:       tmpHome,
+	}
 }
 
 // CreateIssue creates a sandbox issue with the given scenario marker and returns

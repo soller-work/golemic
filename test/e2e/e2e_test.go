@@ -42,7 +42,9 @@ func TestE2EScenarios(t *testing.T) {
 	for _, sc := range scenario.All() {
 		sc := sc
 		t.Run(sc.Name, func(t *testing.T) {
-			runScenario(t, h, sc)
+			t.Parallel()
+			ih := h.IsolateRun(t)
+			runScenario(t, ih, sc)
 		})
 	}
 }
@@ -59,12 +61,6 @@ func runScenario(t *testing.T, h *harness.Harness, sc scenario.Scenario) {
 	t.Cleanup(func() {
 		h.CloseIssue(issueNum)
 		h.DeleteBranch(branch)
-		if err := h.RemoveWorktrees(); err != nil {
-			t.Logf("cleanup: RemoveWorktrees: %v", err)
-		}
-		if err := h.RemoveRuns(); err != nil {
-			t.Logf("cleanup: RemoveRuns: %v", err)
-		}
 	})
 
 	if sc.Setup != nil {
