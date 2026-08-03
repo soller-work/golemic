@@ -261,42 +261,6 @@ func TestLintE2EGuard_UnreadableBodyFile_TreatedAsNoApproval(t *testing.T) {
 	}
 }
 
-// TestLintE2EGuard_BranchAddedFileModified_Passes verifies that a file added in
-// this branch (not present in the base commit) may be modified in the working
-// tree without triggering the guard. This handles the retry-dev flow where a
-// scenario file created in a prior PR attempt needs follow-up edits.
-func TestLintE2EGuard_BranchAddedFileModified_Passes(t *testing.T) {
-	dir, base := newGitRepo(t)
-
-	// Add a new e2e file in a branch commit (between base and HEAD).
-	newFile := filepath.Join(dir, "test", "e2e", "scenario", "new_scenario.go")
-	if err := os.MkdirAll(filepath.Dir(newFile), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(newFile, []byte("package scenario\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	add := exec.Command("sh", "-c", "git add . && git commit -m add-scenario")
-	add.Dir = dir
-	add.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@test",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@test",
-	)
-	if out, err := add.CombinedOutput(); err != nil {
-		t.Fatalf("add commit: %v\n%s", err, out)
-	}
-
-	// Now modify the file in the working tree (unstaged) — retry-dev scenario.
-	if err := os.WriteFile(newFile, []byte("package scenario\n// updated\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	code, stderr := runGuard(t, dir, base, nil)
-	if code != 0 {
-		t.Errorf("expected exit 0 for branch-added file, got %d; stderr: %s", code, stderr)
-	}
-}
-
 func TestLintE2EGuard_UncommittedModification_Fails(t *testing.T) {
 	dir, base := newGitRepo(t)
 

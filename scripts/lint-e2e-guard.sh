@@ -21,9 +21,9 @@ fi
 # that both committed and uncommitted changes are caught.
 COMMITTED=$(git diff --name-status "$BASE" HEAD -- 'test/e2e/' 2>/dev/null \
   | awk '$1 ~ /^[MDR]/ { print $NF }')
-STAGED=$(git diff --cached --name-status "$BASE" -- 'test/e2e/' 2>/dev/null \
+STAGED=$(git diff --cached --name-status -- 'test/e2e/' 2>/dev/null \
   | awk '$1 ~ /^[MDR]/ { print $NF }')
-UNSTAGED=$(git diff --name-status "$BASE" -- 'test/e2e/' 2>/dev/null \
+UNSTAGED=$(git diff --name-status -- 'test/e2e/' 2>/dev/null \
   | awk '$1 ~ /^[MDR]/ { print $NF }')
 
 OFFENDING=$(printf '%s\n%s\n%s\n' "$COMMITTED" "$STAGED" "$UNSTAGED" \
