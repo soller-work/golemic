@@ -25,7 +25,7 @@ func init() {
 					"E2E gate_recovers: initial attempt (no check)",
 					"feat: add e2e gate_recovers marker (detagent)",
 					"E2E gate_recovers test",
-					"Automated E2E gate_recovers test driven by detagent.\n\nCloses #0",
+					"Automated E2E gate_recovers test driven by detagent.",
 				)
 			}
 			return c.WriteCommitAndDone(
@@ -33,16 +33,17 @@ func init() {
 				"E2E gate_recovers marker — recovered\n",
 				"feat: add e2e gate_recovers marker (detagent)",
 				"E2E gate_recovers test",
-				"Automated E2E gate_recovers test driven by detagent.\n\nCloses #0",
+				"Automated E2E gate_recovers test driven by detagent.",
 			)
 		},
 		Reviewer: func(c *detbroker.Client, inv Invocation) error {
 			return c.Approve("E2E detagent: LGTM — gate_recovers changes look good.")
 		},
 		Expect: Expect{
-			Outcome:       OutcomeSuccess,
-			ExitZero:      true,
-			RequireEvents: []string{"pr_opened", "review_submitted", "pr_merged"},
+			Outcome:        OutcomeSuccess,
+			ExitZero:       true,
+			RequireEvents:  []string{"pr_opened", "review_submitted", "pr_merged"},
+			StderrContains: []string{"predicate gm_dev_done unmet"},
 		},
 	})
 }
