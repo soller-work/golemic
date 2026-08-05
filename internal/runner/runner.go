@@ -205,14 +205,10 @@ func (r *Runner) initRun() (*eventlog.Writer, worktree.EventWriter, string, int)
 	r.cfg = cfg
 	r.project = cfg.Project
 
-	loader := credentials.NewLoader(r.homeDir)
-	loader.LookupEnv = r.lookupEnv
-	creds, err := loader.Load(r.project)
-	if err != nil {
+	if err := r.loadAndSetCredentials(); err != nil {
 		fmt.Fprintf(r.stderr, "Failed to load credentials: %v\n", err)
 		return nil, nil, "", 1
 	}
-	r.creds = creds
 
 	r.runID = fmt.Sprintf("issue-%d-%s", r.issueNum, time.Now().UTC().Format("20060102T150405Z"))
 	r.branchName = fmt.Sprintf("%s%d", branchPrefix, r.issueNum)
@@ -224,17 +220,8 @@ func (r *Runner) initRun() (*eventlog.Writer, worktree.EventWriter, string, int)
 		return nil, nil, "", 1
 	}
 
-	r.progressRenderer = progress.New(r.stderr)
-	var ew worktree.EventWriter = writer
-	if !r.quiet {
-		ew = &progressEventWriter{inner: writer, renderer: r.progressRenderer}
-	}
-
-	startPayload, _ := json.Marshal(runStartedPayload{Issue: r.issueNum, RunID: r.runID})
-	if err := ew.Write(eventlog.Event{
-		Type: eventlog.EventRunStarted, Ts: time.Now().Format(time.RFC3339),
-		RunID: r.runID, TurnID: r.turnCounter, Payload: startPayload,
-	}); err != nil {
+	ew, err := r.setupEventWriter(writer)
+	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to write run_started event: %v\n", err)
 		return writer, nil, "", 1
 	}
@@ -249,6 +236,46 @@ func (r *Runner) initRun() (*eventlog.Writer, worktree.EventWriter, string, int)
 		r.writeRunHeader(r.stderr)
 	}
 	return writer, ew, eventLogPath, 0
+}
+
+// loadAndSetCredentials loads project credentials and sets r.creds.
+func (r *Runner) loadAndSetCredentials() error {
+	loader := credentials.NewLoader(r.homeDir)
+	loader.LookupEnv = r.lookupEnv
+	creds, err := loader.Load(r.project)
+	if err != nil {
+		return err
+	}
+	r.creds = creds
+	return nil
+}
+
+// setupEventWriter creates the progress-wrapped event writer, writes the
+// run_started event, and returns the writer. Returns an error if the event
+// cannot be written.
+func (r *Runner) setupEventWriter(rawWriter *eventlog.Writer) (worktree.EventWriter, error) {
+	r.progressRenderer = progress.New(r.stderr)
+	var ew worktree.EventWriter = rawWriter
+	if !r.quiet {
+		ew = &progressEventWriter{inner: rawWriter, renderer: r.progressRenderer}
+	}
+	startPayload, _ := json.Marshal(runStartedPayload{Issue: r.issueNum, RunID: r.runID})
+	err := ew.Write(eventlog.Event{
+		Type: eventlog.EventRunStarted, Ts: time.Now().Format(time.RFC3339),
+		RunID: r.runID, TurnID: r.turnCounter, Payload: startPayload,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ew, nil
+}
+
+// configuredTimeout returns the run timeout from config.
+func (r *Runner) configuredTimeout() time.Duration {
+	if r.cfg.TimeoutSeconds > 0 {
+		return time.Duration(r.cfg.TimeoutSeconds) * time.Second
+	}
+	return time.Duration(r.cfg.TimeoutMinutes) * time.Minute
 }
 
 // checkPreflight runs the preflight gate in read-only mode and prints failures
@@ -304,16 +331,10 @@ func (r *Runner) orchestrateRun(ew worktree.EventWriter, eventLogPath string) in
 	})
 
 	golemicDir := filepath.Join(r.homeDir, ".golemic", r.project)
-	var timeoutDuration time.Duration
-	if r.cfg.TimeoutSeconds > 0 {
-		timeoutDuration = time.Duration(r.cfg.TimeoutSeconds) * time.Second
-	} else {
-		timeoutDuration = time.Duration(r.cfg.TimeoutMinutes) * time.Minute
-	}
 	loopCtx := &RunContext{
 		GolemicDir:             golemicDir,
 		EventLogPath:           eventLogPath,
-		Timeout:                timeoutDuration,
+		Timeout:                r.configuredTimeout(),
 		ParentSpanID:           runSpanID,
 		Round:                  1,
 		MaxRounds:              r.cfg.MaxReviewRounds,

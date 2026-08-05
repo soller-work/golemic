@@ -1039,22 +1039,14 @@ func TestLoadIssue_PinnedToRepoRoot_AC002(t *testing.T) {
 // Context propagation: Run(ctx) threads ctx to agent invocations (issue #325)
 // ---------------------------------------------------------------------------
 
-// TestRun_ContextPropagatedToAgent verifies that the signal-aware context
-// passed to Run reaches the agent run function so that CTRL+C (SIGINT)
-// cancellation propagates to the pi subprocess manager.
-func TestRun_ContextPropagatedToAgent(t *testing.T) { //nolint:cyclop // sequential setup steps (dirs, config, creds, guidelines) followed by two select branches; splitting adds no clarity
-	// Use /tmp so that Unix socket paths stay within macOS's 104-byte limit.
-	// t.TempDir() produces paths > 100 chars which causes the GM broker to fail
-	// before the agent is called, preventing the context from being captured.
-	const project = "ctxtest"
-	homeDir := "/tmp/golemic-ctxtest-home"
-	repoRoot := "/tmp/golemic-ctxtest-repo"
+// scaffoldCtxTestDirs creates the on-disk structure needed by
+// TestRun_ContextPropagatedToAgent and registers cleanup with t.
+func scaffoldCtxTestDirs(t *testing.T, homeDir, repoRoot, project string) {
+	t.Helper()
 	t.Cleanup(func() {
 		os.RemoveAll(homeDir)  //nolint:errcheck
 		os.RemoveAll(repoRoot) //nolint:errcheck
 	})
-
-	// Scaffold the required on-disk structure.
 	for _, dir := range []string{
 		filepath.Join(repoRoot, ".golemic", "guidelines"),
 		filepath.Join(repoRoot, ".golemic"),
@@ -1075,6 +1067,19 @@ func TestRun_ContextPropagatedToAgent(t *testing.T) { //nolint:cyclop // sequent
 	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "guidelines", "dev.md"), []byte("# Dev Guidelines"), 0644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestRun_ContextPropagatedToAgent verifies that the signal-aware context
+// passed to Run reaches the agent run function so that CTRL+C (SIGINT)
+// cancellation propagates to the pi subprocess manager.
+func TestRun_ContextPropagatedToAgent(t *testing.T) {
+	// Use /tmp so that Unix socket paths stay within macOS's 104-byte limit.
+	// t.TempDir() produces paths > 100 chars which causes the GM broker to fail
+	// before the agent is called, preventing the context from being captured.
+	const project = "ctxtest"
+	homeDir := "/tmp/golemic-ctxtest-home"
+	repoRoot := "/tmp/golemic-ctxtest-repo"
+	scaffoldCtxTestDirs(t, homeDir, repoRoot, project)
 
 	exec := setupHappyExecutor(repoRoot)
 
