@@ -594,7 +594,7 @@ func TestTelemetry_FullRun_PairedSpansInFile_AC001(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 	if exitCode != 0 {
 		t.Fatalf("Run() returned %d; stderr: %s", exitCode, stderr.String())
 	}
@@ -619,7 +619,7 @@ func TestTelemetry_FullRun_PairedSpansInFile_AC001(t *testing.T) {
 
 func TestTelemetry_StepTransitionsAndStepSpans_AC007(t *testing.T) {
 	r, homeDir, project, _, _, stderr := setupTelemetryRun(t, makeTelemetryFakeAgent(t))
-	if exitCode := r.Run(); exitCode != 0 {
+	if exitCode := r.Run(context.Background()); exitCode != 0 {
 		t.Fatalf("Run() returned %d; stderr: %s", exitCode, stderr.String())
 	}
 	events, records := readTelemetryArtifacts(t, homeDir, project)
@@ -633,7 +633,7 @@ func TestTelemetry_FailingTerminalStepSpan_StatusError_AC008(t *testing.T) {
 		}
 		return 0, agent.TranscriptPaths{}, nil
 	})
-	if exitCode := r.Run(); exitCode == 0 {
+	if exitCode := r.Run(context.Background()); exitCode == 0 {
 		t.Fatalf("expected non-zero exit code; stderr: %s", stderr.String())
 	}
 	_, records := readTelemetryArtifacts(t, homeDir, project)
@@ -658,7 +658,7 @@ func TestTelemetry_GateRetrySelfLoop_AC009(t *testing.T) {
 		}
 		return 0, agent.TranscriptPaths{Stderr: "/tmp/fake.stderr"}, nil
 	})
-	if exitCode := r.Run(); exitCode != 0 {
+	if exitCode := r.Run(context.Background()); exitCode != 0 {
 		t.Fatalf("Run() returned %d; stderr: %s", exitCode, stderr.String())
 	}
 	events, records := readTelemetryArtifacts(t, homeDir, project)
@@ -754,7 +754,7 @@ func TestTelemetry_Disabled_NoFileCreated_AC003(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 	if exitCode != 0 {
 		t.Fatalf("Run() returned %d; stderr: %s", exitCode, stderr.String())
 	}
@@ -815,7 +815,7 @@ func TestTelemetry_FailingSink_ViaRun_AC004(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 	if exitCode != 0 {
 		t.Errorf("failing sink must not affect exit code; got %d, stderr: %s", exitCode, stderr.String())
 	}

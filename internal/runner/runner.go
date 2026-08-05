@@ -83,6 +83,10 @@ type Runner struct {
 	// loopCtx is the shared RunContext for the current orchestration run.
 	// Created by orchestrate, reused by handleVerdict/handlePrecheckFailure.
 	loopCtx *RunContext
+
+	// runCtx is the signal-aware context supplied to Run and threaded to all
+	// agent invocations so SIGINT/SIGTERM cancels the pi subprocess.
+	runCtx context.Context
 }
 
 // New creates a new Runner. executor is used for all gh/git commands, homeDir is
@@ -150,40 +154,53 @@ func (r *Runner) SetSink(s telemetry.Sink) {
 // Run
 // ---------------------------------------------------------------------------
 
+// agentCtx returns the signal-aware context for agent invocations. Falls back
+// to context.Background() when Run has not been called (e.g. in unit tests
+// that drive the step machine directly via runMachineFrom).
+func (r *Runner) agentCtx() context.Context {
+	if r.runCtx != nil {
+		return r.runCtx
+	}
+	return context.Background()
+}
+
 // Run executes the full run process and returns the process exit code.
-func (r *Runner) Run() int {
-	// Resolve host repo
+// Run executes the full run process and returns the process exit code.
+func (r *Runner) Run(ctx context.Context) int {
+	r.runCtx = ctx
+	writer, ew, eventLogPath, exitCode := r.initRun()
+	if writer != nil {
+		defer writer.Close() //nolint:errcheck
+	}
+	if exitCode != 0 {
+		return exitCode
+	}
+	return r.orchestrateRun(ew, eventLogPath)
+}
+
+// initRun resolves the host repo, runs the preflight gate, loads config and
+// credentials, creates the event log, and loads the issue. It sets r.repoRoot,
+// r.project, r.cfg, r.creds, r.runID, r.branchName, r.progressRenderer, and
+// r.issue as side effects. Returns the raw event-log writer (caller must defer
+// Close), the wrapped event writer for step events, the event-log path, and a
+// non-zero exit code on failure.
+func (r *Runner) initRun() (*eventlog.Writer, worktree.EventWriter, string, int) {
 	repoRoot, err := resolveHostRepo(r.executor, r.cwd)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to resolve host repo: %v\n", err)
-		return 1
+		return nil, nil, "", 1
 	}
 	r.repoRoot = repoRoot
 	r.project = filepath.Base(repoRoot)
 
-	// ---- Preflight gate (read-only, before any GitHub/event-log access) ----
-	pfl := r.preflighter
-	if pfl == nil {
-		// Production path: create a real check-mode preflight with stdout discarded;
-		// the runner prints failures to stderr directly.
-		pfl = preflight.New(r.executor, r.homeDir, r.repoRoot)
-	}
-	gateResults := pfl.Check()
-	if !gateResults.AllOK() {
-		for _, res := range gateResults {
-			if !res.Ok {
-				fmt.Fprintf(r.stderr, "FAILED: %s - %s\n", res.Name, res.Details)
-			}
-		}
-		fmt.Fprintln(r.stderr, "failed")
-		return 1
+	if code := r.checkPreflight(); code != 0 {
+		return nil, nil, "", code
 	}
 
-	// Load config and credentials (fail-closed)
 	cfg, err := config.Load(repoRoot)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to load config: %v\n", err)
-		return 1
+		return nil, nil, "", 1
 	}
 	r.cfg = cfg
 	r.project = cfg.Project
@@ -193,71 +210,91 @@ func (r *Runner) Run() int {
 	creds, err := loader.Load(r.project)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to load credentials: %v\n", err)
-		return 1
+		return nil, nil, "", 1
 	}
 	r.creds = creds
 
-	// Generate runId and create event log
 	r.runID = fmt.Sprintf("issue-%d-%s", r.issueNum, time.Now().UTC().Format("20060102T150405Z"))
 	r.branchName = fmt.Sprintf("%s%d", branchPrefix, r.issueNum)
-
 	eventLogPath := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID, "events.jsonl")
 
 	writer, err := eventlog.NewWriter(eventLogPath)
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to create event log: %v\n", err)
-		return 1
+		return nil, nil, "", 1
 	}
-	defer writer.Close()
 
-	// Keep a progress renderer available for agent-context blocks even when quiet.
 	r.progressRenderer = progress.New(r.stderr)
 	var ew worktree.EventWriter = writer
 	if !r.quiet {
 		ew = &progressEventWriter{inner: writer, renderer: r.progressRenderer}
 	}
 
-	// Write run_started (must be written before any GitHub access)
-	startPayload, _ := json.Marshal(runStartedPayload{
-		Issue: r.issueNum,
-		RunID: r.runID,
-	})
+	startPayload, _ := json.Marshal(runStartedPayload{Issue: r.issueNum, RunID: r.runID})
 	if err := ew.Write(eventlog.Event{
-		Type:    eventlog.EventRunStarted,
-		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   r.runID,
-		TurnID:  r.turnCounter,
-		Payload: startPayload,
+		Type: eventlog.EventRunStarted, Ts: time.Now().Format(time.RFC3339),
+		RunID: r.runID, TurnID: r.turnCounter, Payload: startPayload,
 	}); err != nil {
 		fmt.Fprintf(r.stderr, "Failed to write run_started event: %v\n", err)
-		return 1
+		return writer, nil, "", 1
 	}
 
-	// Load issue from GitHub
 	issue, err := r.loadIssue()
 	if err != nil {
 		fmt.Fprintf(r.stderr, "Failed to load issue %d: %v\n", r.issueNum, err)
-		return 1
+		return writer, nil, "", 1
 	}
 	r.issue = issue
 	if !r.quiet {
 		r.writeRunHeader(r.stderr)
 	}
+	return writer, ew, eventLogPath, 0
+}
 
-	// ---- Telemetry sink setup (before PREPARE so worktree.create spans are captured) ----
+// checkPreflight runs the preflight gate in read-only mode and prints failures
+// to stderr. Returns 0 on success or 1 on failure.
+func (r *Runner) checkPreflight() int {
+	pfl := r.preflighter
+	if pfl == nil {
+		pfl = preflight.New(r.executor, r.homeDir, r.repoRoot)
+	}
+	gateResults := pfl.Check()
+	if !gateResults.AllOK() {
+		for _, res := range gateResults {
+			if !res.Ok {
+				fmt.Fprintf(r.stderr, "FAILED: %s - %s\n", res.Name, res.Details) //nolint:errcheck
+			}
+		}
+		fmt.Fprintln(r.stderr, "failed") //nolint:errcheck
+		return 1
+	}
+	return 0
+}
+
+// setupTelemetrySink configures r.sink from config (unless overridden by SetSink)
+// and returns a cleanup function that the caller must defer.
+func (r *Runner) setupTelemetrySink(runDir string) func() {
+	if r.sinkOverride {
+		return func() {}
+	}
+	if r.cfg.Telemetry.Enabled {
+		fs := telemetry.NewFileSink(filepath.Join(runDir, "telemetry.jsonl"))
+		r.sink = fs
+		return func() { fs.Close() } //nolint:errcheck
+	}
+	r.sink = telemetry.NoopSink{}
+	return func() {}
+}
+
+// orchestrateRun sets up telemetry, runs the loop machine, cleans up on success,
+// and writes the final event and stdout line. It must only be called after initRun
+// succeeds.
+func (r *Runner) orchestrateRun(ew worktree.EventWriter, eventLogPath string) int {
 	r.traceID = telemetry.TraceID(r.runID)
 	runDir := filepath.Join(r.homeDir, ".golemic", r.project, "runs", r.runID)
-	if !r.sinkOverride {
-		if r.cfg.Telemetry.Enabled {
-			fs := telemetry.NewFileSink(filepath.Join(runDir, "telemetry.jsonl"))
-			defer fs.Close() //nolint:errcheck
-			r.sink = fs
-		} else {
-			r.sink = telemetry.NoopSink{}
-		}
-	}
+	closeSink := r.setupTelemetrySink(runDir)
+	defer closeSink()
 
-	// Full orchestration
 	runSpanID, endRunSpan := telemetry.StartSpan(r.sink, r.traceID, "", telemetry.SpanRun, map[string]any{
 		"service.name": "golemic",
 		"run_id":       r.runID,
@@ -287,16 +324,43 @@ func (r *Runner) Run() int {
 	r.applyRunMode(loopCtx)
 	r.loopCtx = loopCtx
 
-	startStepSpan := func(step loop.StepKey, from loop.StepKey, event loop.EventKey, guarded bool, seq int) func(string, map[string]any) {
-		attrs := map[string]any{
-			"run_id":  r.runID,
-			"issue":   r.issueNum,
-			"from":    string(from),
-			"event":   string(event),
-			"guarded": guarded,
-			"seq":     seq,
-		}
-		_, endSpan := telemetry.StartSpan(r.sink, r.traceID, runSpanID, "step."+string(step), attrs)
+	finalOutcome, exitCode := r.runStepMachine(loopCtx, ew, runSpanID)
+
+	if finalOutcome == outcomeSuccess {
+		r.cleanSuccessWorktrees(golemicDir, runSpanID)
+	}
+
+	runStatus := telemetry.StatusOK
+	if finalOutcome != outcomeSuccess {
+		runStatus = telemetry.StatusError
+	}
+	endRunSpan(runStatus, map[string]any{"outcome": finalOutcome})
+
+	finishedPayload, _ := json.Marshal(runFinishedPayload{
+		Outcome:    finalOutcome,
+		TokenUsage: buildTokenUsageAggregate(r.tokenUsageLog),
+	})
+	_ = ew.Write(eventlog.Event{
+		Type: eventlog.EventRunFinished, Ts: time.Now().Format(time.RFC3339),
+		RunID: r.runID, TurnID: r.turnCounter, Payload: finishedPayload,
+	})
+
+	if finalOutcome == outcomeSuccess {
+		fmt.Fprintln(r.stdout, r.runID) //nolint:errcheck
+	} else {
+		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID) //nolint:errcheck
+	}
+	return exitCode
+}
+
+// runStepMachine builds and runs the loop machine with telemetry step spans and
+// step-transition event logging. Returns the final outcome string and exit code.
+func (r *Runner) runStepMachine(loopCtx *RunContext, ew worktree.EventWriter, runSpanID string) (string, int) {
+	startStepSpan := func(step, from loop.StepKey, event loop.EventKey, guarded bool, seq int) func(string, map[string]any) {
+		_, endSpan := telemetry.StartSpan(r.sink, r.traceID, runSpanID, "step."+string(step), map[string]any{
+			"run_id": r.runID, "issue": r.issueNum,
+			"from": string(from), "event": string(event), "guarded": guarded, "seq": seq,
+		})
 		return endSpan
 	}
 
@@ -305,22 +369,18 @@ func (r *Runner) Run() int {
 	m := r.buildMachine(loop.StepPrepare, func(from loop.StepKey, event loop.EventKey, to loop.StepKey, guarded bool) {
 		seq := currentStepSeq + 1
 		currentStepSeq = seq
-
 		if payload, err := eventlog.MarshalStepTransitionPayload(string(from), string(event), string(to), guarded, seq); err == nil {
 			_ = ew.Write(eventlog.Event{
-				Type:    eventlog.EventStepTransition,
-				Ts:      time.Now().Format(time.RFC3339),
-				RunID:   r.runID,
-				TurnID:  r.turnCounter,
-				Payload: payload,
+				Type: eventlog.EventStepTransition, Ts: time.Now().Format(time.RFC3339),
+				RunID: r.runID, TurnID: r.turnCounter, Payload: payload,
 			})
 		}
-
 		if currentStepSpanEnd != nil {
 			currentStepSpanEnd(telemetry.StatusOK, nil)
 		}
 		currentStepSpanEnd = startStepSpan(to, from, event, guarded, seq)
 	})
+
 	final, machineErr := m.Run(loopCtx)
 	stepStatus := telemetry.StatusError
 	if machineErr == nil && (final == loop.StepTerminalSuccess || final == loop.StepTerminalSkipped) {
@@ -334,63 +394,34 @@ func (r *Runner) Run() int {
 		final = loop.StepTerminalDevFailed
 	}
 	finalOutcome, exitCode := terminalOutcome(final)
+	return finalOutcome, exitCode
+}
 
-	// Worktree cleanup spans (children of run span, only on success)
-	golemicDir2 := filepath.Join(r.homeDir, ".golemic", r.project)
-	if finalOutcome == outcomeSuccess {
-		_, endCleanDev := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCleanup,
-			map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
-		cleanDevErr := worktree.Cleanup(r.repoRoot, golemicDir2, r.issueNum, r.executor)
-		if cleanDevErr != nil {
-			fmt.Fprintf(r.stderr, "Warning: dev worktree cleanup failed: %v\n", cleanDevErr) //nolint:errcheck
-			endCleanDev(telemetry.StatusError, nil)
-		} else {
-			endCleanDev(telemetry.StatusOK, nil)
-		}
-
-		_, endCleanRev := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCleanup,
-			map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
-		cleanRevErr := worktree.CleanupReviewer(r.repoRoot, golemicDir2, r.issueNum, r.executor)
-		if cleanRevErr != nil {
-			fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", cleanRevErr) //nolint:errcheck
-			endCleanRev(telemetry.StatusError, nil)
-		} else {
-			endCleanRev(telemetry.StatusOK, nil)
-		}
-
-		cbmCacheDir := filepath.Join(golemicDir2, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
-		if err := os.RemoveAll(cbmCacheDir); err != nil {
-			fmt.Fprintf(r.stderr, "Warning: failed to remove CBM cache dir %s: %v\n", cbmCacheDir, err) //nolint:errcheck
-		}
-	}
-
-	// Close run span
-	runStatus := telemetry.StatusOK
-	if finalOutcome != outcomeSuccess {
-		runStatus = telemetry.StatusError
-	}
-	endRunSpan(runStatus, map[string]any{"outcome": finalOutcome})
-
-	// Write run_finished with final outcome (always the last event)
-	finishedPayload, _ := json.Marshal(runFinishedPayload{
-		Outcome:    finalOutcome,
-		TokenUsage: buildTokenUsageAggregate(r.tokenUsageLog),
-	})
-	_ = ew.Write(eventlog.Event{
-		Type:    eventlog.EventRunFinished,
-		Ts:      time.Now().Format(time.RFC3339),
-		RunID:   r.runID,
-		TurnID:  r.turnCounter,
-		Payload: finishedPayload,
-	})
-
-	// Stdout line and exit: success gets bare run ID, all other outcomes get runs/<id>.
-	if finalOutcome == outcomeSuccess {
-		fmt.Fprintln(r.stdout, r.runID)
+// cleanSuccessWorktrees removes dev and reviewer worktrees and the CBM cache
+// directory after a successful run. Failures are logged as warnings.
+func (r *Runner) cleanSuccessWorktrees(golemicDir, runSpanID string) {
+	_, endCleanDev := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCleanup,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "dev"})
+	if err := worktree.Cleanup(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: dev worktree cleanup failed: %v\n", err) //nolint:errcheck
+		endCleanDev(telemetry.StatusError, nil)
 	} else {
-		fmt.Fprintf(r.stdout, "runs/%s\n", r.runID)
+		endCleanDev(telemetry.StatusOK, nil)
 	}
-	return exitCode
+
+	_, endCleanRev := telemetry.StartSpan(r.sink, r.traceID, runSpanID, telemetry.SpanWorktreeCleanup,
+		map[string]any{"run_id": r.runID, "issue": r.issueNum, "worktree": "reviewer"})
+	if err := worktree.CleanupReviewer(r.repoRoot, golemicDir, r.issueNum, r.executor); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: reviewer worktree cleanup failed: %v\n", err) //nolint:errcheck
+		endCleanRev(telemetry.StatusError, nil)
+	} else {
+		endCleanRev(telemetry.StatusOK, nil)
+	}
+
+	cbmCacheDir := filepath.Join(golemicDir, "cbm", fmt.Sprintf("issue-%d", r.issueNum))
+	if err := os.RemoveAll(cbmCacheDir); err != nil {
+		fmt.Fprintf(r.stderr, "Warning: failed to remove CBM cache dir %s: %v\n", cbmCacheDir, err) //nolint:errcheck
+	}
 }
 
 // writeAgentCompleted appends an agent_completed event to the event log and

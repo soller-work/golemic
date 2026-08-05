@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -419,7 +418,7 @@ func (r *Runner) runDevCIRetryAgent(golemicDir, eventLogPath string, timeout tim
 	}
 	cfg := r.buildCIRetryAgentConfig(systemPromptFile, userPrompt, devWorktreePath, eventLogPath, model, timeout, runsDir, fixRound, ciToolAllowlist, ciGMEnv)
 	r.emitAgentContext(cfg)
-	exitCode, paths, err := runFn(context.Background(), cfg)
+	exitCode, paths, err := runFn(r.agentCtx(), cfg)
 
 	if outcome := r.handleCIRetryAgentResult(eventLogPath, exitCode, paths.Stdout, paths.Stderr, err); outcome != "" {
 		return outcome

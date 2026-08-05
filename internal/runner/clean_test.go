@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -198,7 +199,7 @@ func TestRun_WithoutCleanFlag_CollisionAborts_AC003(t *testing.T) {
 	r.SetStderr(&stderr)
 	// clean is false by default — do NOT call r.SetClean(true)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -307,7 +308,7 @@ func TestRun_CleanFailure_AbortsBeforeDevPhase_AC005(t *testing.T) { //nolint:go
 	r.SetStderr(&stderr)
 	r.SetClean(true)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)

@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,7 +82,7 @@ func (r *Runner) executeDevAgentCfg(gmb *gmbroker.Broker, devWorktreePath, event
 	}
 
 	r.emitAgentContext(cfg)
-	exitCode, paths, err := runFn(context.Background(), cfg)
+	exitCode, paths, err := runFn(r.agentCtx(), cfg)
 	stopFollow()
 
 	usage := parseActivityUsage(activityPath)

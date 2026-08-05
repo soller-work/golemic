@@ -2,7 +2,9 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"golemic/internal/agent"
 	"golemic/internal/config"
 	"golemic/internal/credentials"
 	"golemic/internal/eventlog"
@@ -254,7 +257,7 @@ func TestRun_WorktreeCollision_AC002(t *testing.T) {
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
-	exitCode := runner.Run()
+	exitCode := runner.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -352,7 +355,7 @@ func TestRun_LocalBranchCollision_AC003(t *testing.T) {
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
-	exitCode := runner.Run()
+	exitCode := runner.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -404,7 +407,7 @@ func TestRun_RemoteBranchCollision_AC003(t *testing.T) {
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
-	exitCode := runner.Run()
+	exitCode := runner.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -452,7 +455,7 @@ func TestRun_OpenPRCollision_AC004(t *testing.T) {
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
-	exitCode := runner.Run()
+	exitCode := runner.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -493,7 +496,7 @@ func TestRun_MissingConfig_AC005(t *testing.T) {
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
-	exitCode := runner.Run()
+	exitCode := runner.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -556,7 +559,7 @@ func TestRun_MissingCredentials_AC005(t *testing.T) {
 	runner.SetStderr(&stderr)
 	runner.SetLookupEnv(func(string) (string, bool) { return "", false })
 
-	exitCode := runner.Run()
+	exitCode := runner.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -608,7 +611,7 @@ func TestRun_IssueLoadFailure(t *testing.T) {
 	runner.SetStdout(&stdout)
 	runner.SetStderr(&stderr)
 
-	exitCode := runner.Run()
+	exitCode := runner.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -718,7 +721,7 @@ func TestRun_PreflightGate_FailClosed_AC001(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -766,7 +769,7 @@ func TestRun_PreflightGate_PassProceedsNormally_AC003(t *testing.T) {
 	// We don't care about the final outcome (orchestration will fail without
 	// full agent setup), just that the run proceeded past the gate and created
 	// a run directory / event log with run_started.
-	r.Run()
+	r.Run(context.Background())
 
 	// Verify a run directory was created
 	runsDir := filepath.Join(homeDir, ".golemic", project, "runs")
@@ -1029,5 +1032,86 @@ func TestLoadIssue_PinnedToRepoRoot_AC002(t *testing.T) {
 	}
 	if exec.dirCalls[0].name != "gh" {
 		t.Errorf("expected 'gh', got %q", exec.dirCalls[0].name)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Context propagation: Run(ctx) threads ctx to agent invocations (issue #325)
+// ---------------------------------------------------------------------------
+
+// TestRun_ContextPropagatedToAgent verifies that the signal-aware context
+// passed to Run reaches the agent run function so that CTRL+C (SIGINT)
+// cancellation propagates to the pi subprocess manager.
+func TestRun_ContextPropagatedToAgent(t *testing.T) { //nolint:cyclop // sequential setup steps (dirs, config, creds, guidelines) followed by two select branches; splitting adds no clarity
+	// Use /tmp so that Unix socket paths stay within macOS's 104-byte limit.
+	// t.TempDir() produces paths > 100 chars which causes the GM broker to fail
+	// before the agent is called, preventing the context from being captured.
+	const project = "ctxtest"
+	homeDir := "/tmp/golemic-ctxtest-home"
+	repoRoot := "/tmp/golemic-ctxtest-repo"
+	t.Cleanup(func() {
+		os.RemoveAll(homeDir)  //nolint:errcheck
+		os.RemoveAll(repoRoot) //nolint:errcheck
+	})
+
+	// Scaffold the required on-disk structure.
+	for _, dir := range []string{
+		filepath.Join(repoRoot, ".golemic", "guidelines"),
+		filepath.Join(repoRoot, ".golemic"),
+		filepath.Join(homeDir, ".golemic", project),
+	} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	configJSON := fmt.Sprintf(`{"project":%q,"verify_command":"go test"}`, project)
+	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "config.json"), []byte(configJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+	credJSON := `{"dev_token":"ghp_dev_test","reviewer_token":"ghp_rev_test"}`
+	if err := os.WriteFile(filepath.Join(homeDir, ".golemic", project, "credentials.json"), []byte(credJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".golemic", "guidelines", "dev.md"), []byte("# Dev Guidelines"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := setupHappyExecutor(repoRoot)
+
+	parentCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var capturedCtx context.Context
+
+	r := New(exec, homeDir, repoRoot, 42)
+	r.SetPreflighter(passingPreflighter{})
+	r.SetRunAgentFn(func(ctx context.Context, cfg agent.RoleConfig) (int, agent.TranscriptPaths, error) {
+		capturedCtx = ctx
+		return 1, agent.TranscriptPaths{}, nil // non-zero exit → dev_failed
+	})
+	r.SetStdout(io.Discard)
+	r.SetStderr(io.Discard)
+
+	r.Run(parentCtx)
+
+	if capturedCtx == nil {
+		t.Fatal("agent run function was never called; ctx did not reach the dev step")
+	}
+
+	// The captured context must not be Done before the parent is cancelled.
+	select {
+	case <-capturedCtx.Done():
+		t.Fatal("agent ctx is already cancelled before the parent ctx was cancelled")
+	default:
+	}
+
+	// Cancelling the parent must propagate to the agent ctx.
+	cancel()
+
+	select {
+	case <-capturedCtx.Done():
+		// correct: signal context propagated to the agent
+	case <-time.After(time.Second):
+		t.Error("cancelling Run's ctx did not cancel the agent ctx — signal context not propagated")
 	}
 }

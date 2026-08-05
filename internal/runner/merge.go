@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -217,7 +216,7 @@ func (r *Runner) resolveRebaseConflictWithAgent(writer worktree.EventWriter, dev
 		r.turnCounter++
 		cfg := r.buildRebaseConflictAgentConfig(systemPromptFile, model, devWT, eventLogPath, userPrompt, golemicBinaryPath, runsDir, 0, attempt-1)
 		r.emitAgentContext(cfg)
-		exitCode, _, agentErr := runFn(context.Background(), cfg)
+		exitCode, _, agentErr := runFn(r.agentCtx(), cfg)
 
 		result, failReason := r.determineConflictResolutionResult(devWT, agentErr, exitCode)
 		r.writeAutomergeConflictRetry(writer, conflictedFiles, result, r.turnCounter, attempt)

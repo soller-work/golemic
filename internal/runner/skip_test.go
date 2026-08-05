@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -150,7 +151,7 @@ func TestRunner_SkipsWhenIssueClosed_WithReadyLabel(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 0 {
 		t.Fatalf("exit code: got %d, want 0", exitCode)
@@ -191,7 +192,7 @@ func TestRunner_SkipsWhenIssueClosed_WithoutReadyLabel(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 0 {
 		t.Fatalf("exit code: got %d, want 0", exitCode)
@@ -225,7 +226,7 @@ func TestRunner_SkipsWhenIssueStateUnknown(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 0 {
 		t.Fatalf("exit code: got %d, want 0", exitCode)
@@ -255,7 +256,7 @@ func TestRunner_ProceedsWhenIssueOpen(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	r.Run()
+	r.Run(context.Background())
 
 	// The runner must NOT have produced a "skipped" outcome.
 	if strings.Contains(stderr.String(), "skipped:") {

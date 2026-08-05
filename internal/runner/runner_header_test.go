@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,7 +157,7 @@ func TestRun_HeaderOnStderr_AC001(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 	if exitCode != 1 {
 		t.Fatalf("expected exit 1 (collision), got %d", exitCode)
 	}
@@ -195,7 +196,7 @@ func TestRun_HeaderNotOnStdout_AC002(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	r.Run()
+	r.Run(context.Background())
 
 	stdoutStr := stdout.String()
 	for _, label := range []string{"Run ID:", "Issue:", "Event log:", "Logs:", "Dev worktree:", "Rev worktree:"} {
@@ -227,7 +228,7 @@ func TestRun_NoHeaderOnFailureBeforeIssueLoad_AC004(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 	if exitCode != 1 {
 		t.Fatalf("expected exit 1, got %d", exitCode)
 	}
@@ -258,7 +259,7 @@ func setupCollisionRun(t *testing.T, quiet bool) (*bytes.Buffer, *bytes.Buffer, 
 		withQuiet(quiet),
 		withDevWorktreeDir(),
 	)
-	return f.stdout, f.stderr, f.r.Run()
+	return f.stdout, f.stderr, f.r.Run(context.Background())
 }
 
 // TestRun_QuietSuppressesHeader_AC001 covers --quiet suppresses the header.
