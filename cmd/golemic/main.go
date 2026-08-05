@@ -66,7 +66,7 @@ func runDispatch(ctx context.Context, args []string, stdout, stderr io.Writer, l
 		return dispatchPreflight(args, stdout, stderr)
 	}
 
-	if code, ok := dispatchCoreCommands(command, args, stdout, stderr); ok {
+	if code, ok := dispatchCoreCommands(ctx, command, args, stdout, stderr); ok {
 		return code
 	}
 
@@ -118,10 +118,10 @@ func dispatchPreflight(args []string, stdout, stderr io.Writer) int {
 }
 
 // dispatchCoreCommands handles the primary subcommands.
-func dispatchCoreCommands(command string, args []string, stdout, stderr io.Writer) (int, bool) {
+func dispatchCoreCommands(ctx context.Context, command string, args []string, stdout, stderr io.Writer) (int, bool) {
 	switch command {
 	case "run":
-		return runRun(args, stdout, stderr), true
+		return runRun(ctx, args, stdout, stderr), true
 	}
 	return 0, false
 }
@@ -156,7 +156,7 @@ func runPreflight(executor preflight.Executor, homeDir, repoRoot string, stdout,
 	return 1
 }
 
-func runRun(args []string, stdout, stderr io.Writer) int {
+func runRun(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -201,7 +201,7 @@ func runRun(args []string, stdout, stderr io.Writer) int {
 	r.SetQuiet(quietFlag)
 	r.SetVerbose(verboseFlag)
 	r.SetResume(resumeFlag)
-	return r.Run()
+	return r.Run(ctx)
 }
 
 // osExecutor is the production executor that runs real commands.

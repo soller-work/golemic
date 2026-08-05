@@ -455,7 +455,7 @@ func TestResume_NormalRun_CollisionUnchanged(t *testing.T) {
 	r.SetStderr(&stderr)
 	// resume is NOT set
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1", exitCode)
@@ -1315,7 +1315,7 @@ func TestResume_CLIFlagParsed(t *testing.T) {
 	r.SetStderr(&stderr)
 	r.SetResume(true)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	// Should fail because no PR is found, but NOT because of a collision
 	if exitCode != 1 {

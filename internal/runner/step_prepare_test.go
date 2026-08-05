@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func TestStepPrepare_IneligibleIssue_TerminalSkipped_AC2(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 0 {
 		t.Fatalf("exit code: got %d, want 0 (skipped = exit 0)", exitCode)
@@ -96,7 +97,7 @@ func TestStepPrepare_Collision_TerminalAborted_AC3(t *testing.T) {
 	r.SetStdout(&stdout)
 	r.SetStderr(&stderr)
 
-	exitCode := r.Run()
+	exitCode := r.Run(context.Background())
 
 	if exitCode != 1 {
 		t.Fatalf("exit code: got %d, want 1 (collision = aborted)", exitCode)

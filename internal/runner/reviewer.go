@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -222,7 +221,7 @@ func (r *Runner) runReviewerAgent(golemicDir, eventLogPath string, timeout time.
 	}
 	cfg := r.buildReviewerRoleConfig(systemPromptFile, userPrompt, reviewerWorktreePath, golemicBinaryPath, model, eventLogPath, runsDir, timeout, round, attempt, brokerEnv)
 	r.emitAgentContext(cfg)
-	exitCode, paths, runErr := runFn(context.Background(), cfg)
+	exitCode, paths, runErr := runFn(r.agentCtx(), cfg)
 	stopFollow()
 
 	usage := parseActivityUsage(activityPath)

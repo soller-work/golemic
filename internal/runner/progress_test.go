@@ -473,7 +473,7 @@ func TestProgress_StdoutContractIntact(t *testing.T) {
 	r, stdout := setupStdoutContractRunner(t)
 	r.SetRunAgentFn(makeMinimalFakeAgent(t))
 
-	r.Run()
+	r.Run(context.Background())
 	stdoutStr := stdout.String()
 
 	if strings.Contains(stdoutStr, "▶") {
